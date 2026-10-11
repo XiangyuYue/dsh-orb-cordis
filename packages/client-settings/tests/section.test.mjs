@@ -81,6 +81,12 @@ function loadSection(hooks = {}) {
         slot.current = typeof next === 'function' ? next(slot.current) : next
       }]
     },
+    /** Same slot bookkeeping as useState, without a setter: the box survives every render. */
+    useRef(initial) {
+      const index = cursor++
+      if (stateSlots[index] === undefined) stateSlots[index] = { current: initial }
+      return stateSlots[index]
+    },
     useEffect(effect) {
       effects[cursor] = effect
       cursor += 1
@@ -519,6 +525,83 @@ describe('settings section', () => {
     // The late reload must not put the pre-save snapshot back on screen.
     assert.equal(check().props['aria-checked'], 'false')
     page.snapshot.helperPhase = ''
+  })
+
+  it('drops a settings reload that was sent before the save landed', async () => {
+    const saved = Promise.withResolvers()
+    const reloaded = Promise.withResolvers()
+    let holdReload = false
+    const page = loadSection({
+      answer: (path, options, snapshot) => {
+        if (options.method === 'POST' && path === '/.dsh-orb/ball') {
+          // Same bookkeeping as the default handler, but the answer is held back.
+          snapshot.ballEnabled = JSON.parse(options.body).enabled
+          return { ok: true, status: 200, async text() { await saved.promise; return JSON.stringify(snapshot) } }
+        }
+        if (!holdReload || path !== '/.dsh-orb/settings') return undefined
+        holdReload = false
+        // Captured while the save was still in flight: this reload cannot know about it.
+        const stale = JSON.stringify({ ...snapshot, ballEnabled: true })
+        return { ok: true, status: 200, async text() { await reloaded.promise; return stale } }
+      },
+    })
+    await page.flush()
+    const check = () => find(page.render(), (node) => node.props?.['aria-label'] === '启用悬浮球')[0]
+
+    // The update poll is armed by `installing` too, and the save is held open.
+    page.setUpdate({ installing: true })
+    page.render()
+    await page.flush()
+    const view = page.render()
+    find(view, (node) => node.props?.['aria-label'] === '启用悬浮球')[0].props.onClick()
+    await settle()
+
+    // A poll fires while that save is in flight; its answer is pre-save state.
+    holdReload = true
+    const ticking = page.tick()
+    await settle()
+    assert.equal(holdReload, false, 'the poll asked and is now in flight')
+
+    saved.resolve()
+    await settle()
+    assert.equal(check().props['aria-checked'], 'false', 'the save is on screen')
+
+    reloaded.resolve()
+    const intervals = await ticking
+    await settle()
+    assert.equal(check().props['aria-checked'], 'false', 'a reload sent before the save must not undo it')
+    assert.ok(intervals >= 1, 'an install in progress arms the update poll')
+    page.setUpdate({ installing: false })
+  })
+
+  it('re-enables the page when a save superseded by a newer one finally answers', async () => {
+    const held = Promise.withResolvers()
+    let hold = false
+    const page = loadSection({
+      answer: (path, options, snapshot) => {
+        if (!hold || options.method !== 'POST' || path !== '/.dsh-orb/ball') return undefined
+        hold = false
+        snapshot.ballEnabled = JSON.parse(options.body).enabled
+        return { ok: true, status: 200, async text() { await held.promise; return JSON.stringify(snapshot) } }
+      },
+    })
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    const fieldset = () => find(page.render(), (node) => node.type === 'fieldset')[0]
+    hold = true
+    find(view, (node) => node.props?.['aria-label'] === '启用悬浮球')[0].props.onClick()
+    await settle()
+    assert.equal(fieldset().props.disabled, true, 'a save in flight disables the fields')
+
+    // A second save outranks the held one; its own answer lands immediately.
+    view = page.render()
+    find(view, (node) => node.props?.['aria-label'] === '自动检查更新')[0].props.onClick()
+    await settle()
+
+    held.resolve()
+    await settle()
+    assert.equal(fieldset().props.disabled, false, 'the dropped answer must still release the fields')
   })
 })
 

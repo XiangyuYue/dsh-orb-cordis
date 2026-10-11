@@ -287,26 +287,58 @@ window.__ModuleLoader__.load({
       })
 
       // Responses overtake each other: a focus-triggered load, a poll, and a save can all be
-      // in flight. Only the newest generation may write the snapshot, so a stale GET cannot
-      // undo a save that landed after it.
-      let loadGeneration = 0
+      // in flight. Every request takes a ticket, and a GET only lands while it is still the
+      // newest request in line and no save has settled since it was sent — a stale GET can
+      // neither undo a save nor be trusted for state the host changed after answering it.
+      // Refs, not locals: the component body re-runs on every render, so a `let` here would
+      // give the mount/poll closures and the click handlers different counters.
+      const requestSeq = React.useRef(0)
+      const saveSeq = React.useRef(0)
+      const settledSaves = React.useRef(0)
+      const openSaves = React.useRef(0)
 
-      function applySnapshot(gen, next) {
-        if (gen !== loadGeneration) return
+      /** Place in line for one request, plus the save count it was sent with. */
+      function takeTicket(isSave) {
+        const ticket = { seq: ++requestSeq.current, saves: settledSaves.current, save: 0 }
+        if (isSave) {
+          openSaves.current += 1
+          ticket.save = ++saveSeq.current
+        }
+        return ticket
+      }
+
+      /** Apply a GET response, unless a newer request started or a save settled after it. */
+      function applyGet(ticket, next) {
+        if (ticket.seq !== requestSeq.current || ticket.saves !== settledSaves.current) return
         setState(next)
       }
 
+      /**
+       * Settle a save: only the newest save that started writes its snapshot, and the
+       * fieldset is re-enabled once no save is left in flight — even when this response
+       * lost the race and was dropped.
+       */
+      function settleSave(ticket, next) {
+        settledSaves.current += 1
+        openSaves.current -= 1
+        if (ticket.save === saveSeq.current) setState(next)
+        if (openSaves.current <= 0) {
+          openSaves.current = 0
+          setState((prev) => (prev.busy ? { ...prev, busy: false } : prev))
+        }
+      }
+
       async function load() {
-        const gen = ++loadGeneration
+        const ticket = takeTicket(false)
         setState((prev) => ({ ...prev, status: prev.snapshot ? prev.status : 'loading', error: '', avatarError: '' }))
         try {
           const [snapshot, catalog] = await Promise.all([
             request('/.dsh-orb/settings'),
             request('/.dsh-orb/models'),
           ])
-          applySnapshot(gen, { status: 'ready', error: '', snapshot, catalog: catalog || { groups: [] }, busy: false, avatarError: '' })
+          applyGet(ticket, { status: 'ready', error: '', snapshot, catalog: catalog || { groups: [] }, busy: false, avatarError: '' })
         } catch (error) {
-          applySnapshot(gen, (prev) => ({
+          applyGet(ticket, (prev) => ({
             ...prev,
             status: 'error',
             busy: false,
@@ -323,7 +355,9 @@ window.__ModuleLoader__.load({
       }, [])
 
       // An install runs for minutes inside the host; the page polls it instead of holding a request open.
-      const installing = state.snapshot?.update?.updating === true
+      // `installing` is polled too: the host clears it when the waited install finishes, and a
+      // page that only polled `updating` would keep telling the user not to quit.
+      const installing = state.snapshot?.update?.updating === true || state.snapshot?.update?.installing === true
       React.useEffect(() => {
         if (!installing) return undefined
         const timer = setInterval(() => { void refreshUpdate() }, 2000)
@@ -340,29 +374,29 @@ window.__ModuleLoader__.load({
       }, [preparing])
 
       async function refreshSettings() {
-        const gen = ++loadGeneration
+        const ticket = takeTicket(false)
         try {
           const snapshot = await request('/.dsh-orb/settings')
-          applySnapshot(gen, (prev) => prev.snapshot ? { ...prev, snapshot } : prev)
+          applyGet(ticket, (prev) => prev.snapshot ? { ...prev, snapshot } : prev)
         } catch {
           // Keep the last known state; the next poll or a page reload tries again.
         }
       }
 
       async function refreshUpdate() {
-        const gen = ++loadGeneration
+        const ticket = takeTicket(false)
         try {
           const update = await request('/.dsh-orb/update')
-          applySnapshot(gen, (prev) => prev.snapshot ? { ...prev, snapshot: { ...prev.snapshot, update } } : prev)
+          applyGet(ticket, (prev) => prev.snapshot ? { ...prev, snapshot: { ...prev.snapshot, update } } : prev)
         } catch {
           // Keep the last known state; the next poll or a page reload tries again.
         }
       }
 
       async function mutate(path, body, avatarError) {
-        // This save outranks anything already in flight (the confirm-dialog focus load, a
-        // poll): whatever started earlier must not overwrite the response to it.
-        const gen = ++loadGeneration
+        // This save outranks every GET already in flight (the confirm-dialog focus load, a
+        // poll), and every GET sent before it settles.
+        const ticket = takeTicket(true)
         setState((prev) => ({ ...prev, busy: true, avatarError: avatarError || '' }))
         try {
           const snapshot = await request(path, {
@@ -372,10 +406,10 @@ window.__ModuleLoader__.load({
               : { 'content-type': 'application/json' },
             body: body instanceof ArrayBuffer ? body : JSON.stringify(body),
           })
-          applySnapshot(gen, (prev) => ({ ...prev, status: 'ready', snapshot, busy: false, avatarError: '' }))
+          settleSave(ticket, (prev) => ({ ...prev, status: 'ready', snapshot, busy: false, avatarError: '' }))
         } catch (error) {
           const code = error instanceof Error ? error.message : ''
-          applySnapshot(gen, (prev) => ({
+          settleSave(ticket, (prev) => ({
             ...prev,
             busy: false,
             avatarError: code === 'too-large' || code === 'invalid-type' ? code : prev.avatarError,
