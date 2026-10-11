@@ -8,6 +8,9 @@
   --composer-max: calc(var(--ball) + var(--prompt-line) * 3);
   --chrome: 12px;
   --panel-radius: 36px;
+  /* The panel's width is a constant: the bookmark strip reserves window space beside
+   * the panel, it never resizes the panel itself. */
+  --panel-w: 320px;
   --selection-chip: 28px;
   /* Shell chrome keeps the fork's exact palette — the bar must match the
    * original ball window pixel for pixel. Chat content styles itself through
@@ -22,6 +25,9 @@
   --panel-shadow: 0 4px 8px rgba(17, 17, 17, 0.22);
   /* Bookmark strip: reserved window width and per-conversation attribution hues. */
   --strip-w: 0px;
+  /* Offset of the panel's far edge: its own chrome plus the reserved strip. The panel
+   * and the strip are both placed from this one value, so they cannot drift apart. */
+  --panel-left: calc(var(--chrome) + var(--strip-w));
   /* How far the chips slide underneath the panel edge: the tucked-ribbon look. */
   --strip-tuck: 12px;
   --agent-c0: #3573d0;
@@ -73,6 +79,9 @@ body {
 #panel {
   position: absolute;
   inset: var(--chrome);
+  /* Explicit width, not the space left over: a stale or missing strip state must never
+   * stretch the panel over the bookmark strip. */
+  width: var(--panel-w);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -115,11 +124,13 @@ body.expanded #panel {
  * chrome on the far side; the strip fills the remaining far edge and its chips
  * align against the panel. */
 body.has-strip.strip-left #panel {
-  left: calc(var(--strip-w) + var(--chrome));
+  left: var(--panel-left);
+  right: auto;
 }
 
 body.has-strip.strip-right #panel {
-  right: calc(var(--strip-w) + var(--chrome));
+  left: auto;
+  right: var(--panel-left);
 }
 
 #agent-strip {
@@ -143,16 +154,17 @@ body.has-strip.strip-right #panel {
 
 /* The far edge of the container reaches under the panel by --strip-tuck, so the
  * right-aligned chips disappear behind the panel edge instead of floating
- * beside it. */
+ * beside it. Its width comes from the panel's own offset, so a chip always keeps
+ * its place next to the panel. */
 body.has-strip.strip-left #agent-strip {
   left: 0;
-  right: calc(320px + var(--chrome) - var(--strip-tuck));
+  width: calc(var(--panel-left) + var(--strip-tuck));
   align-items: flex-end;
 }
 
 body.has-strip.strip-right #agent-strip {
   right: 0;
-  left: calc(320px + var(--chrome) - var(--strip-tuck));
+  width: calc(var(--panel-left) + var(--strip-tuck));
   align-items: flex-start;
 }
 

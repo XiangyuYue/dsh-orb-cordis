@@ -474,7 +474,9 @@ function main() {
     document.body.classList.toggle('has-strip', strip > 0)
     document.body.classList.toggle('strip-left', strip > 0 && state.horizontal === 'left')
     document.body.classList.toggle('strip-right', strip > 0 && state.horizontal === 'right')
-    document.body.style.setProperty('--strip-w', `${strip}px`)
+    // On the root, not the body: `--panel-left` is declared there and computes with this
+    // value, so the panel and the strip are placed from one number.
+    document.documentElement.style.setProperty('--strip-w', `${strip}px`)
   }
 
   function clearDockHoverTimer() {
@@ -1791,6 +1793,20 @@ function main() {
     }
     for (const item of agentItems) agentStrip.append(agentChip(item))
     startAgentClock()
+    // Chips are drawn from this page's own list while the reserved strip width comes from
+    // the host. If that state never arrived (a message can be missed across a page load),
+    // the panel would sit over the chips: ask the host for the geometry it applied.
+    if (!document.body.classList.contains('has-strip')) void syncStrip()
+  }
+
+  /** Re-apply the host's current geometry, so a missed state message heals on the spot. */
+  async function syncStrip() {
+    try {
+      const state = await api.syncStrip?.()
+      if (state !== null && typeof state === 'object') applyDirection(state)
+    } catch {
+      // The host is gone; the strip stays as it is until the next expand.
+    }
   }
 
   function startAgentClock() {

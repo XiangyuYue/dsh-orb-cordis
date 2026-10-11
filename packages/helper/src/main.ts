@@ -101,8 +101,12 @@ void app.whenReady().then(async () => {
     if (win && !win.isVisible()) win.showInactive()
     // The page may have loaded after the last appearance or bookmark change.
     pushAppearance()
-    if (win && !win.isDestroyed() && lastAgentItems.length > 0) {
-      win.webContents.send('orb:agents', lastAgentItems)
+    if (win && !win.isDestroyed()) {
+      // A fresh page holds none of the expansion or strip classes while this window keeps
+      // the width the strip reserved: re-apply the geometry before the chips come back,
+      // or the panel would sit over them until the next expand.
+      applyStrip(lastAgentItems.length > 0)
+      if (lastAgentItems.length > 0) win.webContents.send('orb:agents', lastAgentItems)
     }
   })
   // OS scheme flips ride through while the theme preference is `system`.
@@ -117,6 +121,18 @@ ipcMain.handle('orb:expand', (event, expanded) => {
     return { expanded: false, horizontal: 'left', vertical: 'up', docked: undefined, strip: 0 }
   }
   return placement.setExpanded(expanded)
+})
+
+/**
+ * The page's own geometry sync. Chips are rendered from the page's list while the reserved
+ * strip width lives here, so a state message missed across a page load would leave the
+ * panel over them. Re-applying the reservation from this side heals that in one round trip.
+ */
+ipcMain.handle('orb:sync-strip', (event) => {
+  if (!fromBall(event) || !placement) {
+    return { expanded: false, horizontal: 'left', vertical: 'up', docked: undefined, strip: 0 }
+  }
+  return placement.setStrip(lastAgentItems.length > 0 ? AGENT_STRIP_WIDTH : 0)
 })
 
 // Drag: the renderer only signals. Every position comes from the OS cursor, which

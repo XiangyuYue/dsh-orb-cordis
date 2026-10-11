@@ -246,6 +246,25 @@ describe('bookmark strip geometry', () => {
     assert.equal(origin.x, 1500)
     assert.equal(origin.y, 500)
   })
+
+  it('reports the reserved strip in every state the page places the panel with', async () => {
+    const displays = [pair(0, 0, 1920, 1080)]
+    const placed = placement(displays, 1600, 400)
+    // The page places the panel from `strip`: a state without it would drop the reservation
+    // and let the panel cover the chips.
+    const reserved = placed.setStrip(AGENT_STRIP_WIDTH)
+    assert.equal(reserved.strip, AGENT_STRIP_WIDTH)
+    const expanded = placed.setExpanded(true)
+    assert.equal(expanded.strip, AGENT_STRIP_WIDTH)
+    // A release keeps the panel open and must carry the same reservation.
+    placed.press({ x: 1600, y: 400 })
+    placed.beginDrag()
+    placed.dragTo({ x: 1500, y: 500 })
+    const released = await placed.endDrag({ x: 1500, y: 500 })
+    assert.equal(released.expanded, true)
+    assert.equal(released.strip, AGENT_STRIP_WIDTH)
+    assert.equal(lastBounds.get(placed)?.width, PANEL_WINDOW_SIZE.width + AGENT_STRIP_WIDTH)
+  })
 })
 
 describe('release layout', () => {

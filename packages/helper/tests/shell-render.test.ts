@@ -50,4 +50,33 @@ describe('ball page render guards', () => {
     assert.match(highlight, /const root = ref\.deref\(\)/)
     assert.match(highlight, /upgradeCodeBlocks\(root, \{ track: false \}\)/)
   })
+
+  it('tracks a re-rendered root once instead of once per render', () => {
+    assert.match(highlight, /known = new WeakSet\(\)/)
+    assert.match(highlight, /if \(track && !known\.has\(root\)\)/)
+    assert.equal(highlight.includes('if (track) tracked.add(new WeakRef(root))'), false)
+  })
+
+  it('keeps the panel width constant and the strip beside it', () => {
+    const css = readFileSync(join(here, '../assets/floating.css'), 'utf8')
+    // The panel's width is a constant, so no window or strip state can stretch it.
+    assert.match(css, /--panel-w:\s*320px/)
+    assert.match(css, /width:\s*var\(--panel-w\)/)
+    // The panel and the strip are placed from the same offset, so they cannot drift apart.
+    assert.match(css, /--panel-left:\s*calc\(var\(--chrome\) \+ var\(--strip-w\)\)/)
+    assert.match(css, /body\.has-strip\.strip-left #panel \{\s*left:\s*var\(--panel-left\)/)
+    assert.match(css, /body\.has-strip\.strip-left #agent-strip \{\s*left:\s*0;\s*width:\s*calc\(var\(--panel-left\) \+ var\(--strip-tuck\)\)/)
+    // The old rules sized the strip from a hard-coded panel width instead of the panel's own.
+    assert.equal(css.includes('right: calc(320px'), false)
+    // `--panel-left` is declared on the root and computes with `--strip-w`, so the page must
+    // set that one on the root too: a body-scoped value would leave the offset at 12px.
+    assert.match(code, /document\.documentElement\.style\.setProperty\('--strip-w'/)
+    assert.equal(code.includes("document.body.style.setProperty('--strip-w'"), false)
+  })
+
+  it('re-applies the host geometry when chips render without a reserved strip', () => {
+    assert.match(code, /if \(!document\.body\.classList\.contains\('has-strip'\)\) void syncStrip\(\)/)
+    assert.match(code, /async function syncStrip\(\)/)
+    assert.match(code, /await api\.syncStrip\?\.\(\)/)
+  })
 })

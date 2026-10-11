@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld('dshOrb', {
   setExpanded(expanded) {
     return ipcRenderer.invoke('orb:expand', Boolean(expanded))
   },
+  syncStrip() {
+    return ipcRenderer.invoke('orb:sync-strip')
+  },
   send(text) {
     ipcRenderer.send('orb:prompt', text)
   },
