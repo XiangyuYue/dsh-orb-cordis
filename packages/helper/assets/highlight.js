@@ -3,6 +3,10 @@
 
 const tracked = new Set()
 
+/** Roots already in `tracked`: a settled body is re-rendered on every chunk, so the same
+ * element is offered again and again and must not pile up duplicate references. */
+const known = new WeakSet()
+
 let loading
 let vendor
 
@@ -27,7 +31,10 @@ async function vendorModule() {
 /** Replace plain code-block bodies with shiki HTML where a grammar is ready. */
 export async function upgradeCodeBlocks(root, { track = true } = {}) {
   if (root === null || typeof root.querySelectorAll !== 'function') return
-  if (track) tracked.add(new WeakRef(root))
+  if (track && !known.has(root)) {
+    known.add(root)
+    tracked.add(new WeakRef(root))
+  }
   const module = await vendorModule()
   if (module === undefined) return
   for (const block of root.querySelectorAll('.cb[data-code-lang]')) {
