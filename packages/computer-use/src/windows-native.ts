@@ -30,6 +30,15 @@ const KEYEVENTF_EXTENDEDKEY = 0x0001
 const KEYEVENTF_KEYUP = 0x0002
 const CF_UNICODETEXT = 13
 const GMEM_MOVEABLE = 0x0002
+/** Integrity RID of a normal, unelevated process (`S-1-16-8192`). */
+const MEDIUM_INTEGRITY_RID = 0x2000
+/**
+ * Bytes a clipboard snapshot may copy across all its formats. A 4K screenshot's CF_DIB is
+ * tens of megabytes, and the snapshot runs on every `input_text`, so the budget keeps a
+ * single paste from materializing an unbounded amount of memory. Formats that do not fit
+ * are left out; the plain-text entry is taken first.
+ */
+const CLIPBOARD_SNAPSHOT_LIMIT_BYTES = 16 * 1024 * 1024
 const SM_XVIRTUALSCREEN = 76
 const SM_YVIRTUALSCREEN = 77
 const SM_CXVIRTUALSCREEN = 78
@@ -245,6 +254,7 @@ function bind(libraries: NativeBindings): {
   GlobalLock: (memory: unknown) => unknown
   GlobalUnlock: (memory: unknown) => number
   GlobalSize: (memory: unknown) => unknown
+  GlobalFree: (memory: unknown) => unknown
   RtlMoveMemory: (dest: unknown, source: unknown, bytes: number) => void
   OpenProcess: (access: number, inherit: number, pid: number) => unknown
   CloseHandle: (handle: unknown) => number
@@ -330,6 +340,7 @@ function bind(libraries: NativeBindings): {
     GlobalLock: kernel32.func('void * __stdcall GlobalLock(void *hMem)'),
     GlobalUnlock: kernel32.func('int __stdcall GlobalUnlock(void *hMem)'),
     GlobalSize: kernel32.func('uintptr __stdcall GlobalSize(void *hMem)'),
+    GlobalFree: kernel32.func('void * __stdcall GlobalFree(void *hMem)'),
     RtlMoveMemory: kernel32.func('void __stdcall RtlMoveMemory(void *Destination, void *Source, uintptr Length)'),
     OpenProcess: kernel32.func(
       'void * __stdcall OpenProcess(uint32 dwDesiredAccess, int bInheritHandle, uint32 dwProcessId)',
@@ -409,6 +420,15 @@ function integrityRid(api: Bindings, pid: number): number | undefined {
     // Token or SID queries can throw when koffi cannot decode an inaccessible process.
     return undefined
   }
+}
+
+let warnedUnknownSelf = false
+
+/** Say once that the elevation check fell back to the unelevated default. */
+function warnUnknownSelfIntegrity(): void {
+  if (warnedUnknownSelf) return
+  warnedUnknownSelf = true
+  console.error('computer-use: this process integrity level cannot be read; assuming unelevated')
 }
 
 function integrityRidUnchecked(api: Bindings, pid: number): number | undefined {
@@ -868,11 +888,18 @@ export function createProductionWindowsOps(): WindowsDesktopOps {
     targetBlocksInput(hwnd) {
       const target = windowPointer(hwnd)
       if (target === undefined) return false
-      if (selfRid === undefined) return false
       const rid = integrityRid(api, pidOf(api, target))
       // Fail closed: an elevated window commonly refuses the token read, and the caller
       // must not post input that UIPI would only drop silently.
-      return rid === undefined || rid > selfRid
+      if (rid === undefined) return true
+      // Our own level is unreadable, which should not happen for our own token. Assume the
+      // unelevated default rather than allowing everything: a higher target stays blocked,
+      // while an elevated own process can still type into anything at or below medium.
+      if (selfRid === undefined) {
+        warnUnknownSelfIntegrity()
+        return rid > MEDIUM_INTEGRITY_RID
+      }
+      return rid > selfRid
     },
     windowFromPoint(x, y) {
       return perMonitor(() => {
@@ -903,7 +930,8 @@ export function createProductionWindowsOps(): WindowsDesktopOps {
       postKey(api, virtualKey, down, extended)
     },
     saveClipboard() {
-      const entries: { format: number; bytes: Buffer }[] = []
+      const seen: { format: number; size: number }[] = []
+      const bytes = new Map<number, Buffer>()
       withClipboard(api, () => {
         let format = 0
         for (;;) {
@@ -911,37 +939,67 @@ export function createProductionWindowsOps(): WindowsDesktopOps {
           if (format === 0) break
           const handle = api.GetClipboardData(format)
           if (isNull(handle)) continue
+          const size = Number(api.GlobalSize(handle))
+          if (!Number.isFinite(size) || size <= 0) continue
+          seen.push({ format, size })
+        }
+        // Plain text first: it is the entry that matters when the budget cannot cover
+        // everything, and it is what the paste is about to overwrite.
+        seen.sort((left, right) => Number(right.format === CF_UNICODETEXT) - Number(left.format === CF_UNICODETEXT)
+          || left.size - right.size)
+        let used = 0
+        for (const entry of seen) {
+          if (used + entry.size > CLIPBOARD_SNAPSHOT_LIMIT_BYTES) continue
+          const handle = api.GetClipboardData(entry.format)
+          if (isNull(handle)) continue
           // GDI and owner-display formats are handles, not global memory; GlobalLock fails
           // on them and the format is skipped rather than copied as garbage.
           const locked = api.GlobalLock(handle)
           if (isNull(locked)) continue
           try {
-            const size = Number(api.GlobalSize(handle))
-            if (!Number.isFinite(size) || size <= 0) continue
-            const bytes = Buffer.alloc(size)
-            api.RtlMoveMemory(bytes, locked, size)
-            entries.push({ format, bytes })
+            const copy = Buffer.alloc(entry.size)
+            api.RtlMoveMemory(copy, locked, entry.size)
+            bytes.set(entry.format, copy)
+            used += entry.size
           } finally {
             api.GlobalUnlock(handle)
           }
         }
       })
-      return { entries }
+      // A delayed-rendered format still costs one synchronous GetClipboardData above: the
+      // budget bounds the memory, not the owner's render time.
+      return { entries: seen.flatMap((entry) => {
+        const copy = bytes.get(entry.format)
+        return copy === undefined ? [] : [{ format: entry.format, bytes: copy }]
+      }) }
     },
     restoreClipboard(snapshot) {
+      let restored = 0
       withClipboard(api, () => {
         api.EmptyClipboard()
         for (const entry of snapshot.entries) {
           const memory = api.GlobalAlloc(GMEM_MOVEABLE, entry.bytes.length)
           if (isNull(memory)) continue
           const locked = api.GlobalLock(memory)
-          if (isNull(locked)) continue
+          if (isNull(locked)) {
+            // The system was never handed this block, so it must be freed here.
+            api.GlobalFree(memory)
+            continue
+          }
           api.RtlMoveMemory(locked, entry.bytes, entry.bytes.length)
           api.GlobalUnlock(memory)
-          // The system owns the memory once SetClipboardData accepts it.
-          api.SetClipboardData(entry.format, memory)
+          if (isNull(api.SetClipboardData(entry.format, memory))) {
+            // Refused, so ownership never moved: free it rather than leak the block.
+            api.GlobalFree(memory)
+            continue
+          }
+          restored += 1
         }
       })
+      if (restored === 0 && snapshot.entries.length > 0) {
+        // The clipboard was emptied and nothing went back; say so instead of losing it silently.
+        console.error('computer-use: the clipboard could not be restored after the paste')
+      }
     },
     setClipboardText(text) {
       const bytes = Buffer.from(`${text}\0`, 'utf16le')
@@ -1001,6 +1059,11 @@ try { [System.Windows.Forms.Clipboard]::SetImage($image) } finally { $image.Disp
         if (target === undefined) return false
         return becomeForeground(target)
       })
+    },
+    windowAppName(hwnd) {
+      const target = windowPointer(hwnd)
+      if (target === undefined) return undefined
+      return perMonitor(() => processBaseName(api, pidOf(api, target)))
     },
     launch(target, parameters) {
       const result = Number(api.ShellExecuteW(null, 'open', target, parameters ?? null, null, SW_SHOWNORMAL))

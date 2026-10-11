@@ -22,6 +22,20 @@ describe('open_app window matching', () => {
     expect(selectAppWindow([{ appName: 'notepad', title: 'Code - main.rs' }], 'code')).toBe(0)
   })
 
+  it('matches the app name as the trailing title segment a document window carries', () => {
+    // Office and Chrome never put their display name in the process name.
+    expect(selectAppWindow([{ appName: 'WINWORD', title: 'Document1 - Word' }], 'Word')).toBe(0)
+    expect(selectAppWindow([{ appName: 'POWERPNT', title: 'Presentation1 - PowerPoint' }], 'PowerPoint')).toBe(0)
+    expect(selectAppWindow([{ appName: 'chrome', title: 'Docs - Google Chrome' }], 'Google Chrome')).toBe(0)
+    expect(selectAppWindow([{ appName: 'notepad', title: 'Untitled — Notepad' }], 'notepad')).toBe(0)
+  })
+
+  it('never matches a name that only appears inside one title segment', () => {
+    // "source code" carries "code" as a word, but not as the segment that names the app.
+    expect(selectAppWindow([{ appName: 'chrome', title: 'source code review' }], 'code')).toBeUndefined()
+    expect(selectAppWindow([{ appName: 'chrome', title: 'main.rs - Visual Studio' }], 'code')).toBeUndefined()
+  })
+
   it('matches a whole title and a process base name without .exe', () => {
     expect(selectAppWindow([{ appName: 'Code', title: 'anything' }], 'code')).toBe(0)
     expect(selectAppWindow([{ appName: 'chrome', title: 'Word' }], 'word')).toBe(0)

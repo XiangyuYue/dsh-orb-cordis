@@ -115,6 +115,14 @@ export interface WindowsDesktopOps {
    * @returns false when that window is not in the current top-level list or does not become foreground.
    */
   focusWindow(hwnd: number): boolean
+  /**
+   * Process base name owning `hwnd`. Windows recycles handles, so a remembered id alone
+   * proves nothing: this is how the backend checks the window it is about to focus is still
+   * the app the session observed.
+   * @param hwnd - top-level HWND from an observation.
+   * @returns the name, or undefined when that handle no longer resolves.
+   */
+  windowAppName(hwnd: number): string | undefined
   launch(target: string, parameters?: string): void
   /**
    * Explorer address path for one Explorer window.
@@ -329,6 +337,16 @@ function restoreObservedFocus(
   if (target.windowId === undefined) return
   const foreground = host.foregroundWindowId()
   if (foreground === target.windowId || target.transientWindowIds?.includes(foreground) === true) return
+  // Windows recycles HWNDs. The id this session observed may belong to an unrelated window
+  // by now, and posting the keys there would type into whatever replaced it.
+  if (target.appName !== undefined && target.appName !== '') {
+    const owner = host.windowAppName(target.windowId)
+    if (owner !== undefined && owner.toLowerCase() !== target.appName.toLowerCase()) {
+      throw new Error(
+        `computer-use: the ${target.appName} window this session observed is gone; click inside the window, then retry hotkey`,
+      )
+    }
+  }
   if (host.focusWindow(target.windowId)) return
   const label = target.appName === undefined || target.appName === '' ? `window ${String(target.windowId)}` : target.appName
   throw new Error(

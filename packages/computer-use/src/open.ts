@@ -32,19 +32,37 @@ const PATH_BLACKLIST = [
 /** UTF-8 multi-byte percent-encoding such as `%E5%88%98`; sparse ASCII like `%20` is allowed. */
 const MULTIBYTE_UTF8_PERCENT = /%(?:[Cc][2-9A-Fa-f]|[Dd][0-9A-Fa-f]|[Ee][0-9A-Fa-f]|[Ff][0-7])(?:%[0-9A-Fa-f]{2})+/u
 
-/** Separators unified, trailing separators dropped, lowercased, so Windows paths compare in one form. */
+/** Separators unified, the extended-length prefix dropped, lowercased, so Windows paths compare in one form. */
 function normalizeWindowsPath(path: string): string {
-  return path.replace(/\//gu, '\\').replace(/\\+$/u, '').toLowerCase()
+  return path
+    .replace(/\//gu, '\\')
+    .replace(/^\\\\\?\\/u, '')
+    .replace(/\\+$/u, '')
+    .toLowerCase()
 }
 
-/** Windows system prefixes that must never be opened, in the {@link normalizeWindowsPath} form. */
+/**
+ * Windows system prefixes that must never be opened, in the {@link normalizeWindowsPath} form.
+ * The environment answers for a Windows installed on another drive (`D:\Windows`), and the
+ * literal `C:` forms stand in when it does not.
+ */
 function windowsSystemPrefixes(): readonly string[] {
-  return [
-    process.env.SystemRoot ?? 'C:\\Windows',
-    'C:\\Windows',
-    'C:\\Windows\\System32',
+  const root = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
+  const programFiles = [
+    process.env.ProgramFiles,
+    process.env['ProgramFiles(x86)'],
+    process.env.ProgramW6432,
     'C:\\Program Files',
     'C:\\Program Files (x86)',
+  ].filter((entry): entry is string => typeof entry === 'string' && entry !== '')
+  return [
+    root,
+    `${root}\\System32`,
+    // The literal forms stay covered too: a machine with Windows on another drive can still
+    // hold these, and a system-looking path is never worth opening.
+    'C:\\Windows',
+    'C:\\Windows\\System32',
+    ...programFiles,
   ].map(prefix => normalizeWindowsPath(prefix))
 }
 

@@ -65,6 +65,24 @@ describe('finder paths', () => {
     // Only a whole path segment matches: the user's own folder is not the system directory.
     expect(isForbiddenOpenPath('C:\\Users\\me\\Windows')).toBe(false)
     expect(isForbiddenOpenPath('C:\\Users\\me\\notes')).toBe(false)
+    // The extended-length spelling names the same directory.
+    expect(isForbiddenOpenPath('\\\\?\\C:\\Windows\\System32\\cmd.exe')).toBe(true)
+  })
+
+  it('follows a Windows installation that does not live on C:', () => {
+    const before = { ...process.env }
+    try {
+      process.env.SystemRoot = 'D:\\Windows'
+      process.env.ProgramFiles = 'D:\\Program Files'
+      process.env['ProgramFiles(x86)'] = 'D:\\Program Files (x86)'
+      expect(isForbiddenOpenPath('D:\\Windows\\System32\\cmd.exe')).toBe(true)
+      expect(isForbiddenOpenPath('D:\\Program Files\\App\\app.exe')).toBe(true)
+      // The literal C: forms stay covered for a machine that also has them.
+      expect(isForbiddenOpenPath('C:\\Windows\\win.ini')).toBe(true)
+      expect(isForbiddenOpenPath('D:\\Users\\me\\Windows')).toBe(false)
+    } finally {
+      process.env = before
+    }
   })
 
   it('resolves omitted path to Desktop and expands ~', async () => {

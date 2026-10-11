@@ -1,10 +1,17 @@
 /**
  * `open_app` name matching.
- * Exact process base names win over titles, and a title only matches whole or from a
- * word boundary: a substring match would activate an unrelated window ("source code"
- * for "code").
+ * Exact process base names win over titles. A title matches whole, from a word boundary, or
+ * as one separator-delimited segment: a bare substring match would activate an unrelated
+ * window ("source code" for "code"), while a prefix-only rule would miss the way Windows
+ * names a document window after its app ("Document1 - Word" for "Word").
  * @module @deepseek-ai/dsh-experimental-tool-computer-use/src/app-match
  */
+
+/**
+ * Separators Windows titles put between the document and the app name. Both sides must be
+ * spaced, so `main.rs` stays one segment and never splits into `main` + `rs`.
+ */
+const TITLE_SEPARATORS = /\s[-–—|:]\s/u
 
 /** One visible top-level window, front to back, as `activateApp` sees it. */
 export interface AppMatchWindow {
@@ -30,9 +37,17 @@ export function selectAppWindow(windows: readonly AppMatchWindow[], wanted: stri
   return titled >= 0 ? titled : undefined
 }
 
-/** Title equals `wanted`, or starts with it followed by a word boundary ("Code - main.rs" matches "code", "Codex" does not). */
+/**
+ * Title equals `wanted`, starts with it at a word boundary, or carries it as one
+ * separator-delimited segment.
+ * @param title - lowercased window title.
+ * @param wanted - lowercased app name the model asked for.
+ * @returns true when the title names that app.
+ */
 function titleMatches(title: string, wanted: string): boolean {
   if (title === wanted) return true
-  if (!title.startsWith(wanted)) return false
-  return !/[a-z0-9_]/u.test(title.charAt(wanted.length))
+  if (title.startsWith(wanted) && !/[a-z0-9_]/u.test(title.charAt(wanted.length))) return true
+  // "Document1 - Word" and "Docs - Google Chrome": the app name is the trailing segment.
+  // Equality per segment is still far stricter than the old substring test.
+  return title.split(TITLE_SEPARATORS).some((segment) => segment.trim() === wanted)
 }

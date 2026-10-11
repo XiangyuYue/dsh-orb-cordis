@@ -22,6 +22,7 @@ vi.mock('../src/windows-native.ts', () => ({
       activateApp: () => false,
       foregroundWindowId: () => 0,
       focusWindow: () => false,
+      windowAppName: () => undefined,
       launch: () => undefined,
       explorerFolder: () => undefined,
     }
@@ -94,6 +95,7 @@ function ops(overrides: Partial<WindowsDesktopOps> = {}): WindowsDesktopOps & {
     activateApp: () => false,
     foregroundWindowId: () => 0,
     focusWindow: () => false,
+    windowAppName: () => undefined,
     launch: (target) => { calls.push(`launch:${target}`) },
     explorerFolder: () => undefined,
     ...overrides,
@@ -331,6 +333,42 @@ describe('windows desktop backend', () => {
     expect(focusAt).toBeGreaterThan(-1)
     expect(focusAt).toBeLessThan(host.calls.indexOf('key:17:down:0'))
     expect(host.calls).toContain('key:87:down:0')
+  })
+
+  it('refuses to focus a remembered handle that another app now owns', async () => {
+    const ball = fact({ hwnd: 9, appName: 'electron', title: 'ball' })
+    const host = ops({
+      listWindows: () => shot([ball], 9),
+      foregroundWindowId: () => 9,
+      // The handle was recycled: it belongs to a different process now.
+      windowAppName: (hwnd) => (hwnd === 5 ? 'explorer' : 'electron'),
+      focusWindow: (hwnd) => {
+        host.calls.push(`focus:${String(hwnd)}`)
+        return true
+      },
+    })
+    const backend = createWindowsDesktopBackend(host)
+    await expect(backend.hotkey({ keys: ['ctrl', 'w'], windowId: 5, appName: 'notepad' })).rejects.toThrow(
+      /the notepad window this session observed is gone/u,
+    )
+    expect(host.calls.some((call) => call.startsWith('focus:'))).toBe(false)
+    expect(host.calls.some((call) => call.startsWith('key:'))).toBe(false)
+  })
+
+  it('still focuses the observed window when the handle is still that app', async () => {
+    const ball = fact({ hwnd: 9, appName: 'electron', title: 'ball' })
+    const host = ops({
+      listWindows: () => shot([ball], 9),
+      foregroundWindowId: () => 9,
+      windowAppName: (hwnd) => (hwnd === 5 ? 'NOTEPAD' : 'electron'),
+      focusWindow: (hwnd) => {
+        host.calls.push(`focus:${String(hwnd)}`)
+        return true
+      },
+    })
+    const backend = createWindowsDesktopBackend(host)
+    await backend.hotkey({ keys: ['ctrl', 'w'], windowId: 5, appName: 'notepad' })
+    expect(host.calls).toContain('focus:5')
   })
 
   it('does not move focus when the foreground window is the owner or its menu', async () => {
