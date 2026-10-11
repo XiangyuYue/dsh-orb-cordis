@@ -8,9 +8,6 @@
   --composer-max: calc(var(--ball) + var(--prompt-line) * 3);
   --chrome: 12px;
   --panel-radius: 36px;
-  /* The panel's width is a constant: the bookmark strip reserves window space beside
-   * the panel, it never resizes the panel itself. */
-  --panel-w: 320px;
   --selection-chip: 28px;
   /* Shell chrome keeps the fork's exact palette — the bar must match the
    * original ball window pixel for pixel. Chat content styles itself through
@@ -79,9 +76,6 @@ body {
 #panel {
   position: absolute;
   inset: var(--chrome);
-  /* Explicit width, not the space left over: a stale or missing strip state must never
-   * stretch the panel over the bookmark strip. */
-  width: var(--panel-w);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -120,17 +114,18 @@ body.expanded #panel {
   box-shadow: var(--panel-shadow);
 }
 
-/* With the strip reserved, the panel shifts in by the strip width plus its own
- * chrome on the far side; the strip fills the remaining far edge and its chips
- * align against the panel. */
+/* With the strip reserved, only the panel's far edge moves in: the near edge stays on
+ * the ball's chrome, so the ball is always wrapped by the panel and the panel keeps its
+ * place on screen (the window grows on the far side instead). The strip fills the
+ * remaining far edge and its chips align against the panel. */
 body.has-strip.strip-left #panel {
   left: var(--panel-left);
-  right: auto;
+  right: var(--chrome);
 }
 
 body.has-strip.strip-right #panel {
-  left: auto;
   right: var(--panel-left);
+  left: var(--chrome);
 }
 
 #agent-strip {

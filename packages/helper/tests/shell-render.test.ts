@@ -57,14 +57,16 @@ describe('ball page render guards', () => {
     assert.equal(highlight.includes('if (track) tracked.add(new WeakRef(root))'), false)
   })
 
-  it('keeps the panel width constant and the strip beside it', () => {
+  it('keeps the ball wrapped: only the panel far edge moves for the strip', () => {
     const css = readFileSync(join(here, '../assets/floating.css'), 'utf8')
-    // The panel's width is a constant, so no window or strip state can stretch it.
-    assert.match(css, /--panel-w:\s*320px/)
-    assert.match(css, /width:\s*var\(--panel-w\)/)
+    // The panel is the window minus its chrome, so the ball at the near edge always sits
+    // inside it: a stale strip state must never leave the ball outside the panel.
+    assert.equal(/--panel-w|width:\s*var\(--panel-w\)/.test(css), false)
+    assert.match(css, /#panel \{\s*position: absolute;\s*inset: var\(--chrome\);/)
     // The panel and the strip are placed from the same offset, so they cannot drift apart.
     assert.match(css, /--panel-left:\s*calc\(var\(--chrome\) \+ var\(--strip-w\)\)/)
-    assert.match(css, /body\.has-strip\.strip-left #panel \{\s*left:\s*var\(--panel-left\)/)
+    assert.match(css, /body\.has-strip\.strip-left #panel \{\s*left:\s*var\(--panel-left\);\s*right: var\(--chrome\);/)
+    assert.match(css, /body\.has-strip\.strip-right #panel \{\s*right: var\(--panel-left\);\s*left: var\(--chrome\);/)
     assert.match(css, /body\.has-strip\.strip-left #agent-strip \{\s*left:\s*0;\s*width:\s*calc\(var\(--panel-left\) \+ var\(--strip-tuck\)\)/)
     // The old rules sized the strip from a hard-coded panel width instead of the panel's own.
     assert.equal(css.includes('right: calc(320px'), false)
@@ -74,9 +76,13 @@ describe('ball page render guards', () => {
     assert.equal(code.includes("document.body.style.setProperty('--strip-w'"), false)
   })
 
-  it('re-applies the host geometry when chips render without a reserved strip', () => {
-    assert.match(code, /if \(!document\.body\.classList\.contains\('has-strip'\)\) void syncStrip\(\)/)
+  it('re-syncs the host geometry whenever the reservation and the chips disagree', () => {
+    // Both directions, and even while the strip is hidden: the reservation follows the chip
+    // list, so a missed message would either cover the chips or leave a gap beside them.
+    assert.match(code, /if \(document\.body\.classList\.contains\('has-strip'\) !== \(agentItems\.length > 0\)\) void syncStrip\(\)/)
     assert.match(code, /async function syncStrip\(\)/)
     assert.match(code, /await api\.syncStrip\?\.\(\)/)
+    // Once on startup, so a state message lost across a page load heals before the first hover.
+    assert.match(code, /syncGif\(\)\n(?:\s*\/\/[^\n]*\n)*\s+void syncStrip\(\)\n\}/)
   })
 })

@@ -1787,16 +1787,18 @@ function main() {
     agentStrip.replaceChildren()
     const visible = expanded && agentItems.length > 0
     agentStrip.hidden = !visible
+    // The reserved strip width lives in the host while the chips live here, and the two
+    // travel on different messages: if they disagree (a state message can be missed across
+    // a page load), the panel would sit over the chips or leave a gap beside them. Ask the
+    // host for the geometry it actually applied. Checked even while the strip is hidden,
+    // because the reservation follows the chip list, not the panel.
+    if (document.body.classList.contains('has-strip') !== (agentItems.length > 0)) void syncStrip()
     if (!visible) {
       stopAgentClock()
       return
     }
     for (const item of agentItems) agentStrip.append(agentChip(item))
     startAgentClock()
-    // Chips are drawn from this page's own list while the reserved strip width comes from
-    // the host. If that state never arrived (a message can be missed across a page load),
-    // the panel would sit over the chips: ask the host for the geometry it applied.
-    if (!document.body.classList.contains('has-strip')) void syncStrip()
   }
 
   /** Re-apply the host's current geometry, so a missed state message heals on the spot. */
@@ -2392,6 +2394,10 @@ function main() {
     renderQuestion()
   })
   syncGif()
+  // A fresh page starts with no expansion or strip classes while the window keeps whatever
+  // the host applied: ask for the geometry once, before the first hover, so the panel is
+  // placed correctly even if the load raced the state message.
+  void syncStrip()
 }
 
 main()
