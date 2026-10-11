@@ -106,7 +106,15 @@ export function createOverlayGuard(transport: OverlayGuardTransport) {
         inputDepth -= 1
         if (inputDepth === 0) {
           try {
-            if (cloaked) await transport.send({ type: 'overlay-input', id: randomUUID(), active: false })
+            if (cloaked) {
+              try {
+                await transport.send({ type: 'overlay-input', id: randomUUID(), active: false })
+              } catch {
+                // The input is already posted and a late or missing end-ack cannot unpost
+                // it: failing here would report a successful click as an error the model
+                // would retry. Only the cloak-close is lost, and the helper drops it anyway.
+              }
+            }
           } finally {
             transport.setHidInput(false)
           }

@@ -100,6 +100,25 @@ describe('overlay guard capture exclusion', () => {
     await assert.rejects(guard.withCapture(async () => { events.push('run') }), /ack timed out/)
     assert.deepEqual(events, ['begin', 'end'])
   })
+
+  it('keeps a posted input successful when its end-ack never lands', async () => {
+    const events: string[] = []
+    let hid: boolean[] = []
+    const guard = createOverlayGuard({
+      hasHelper: () => true,
+      send: async (message) => {
+        events.push(message.active === true ? 'begin' : 'end')
+        // The click is already posted; only the ack for closing the interval is lost.
+        if (message.active !== true) throw new Error('dsh-orb: overlay ack timed out')
+      },
+      setHidInput: (active) => { hid.push(active) },
+      sleep: async () => undefined,
+    })
+    const result = await guard.withInput(async () => { events.push('clicked'); return 'ok' })
+    assert.equal(result, 'ok')
+    assert.deepEqual(events, ['begin', 'clicked', 'end'])
+    assert.deepEqual(hid, [true, false], 'the HID burst still ends')
+  })
 })
 
 describe('observation ribbon preference', () => {

@@ -41,8 +41,18 @@ interface DeferredStatus {
 /**
  * How long a status file without an outcome is still trusted. The script runs at most three
  * 15-minute pnpm attempts plus its waits (~45 minutes), so anything older cannot be live.
+ * The ceiling exists because the script runs pnpm as its own child: killing the script
+ * orphans that pnpm, which keeps replacing the package with nobody left to write an outcome.
  */
 export const DEFERRED_INSTALL_CEILING_MS = 47 * 60 * 1000
+
+/**
+ * How long a job file whose owner has exited still counts as an install about to run. The
+ * script touches the job file every 500 ms while it waits for that exit, so a fresh job file
+ * means the script is in the seconds before it writes its status; a stale one means the
+ * script died before pnpm ever started, and nothing is being replaced.
+ */
+export const DEFERRED_INSTALL_PENDING_MS = 30 * 1000
 
 /** Folder under the profile that holds the job, the script, its log, and its outcome. */
 export function deferredDir(profileDir: string): string {
@@ -81,7 +91,13 @@ export function takeDeferredOutcome(profileDir: string): DeferredOutcome | undef
   } catch {
     return undefined
   }
-  rmSync(file, { force: true })
+  try {
+    rmSync(file, { force: true })
+  } catch (error) {
+    // A locked result (indexer, antivirus) is read again next start; the outcome is
+    // reported now either way, and a throw here would fail the caller's start path.
+    console.error(`dsh-orb: could not clear the install outcome: ${errorDetail(error)}`)
+  }
   try {
     const parsed = JSON.parse(raw) as Partial<DeferredOutcome>
     if (typeof parsed.spec !== 'string' || typeof parsed.ok !== 'boolean') return undefined
@@ -93,9 +109,12 @@ export function takeDeferredOutcome(profileDir: string): DeferredOutcome | undef
 
 /**
  * Whether the after-exit script is installing right now. The script's own status file is
- * the signal: it exists while pnpm runs and is removed once the outcome is written.
- * A status whose script died is only trusted until the script's own ceiling passes; then
- * the leftover is collected as a failed outcome so the host can start.
+ * the signal: it exists while pnpm runs and is removed once the outcome is written. Before
+ * that file exists the script is either still waiting for its owner (the package is
+ * untouched, the ball may run) or in the seconds between that exit and pnpm, which
+ * {@link installPendingAfterExit} covers. A status whose script died is only trusted until
+ * the script's own ceiling passes; then the leftover is collected as a failed outcome so
+ * the host can start.
  * @param profileDir - profile that scheduled the install.
  * @returns true while a live install is running.
  */
@@ -105,7 +124,8 @@ export function deferredInstallInProgress(profileDir: string): boolean {
   try {
     raw = readFileSync(join(dir, 'status.json'), 'utf8')
   } catch {
-    return false
+    // No status yet: the script may be in its pre-status window.
+    return installPendingAfterExit(dir)
   }
   try {
     if (statSync(join(dir, 'result.json')).isFile()) return false
@@ -123,7 +143,12 @@ export function deferredInstallInProgress(profileDir: string): boolean {
   if (Number.isFinite(started) && Date.now() - started <= DEFERRED_INSTALL_CEILING_MS) return true
   // The script died before writing an outcome and its ceiling has passed: collect the
   // leftover as a failure, or every later start would wait for it again.
-  rmSync(join(dir, 'status.json'), { force: true })
+  try {
+    rmSync(join(dir, 'status.json'), { force: true })
+  } catch (error) {
+    console.error(`dsh-orb: could not clear the stalled install status: ${errorDetail(error)}`)
+    return false
+  }
   const spec = typeof status?.spec === 'string' ? status.spec : ''
   try {
     writeFileSync(join(dir, 'result.json'), `${JSON.stringify({ spec, ok: false, detail: 'deferred-install-stalled' })}\n`)
@@ -131,6 +156,37 @@ export function deferredInstallInProgress(profileDir: string): boolean {
     // The profile folder is gone; nothing to report.
   }
   return false
+}
+
+/**
+ * Whether a scheduled install's owner has exited, so its script is in the ~2 s before it
+ * writes its status file. The script touches the job file every 500 ms while it waits, so a
+ * fresh job file plus a dead owner is an install about to run; a stale one is a script that
+ * died before pnpm ever started, which replaced nothing.
+ * @param dir - the profile's `.dsh-orb-update` folder.
+ * @returns true while the install is about to touch the package.
+ */
+function installPendingAfterExit(dir: string): boolean {
+  const file = join(dir, 'job.json')
+  let parentPid: unknown
+  try {
+    parentPid = (JSON.parse(readFileSync(file, 'utf8')) as { parentPid?: unknown }).parentPid
+  } catch {
+    return false
+  }
+  const pid = Number(parentPid)
+  // The owner is alive: the install waits for its exit and the package is untouched.
+  if (!Number.isInteger(pid) || pid <= 0 || scriptAlive(pid)) return false
+  try {
+    return Date.now() - statSync(file).mtimeMs <= DEFERRED_INSTALL_PENDING_MS
+  } catch {
+    return false
+  }
+}
+
+/** Message of an unknown error, for the log lines that must never throw. */
+function errorDetail(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /** The script's own `alive()`: a process that answers EPERM is running under another user. */
@@ -145,9 +201,12 @@ function scriptAlive(pid: number): boolean {
 }
 
 /**
- * Merge `builds` into the profile's top-level `onlyBuiltDependencies` list, the key pnpm 10+
- * reads for install-script approvals. Other keys, including the release-age exemption, are
- * left exactly as they are. Unfamiliar file shapes are left alone: pnpm's next write repairs them.
+ * Merge `builds` into the profile's top-level `allowBuilds` mapping, the key the shipped
+ * pnpm 11 reads for install-script approvals (the official plugin manager writes the same
+ * shape: `allowBuilds: { name: true }`). An existing `false` for an approved name is set
+ * back to `true` — the user just approved that build. Other keys, including the release-age
+ * exemption, are left exactly as they are. Unfamiliar shapes are left alone: pnpm's next
+ * write repairs them.
  * @param text - current `pnpm-workspace.yaml`, empty when the profile has none.
  * @param builds - approved package names.
  * @returns the updated file, or undefined when nothing needs to change.
@@ -158,30 +217,48 @@ export function mergeApprovedBuilds(text: string, builds: readonly string[]): st
   let key = -1
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? ''
-    if (line === 'onlyBuiltDependencies:') {
+    if (line === 'allowBuilds:') {
       key = index
       break
     }
-    // Inline arrays and shorthand are not pnpm's own output: leave them alone.
-    if (/^onlyBuiltDependencies\s*:/.test(line)) return undefined
+    // Flow mappings and shorthand are not pnpm's own output: leave them alone.
+    if (/^allowBuilds\s*:/.test(line)) return undefined
   }
   if (key === -1) {
     const head = text === '' || text.endsWith('\n') ? text : text + '\n'
-    return head + 'onlyBuiltDependencies:\n' + builds.map((name) => '  - ' + yamlScalar(name)).join('\n') + '\n'
+    return head + 'allowBuilds:\n' + builds.map((name) => '  ' + yamlScalar(name) + ': true').join('\n') + '\n'
   }
   const kept: string[] = []
+  const values: string[] = []
+  const at = new Map<string, number>()
   let indent = '  '
   let index = key + 1
   for (; index < lines.length; index += 1) {
     const line = lines[index] ?? ''
-    const written = /^([ \t]+)-[ \t]+\S/.exec(line)
+    // A block-mapping entry: `  name: true`, with an optional trailing comment.
+    const written = /^([ \t]+)(\S.*?)\s*:\s*([^\s#]*)\s*(?:#.*)?$/u.exec(line)
     if (written === null) break
     indent = written[1] ?? indent
+    at.set(unquote(written[2] ?? ''), kept.length)
+    values.push(written[3] ?? '')
     kept.push(line)
   }
-  const present = new Set(kept.map((line) => unquote(line.slice(line.indexOf('-') + 1).trim())))
-  const added = builds.filter((name) => !present.has(name)).map((name) => indent + '- ' + yamlScalar(name))
-  if (added.length === 0) return undefined
+  let changed = false
+  const added: string[] = []
+  for (const name of builds) {
+    const position = at.get(name)
+    if (position === undefined) {
+      added.push(indent + yamlScalar(name) + ': true')
+      changed = true
+      continue
+    }
+    // Only a written-out `false` is flipped; a nested or shorthand value stays untouched.
+    if (values[position] === 'false') {
+      kept[position] = indent + yamlScalar(name) + ': true'
+      changed = true
+    }
+  }
+  if (!changed) return undefined
   return [...lines.slice(0, key + 1), ...kept, ...added, ...lines.slice(index)].join('\n')
 }
 
@@ -206,7 +283,7 @@ function unquote(entry: string): string {
  * tested functions cannot drift apart.
  */
 const APPLY_SCRIPT = `import { spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join } from 'node:path'
 
 const jobFile = process.argv[2]
@@ -222,6 +299,13 @@ function alive(pid) {
   } catch (error) {
     return error.code === 'EPERM'
   }
+}
+
+/** Replace a profile file atomically: a concurrent reader never sees a half-written YAML. */
+function writeAtomic(file, text) {
+  const staged = file + '.dsh-orb-tmp'
+  writeFileSync(staged, text)
+  renameSync(staged, file)
 }
 
 ${yamlScalar.toString()}
@@ -252,7 +336,13 @@ function pnpm() {
 }
 
 log('waiting for process ' + job.parentPid + ' to exit before installing ' + job.spec)
-while (alive(job.parentPid)) await sleep(500)
+while (alive(job.parentPid)) {
+  // Touch the job file while waiting: a start that finds a dead owner and a fresh job knows
+  // pnpm is about to run, which closes the gap before status.json exists. A stale job means
+  // this script died before pnpm started, so nothing was replaced.
+  try { utimesSync(jobFile, new Date(), new Date()) } catch (error) { log('could not touch the job file: ' + String(error)) }
+  await sleep(500)
+}
 await sleep(1500)
 
 // The status file marks this install as running before pnpm touches the profile, so a start
@@ -265,7 +355,7 @@ try {
     const file = join(job.profileDir, 'pnpm-workspace.yaml')
     const before = existsSync(file) ? readFileSync(file, 'utf8') : ''
     const after = mergeApprovedBuilds(before, approved)
-    if (after !== undefined) writeFileSync(file, after)
+    if (after !== undefined) writeAtomic(file, after)
     log('approved builds: ' + approved.join(', '))
   }
 } catch (error) {
@@ -288,5 +378,7 @@ for (let attempt = 1; attempt <= 3 && !ok; attempt += 1) {
 }
 writeFileSync(join(dir, 'result.json'), JSON.stringify({ spec: job.spec, ok, detail: detail.slice(0, 200) }) + '\\n')
 rmSync(join(dir, 'status.json'), { force: true })
+// The job is done: leaving it behind would read as a pending install until its mtime ages out.
+rmSync(jobFile, { force: true })
 log(ok ? 'installed ' + job.spec : 'gave up on ' + job.spec)
 `

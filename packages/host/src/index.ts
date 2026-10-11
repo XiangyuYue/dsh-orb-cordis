@@ -55,8 +55,10 @@ export function apply(ctx: OrbContext, config: { autoStart?: boolean } = {}): vo
   // through the market or `dsh plugin install` holds an exemption that shadows the
   // installed version — and then removing ANY other plugin fails with
   // ERR_PNPM_RESOLUTION_POLICY_VIOLATIONS_UNHANDLED. Re-canonicalise the list at
-  // start, whatever route installed the version.
-  if (own !== undefined) exemptReleaseAge(store.dir, own.name)
+  // start, whatever route installed the version. While an install runs, the after-exit
+  // script writes build approvals into the same file, so this waits for the outcome
+  // rather than racing it (see the wait branch below).
+  if (own !== undefined && !installing) exemptReleaseAge(store.dir, own.name)
   const tcc = new TccMonitor()
   const runtime = new OrbRuntime(ctx, store, { tcc })
   installOrbServices(ctx, store)
@@ -85,10 +87,20 @@ export function apply(ctx: OrbContext, config: { autoStart?: boolean } = {}): vo
         if (cancelled) return
         // The outcome (and a stalled status) is collected the way every start collects it.
         updater.adoptDeferredOutcome()
+        // The install owns `pnpm-workspace.yaml` until it writes its outcome; the
+        // release-age exemption goes in only now, so neither write can drop the other.
+        if (own !== undefined) exemptReleaseAge(store.dir, own.name)
+        if (process.platform === 'win32' && own !== undefined) {
+          // The gate above skipped staging: this start must not map koffi from inside the
+          // package, or the next update is locked out of replacing it again. The package is
+          // final now, so staging is safe.
+          stageNativeImages()
+        }
         if (!start) return
-        return runtime.start().catch((error: unknown) => {
-          console.error(`dsh-orb: ${error instanceof Error ? error.message : String(error)}`)
-        })
+        return runtime.start()
+      }).catch((error: unknown) => {
+        // The chain must never reject: an unhandled rejection exits the official host.
+        console.error(`dsh-orb: ${error instanceof Error ? error.message : String(error)}`)
       })
     } else if (start) {
       void runtime.start().catch((error: unknown) => {

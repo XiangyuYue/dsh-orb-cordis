@@ -6,6 +6,7 @@ import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   DEFERRED_INSTALL_CEILING_MS,
+  DEFERRED_INSTALL_PENDING_MS,
   deferredDir,
   deferredInstallInProgress,
   mergeApprovedBuilds,
@@ -38,27 +39,44 @@ function deadPid(): number {
 }
 
 describe('release-age exemption and build approvals share the workspace file', () => {
-  it('adds a top-level onlyBuiltDependencies list, keeping the release-age key', () => {
+  it('adds a top-level allowBuilds mapping, keeping the release-age key', () => {
     const before = 'packages:\n  - .\nminimumReleaseAgeExclude:\n  - dsh-orb\n'
     assert.equal(
       mergeApprovedBuilds(before, ['koffi']),
-      'packages:\n  - .\nminimumReleaseAgeExclude:\n  - dsh-orb\nonlyBuiltDependencies:\n  - koffi\n',
+      'packages:\n  - .\nminimumReleaseAgeExclude:\n  - dsh-orb\nallowBuilds:\n  koffi: true\n',
     )
   })
 
-  it('creates the file for a profile that has none, and appends to an existing list', () => {
-    assert.equal(mergeApprovedBuilds('', ['koffi']), 'onlyBuiltDependencies:\n  - koffi\n')
+  it('creates the file for a profile that has none, and extends an existing mapping', () => {
+    assert.equal(mergeApprovedBuilds('', ['koffi']), 'allowBuilds:\n  koffi: true\n')
     assert.equal(
-      mergeApprovedBuilds('onlyBuiltDependencies:\n  - zod\n', ['koffi']),
-      'onlyBuiltDependencies:\n  - zod\n  - koffi\n',
+      mergeApprovedBuilds('allowBuilds:\n  zod: true\n', ['koffi']),
+      'allowBuilds:\n  zod: true\n  koffi: true\n',
     )
     // Already approved: nothing to write.
-    assert.equal(mergeApprovedBuilds('onlyBuiltDependencies:\n  - koffi\n', ['koffi']), undefined)
+    assert.equal(mergeApprovedBuilds('allowBuilds:\n  koffi: true\n', ['koffi']), undefined)
+  })
+
+  it('re-approves a build the profile had refused, and quotes a scoped name', () => {
+    assert.equal(
+      mergeApprovedBuilds('allowBuilds:\n  koffi: false\n  zod: true\n', ['koffi']),
+      'allowBuilds:\n  koffi: true\n  zod: true\n',
+    )
+    assert.equal(mergeApprovedBuilds('', ['@scope/native']), "allowBuilds:\n  '@scope/native': true\n")
+    assert.equal(mergeApprovedBuilds("allowBuilds:\n  '@scope/native': true\n", ['@scope/native']), undefined)
+    // A commented entry is read as present rather than duplicated.
+    assert.equal(mergeApprovedBuilds('allowBuilds:\n  koffi: true # keep\n', ['koffi']), undefined)
   })
 
   it('writes nothing for an empty approval list and leaves unfamiliar shapes alone', () => {
     assert.equal(mergeApprovedBuilds('packages:\n  - .\n', []), undefined)
-    assert.equal(mergeApprovedBuilds('onlyBuiltDependencies: [koffi]\n', ['zod']), undefined)
+    // A flow mapping is not pnpm's own output.
+    assert.equal(mergeApprovedBuilds('allowBuilds: {}\n', ['koffi']), undefined)
+    // A key an older version wrote is left where it is; the real one is added beside it.
+    assert.equal(
+      mergeApprovedBuilds('onlyBuiltDependencies:\n  - koffi\n', ['koffi']),
+      'onlyBuiltDependencies:\n  - koffi\nallowBuilds:\n  koffi: true\n',
+    )
   })
 })
 
@@ -94,6 +112,7 @@ describe('the after-exit script', () => {
       assert.ok(existsSync(result), 'the script writes its outcome')
       assert.deepEqual(JSON.parse(readFileSync(result, 'utf8')), { spec: 'dsh-orb@0.2.0', ok: true, detail: '' })
       assert.equal(existsSync(join(deferredDir(dir), 'status.json')), false, 'the status goes away with the outcome')
+      assert.equal(existsSync(join(deferredDir(dir), 'job.json')), false, 'the job goes away with the outcome')
       assert.equal(
         readFileSync(join(deferredDir(dir), 'pnpm-saw-status.txt'), 'utf8').trim(),
         'present',
@@ -101,10 +120,11 @@ describe('the after-exit script', () => {
       )
       assert.equal(
         readFileSync(join(dir, 'pnpm-workspace.yaml'), 'utf8'),
-        'packages:\n  - .\nminimumReleaseAgeExclude:\n  - dsh-orb\nonlyBuiltDependencies:\n  - koffi\n',
+        'packages:\n  - .\nminimumReleaseAgeExclude:\n  - dsh-orb\nallowBuilds:\n  koffi: true\n',
       )
       const outcome = takeDeferredOutcome(dir)
       assert.equal(outcome?.ok, true)
+      assert.equal(deferredInstallInProgress(dir), false, 'a finished install never gates the next start')
     } finally {
       if (previousPath === undefined) delete process.env.PATH
       else process.env.PATH = previousPath
@@ -139,5 +159,25 @@ describe('install-in-progress detection', () => {
       ok: false,
       detail: 'deferred-install-stalled',
     })
+  })
+
+  it('covers the seconds before the status file, while the job owner is gone', () => {
+    const dir = profile()
+    const jobFile = join(deferredDir(dir), 'job.json')
+    mkdirSync(deferredDir(dir), { recursive: true })
+    writeFileSync(jobFile, JSON.stringify({ profileDir: dir, spec: 'dsh-orb@0.2.0', registry: 'x', parentPid: deadPid(), approvedBuilds: [] }))
+    assert.equal(deferredInstallInProgress(dir), true, 'pnpm is about to run: the ball waits')
+
+    // The heartbeat stopped long ago: the script died before pnpm ran, so nothing is being replaced.
+    const past = new Date(Date.now() - DEFERRED_INSTALL_PENDING_MS - 1000)
+    utimesSync(jobFile, past, past)
+    assert.equal(deferredInstallInProgress(dir), false)
+  })
+
+  it('does not gate an install whose owner is still running', () => {
+    const dir = profile()
+    mkdirSync(deferredDir(dir), { recursive: true })
+    writeFileSync(join(deferredDir(dir), 'job.json'), JSON.stringify({ parentPid: process.pid }))
+    assert.equal(deferredInstallInProgress(dir), false, 'the package is untouched until that exit')
   })
 })

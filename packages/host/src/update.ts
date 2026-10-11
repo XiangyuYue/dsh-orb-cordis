@@ -9,7 +9,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { deferredInstallInProgress, scheduleInstallAfterExit, takeDeferredOutcome, type DeferredInstall } from './deferred-install.ts'
 import { mappedImages, ownPackageRoot } from './native-images.ts'
@@ -197,9 +197,21 @@ export class UpdateChecker {
     if (outcome !== undefined && !outcome.ok) this.error = outcome.detail === '' ? 'deferred-install-failed' : outcome.detail
   }
 
+  /**
+   * Whether the after-exit script is installing right now, re-read so a state can never
+   * latch: the outcome and the status file are written back to back, and a host that reads
+   * between them would otherwise hide the update card for the rest of the session.
+   * @returns true while a live install is running.
+   */
+  private installInProgress(): boolean {
+    this.installing = deferredInstallInProgress(this.store.dir)
+    return this.installing
+  }
+
   state(): UpdateState {
     const latest = this.latest
     const installed = this.installed
+    const installing = this.installInProgress()
     return {
       currentVersion: this.own?.version ?? '',
       installedVersion: installed,
@@ -212,7 +224,7 @@ export class UpdateChecker {
       checkedAt: this.store.updateRecord().checkedAt || null,
       restartRequired: this.restartRequired,
       deferred: this.deferred !== null,
-      installing: this.installing,
+      installing,
       error: this.error,
       pendingBuilds: [...this.pendingBuilds],
     }
@@ -336,7 +348,7 @@ export class UpdateChecker {
 
   private available(): boolean {
     return this.own !== undefined && this.latest !== null && this.latest !== this.deferred
-      && !this.installing
+      && !this.installInProgress()
       && compareVersions(this.latest, this.installed) > 0
   }
 
@@ -510,10 +522,23 @@ export function exemptReleaseAge(profileDir: string, name: string): void {
   try {
     const file = join(profileDir, 'pnpm-workspace.yaml')
     const next = withReleaseAgeExclusion(readFileSync(file, 'utf8'), name)
-    if (next !== undefined) writeFileSync(file, next)
+    if (next !== undefined) writeProfileFile(file, next)
   } catch {
     // No workspace file (dev checkout, older profile): nothing to exempt.
   }
+}
+
+/**
+ * Replace a profile file atomically. The after-exit install script writes the same
+ * `pnpm-workspace.yaml` (its build approvals), and a plain write would let a concurrent
+ * reader — or pnpm itself — see a truncated document.
+ * @param file - absolute path of the profile file.
+ * @param text - complete new contents.
+ */
+function writeProfileFile(file: string, text: string): void {
+  const staged = `${file}.dsh-orb-tmp`
+  writeFileSync(staged, text)
+  renameSync(staged, file)
 }
 
 /** The package an exemption entry names, with any version or version union dropped. */
