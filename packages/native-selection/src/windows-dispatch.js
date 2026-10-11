@@ -1,5 +1,8 @@
+/** Guard state for callers that omit the argument, so the staleness check still works there. */
+const DEFAULT_READS = { generation: 0 }
+
 /** Translate one Windows hook message into toolbar events. A left mouse-up reads the selection. */
-export function dispatchWindowsSelectionMessage(message, handlers, probe, excluded, reads = { generation: 0 }) {
+export function dispatchWindowsSelectionMessage(message, handlers, probe, excluded, reads = DEFAULT_READS) {
   if (message.type === 'key' || message.type === 'wheel') {
     handlers.onEvent({ type: message.type === 'key' ? 'key' : 'dismiss' })
     return

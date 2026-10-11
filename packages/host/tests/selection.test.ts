@@ -164,6 +164,8 @@ describe('windows selection dispatch', () => {
       { readSelection: async () => ({ text: 'picked', pid: 5, x: 1, y: 2, width: 3, height: 4 }), activatePid() {} },
       new Set(),
     )
+    // That read lands before the next input, so nothing supersedes it.
+    await new Promise((resolve) => setTimeout(resolve, 0))
     dispatchWindowsSelectionMessage(
       { type: 'mouse-up', x: 1, y: 2, button: 'left' },
       handlers,
@@ -172,8 +174,8 @@ describe('windows selection dispatch', () => {
     )
     dispatchWindowsSelectionMessage({ type: 'key' }, handlers, { readSelection: async () => undefined, activatePid() {} }, new Set())
     await new Promise((resolve) => setTimeout(resolve, 0))
-    assert.deepEqual(events.map((event) => event.type), ['mouse-up', 'mouse-up', 'key', 'selection'])
-    assert.equal(events[3]?.text, 'picked')
+    assert.deepEqual(events.map((event) => event.type), ['mouse-up', 'selection', 'mouse-up', 'key'])
+    assert.equal(events[1]?.text, 'picked')
   })
 
   it('drops a slow selection read that a newer click superseded', async () => {
@@ -198,6 +200,29 @@ describe('windows selection dispatch', () => {
     dispatchWindowsSelectionMessage({ type: 'mouse-up', x: 9, y: 9, button: 'left' }, handlers, probe, new Set(), state)
     await new Promise((resolve) => setTimeout(resolve, 0))
     // Only the newest read may show the toolbar; the earlier one would put it back after a click.
+    assert.deepEqual(events.filter((event) => event.type === 'selection').map((event) => event.text), ['fresh'])
+  })
+
+  it('keeps the staleness guard for a caller that omits the counter argument', async () => {
+    const events: { type: string; text?: string }[] = []
+    const handlers = { onEvent: (event: { type: string; text?: string }) => { events.push(event) } }
+    let resolveSlow = (value: { text: string; pid: number; x: number; y: number }) => {}
+    const slow = new Promise<{ text: string; pid: number; x: number; y: number }>((resolve) => { resolveSlow = resolve })
+    let reads = 0
+    const probe = {
+      readSelection: () => {
+        reads += 1
+        return reads === 1 ? slow : Promise.resolve({ text: 'fresh', pid: 5, x: 9, y: 9 })
+      },
+      activatePid() {},
+    }
+    // No counter passed: the module's own state stands in, rather than a fresh object per call.
+    dispatchWindowsSelectionMessage({ type: 'mouse-up', x: 1, y: 2, button: 'left' }, handlers, probe, new Set())
+    dispatchWindowsSelectionMessage({ type: 'mouse-down', x: 9, y: 9, button: 'left' }, handlers, probe, new Set())
+    resolveSlow({ text: 'stale', pid: 5, x: 1, y: 2 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    dispatchWindowsSelectionMessage({ type: 'mouse-up', x: 9, y: 9, button: 'left' }, handlers, probe, new Set())
+    await new Promise((resolve) => setTimeout(resolve, 0))
     assert.deepEqual(events.filter((event) => event.type === 'selection').map((event) => event.text), ['fresh'])
   })
 })

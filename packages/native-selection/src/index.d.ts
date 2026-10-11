@@ -65,4 +65,10 @@ export function dispatchWindowsSelectionMessage(
   handlers: SelectionMonitorHandlers,
   probe: WindowsSelectionProbe,
   excluded: ReadonlySet<number>,
+  /**
+   * Shared staleness counter. `startWindowsSelectionMonitor` passes the one object its hook
+   * closes over, so a slow read is dropped when a newer press or release lands. Callers that
+   * omit it share the module's own counter.
+   */
+  reads?: { generation: number },
 ): void

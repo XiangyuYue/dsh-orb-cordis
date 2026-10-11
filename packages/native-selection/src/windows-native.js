@@ -111,9 +111,16 @@ export function readWindowsSelection() {
           resolve(undefined)
           return
         }
-        const rect = typeof parsed.x === 'number' && typeof parsed.y === 'number'
-          ? dipRect(parsed.x, parsed.y, parsed.width, parsed.height)
-          : {}
+        // The rectangle needs a koffi DPI probe, which can fail on its own (no shcore, no
+        // FFI). That must cost only the coordinates: the text and pid are already good.
+        let rect = {}
+        if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
+          try {
+            rect = dipRect(parsed.x, parsed.y, parsed.width, parsed.height)
+          } catch {
+            rect = {}
+          }
+        }
         resolve({
           text: parsed.text,
           ...typeof parsed.pid === 'number' ? { pid: parsed.pid } : {},
