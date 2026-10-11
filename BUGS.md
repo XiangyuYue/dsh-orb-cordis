@@ -222,6 +222,10 @@ Helper 卡住或太慢时，截图里仍然有悬浮球。
 
 ### 39. 仓库里提交的 bundle 设置页缺少“延迟更新”提示
 
+**勘误（2026-10-11 复核）：本条前提不成立，无需修改代码。** `packages/bundle/client.js` 并不在仓库里——`.gitignore:63` 忽略它，`assemble.mjs` 头部也写明"all generated, none committed"；磁盘上那份只是构建产物，与 `client-settings/client.js` 除模块 id 外逐字节一致，已经带 `update.deferred` 分支。新增的守卫测试（`packages/bundle/tests/install.test.mjs`）在该文件缺失时直接跳过，因此在干净 clone 上它不断言任何东西——这是有意的，但要清楚它保护不到"忘了重新装配"这件事，真正的保护是 `assemble.mjs` 的原子替换。
+
+原文（保留作记录）：
+
 `packages/client-settings/client.js` 的 `updateNotice` 有 `update.deferred` 分支和 `updateDeferred` 文案。`packages/bundle/client.js` 是 `dsh-orb/client` 在 `assemble.mjs` 覆盖之前导出的那份，它的 `updateNotice` 只有更新中、错误、需要重启和有新版本，没有 deferred。
 
 宿主在新文件替换不了已加载的原生镜像时会广播 `state: 'deferred'`。这份已提交的客户端不渲染该状态。`pack.mjs` 会先从 `client-settings` 重新组装，新打出来的 tarball 是对的。直接链接当前仓库树安装则不是。延迟更新之后，这个设置页既不显示失败，也不提示退出再打开。球自己的状态行仍会说。

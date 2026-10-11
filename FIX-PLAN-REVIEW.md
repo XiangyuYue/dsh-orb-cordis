@@ -104,10 +104,14 @@ hotkey: (input, signal) => guard.withInput(() => inner.hotkey(input, signal), si
 这句写得像"现在做不到、要改成能"。但 `windows-native.ts:390`：
 
 ```ts
-return base.replace(/\.exe$/u, '')
+return base.replace(/\.exe$/iu, '')
 ```
 
+（原文引的是 `/\.exe$/u`，实际是带 `i` 的 `/\.exe$/iu`。）
+
 **`.exe` 早就剥掉了**，今天 `open_app("code")` 匹配进程名这一段本来就是好的。方案把一个已正确的事实陈述成待办，实施者会做重复劳动或者以为自己漏看了。
+
+**勘误（2026-10-11，实现后复核）**：标题只做"精确或前缀+词边界"会**漏掉文档窗口**——`Word`/`WINWORD`、`PowerPoint`/`POWERPNT`、`Google Chrome`/`chrome` 这类进程名与显示名不同的应用会匹配失败，退回 `launch()` 后报"failed to open Word"。实现里补了第三遍"按分隔符切段、整段相等"的匹配（`app-match.ts` 的 `titleMatches`），既保住词边界的收紧，也覆盖 `Document1 - Word` 这种标题。
 
 **真正要改的只有标题那一分支**（`title.includes(wanted)` → 精确或前缀+词边界）。
 
@@ -232,7 +236,9 @@ CommonMark 规定软换行渲染成空格，但**中文之间插空格是错的*
 
 方案说"若官方 `installBundle({approvedBuilds})` 使用了不同的键，以那份实现为准"。这一句等于没写——研发摸不到官方实现。**这个键名其实可以查证**：`dsh-orb-*.tgz` 和 `packages/bundle/node_modules` 都在仓库里，`grep onlyBuiltDependencies` 能看到宿主实际用的键（本次 grep 只在 client.js 命中，说明这个键名目前**没有任何代码引用**，更要在动手前确认）。
 
-同时提醒：pnpm 的这个键是**顶层数组**，写法和 `withReleaseAgeExclusion` 的 `minimumReleaseAgeExclude`（嵌套在块下的列表）不同，合并逻辑不能直接照抄，要处理成"顶层键"。
+**勘误（2026-10-11 实测，已按此实现）**：这次查证做晚了，结论是 `onlyBuiltDependencies` 本身就不存在。应用内置 pnpm 11.7.0（`DeepSeek Harness.app/Contents/Resources/runtime/pnpm/dist/pnpm.mjs`）里 `onlyBuiltDependencies` **0 命中**，批准构建读的是 `allowBuilds`；本机两份 profile 现成的 `allowBuilds:` 下 `koffi: true` 就是官方 host `approveBuilds` 写的形状。上面那句"grep 只在 client.js 命中"其实已经提示了键名没被任何实现引用——应当顺着这条线去 pnpm 包里找真键，而不是继续沿用文档里的名字。
+
+同时提醒：`allowBuilds` 是**顶层映射**（`name: true`），写法和 `withReleaseAgeExclusion` 的 `minimumReleaseAgeExclude`（嵌套在块下的列表）不同，合并逻辑不能直接照抄，要处理成"顶层映射"。
 
 ### 4.3 第 28 条：别顺手改了 `postedVk`
 

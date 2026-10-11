@@ -78,7 +78,7 @@ Windows 输入、macOS HID、延迟安装这几组还需要在对应系统上做
 
 改 `shell.js`：
 
-- 抽出 `copyText(button, text)`，点击时 `stopPropagation`，把传入的字符串写入剪贴板。
+- 抽出 `copyText(button, read)`，点击时 `stopPropagation`，`read()` 在**点击时**才读取当前 DOM 里显示的那些行（展开/折叠后的行数不同），把结果写入剪贴板。
 - 建卡时就绑定，不要依赖 markdown 渲染：
   - 终端：复制命令，再加上 `.term-line` 的输出。没有输出时只复制命令。
   - 阅读：只复制 `.read-content` 的文本，按行拼接，不带行号。
@@ -390,11 +390,11 @@ macOS 改为：
 
 根因：`PATH_BLACKLIST` 只有 `/System`、`/etc` 这类 Unix 前缀。`resolveFinderOpen` 在 `realpath` 之前就调用它，所以这些 Unix 前缀在 Windows 上也会被拒绝。`C:\Windows` 匹配不到任何一条。
 
-在 `isForbiddenOpenPath` 里按平台追加判断，保留现有 Unix 前缀（Windows 上仍要拒绝 `/etc` 这种字符串）：
+在 `isForbiddenOpenPath` 里追加判断，保留现有 Unix 前缀（Windows 上仍要拒绝 `/etc` 这种字符串）。该判断**不分平台**执行（前缀只匹配反斜杠规范化后的串，所以在 macOS 上只会更严，不会误伤）：
 
-- 规范化分隔符并去掉末尾斜杠后再比。
-- 拒绝 `process.env.SystemRoot`（缺省时用 `C:\Windows`）及其子路径。
-- 拒绝 `C:\Windows`、`C:\Windows\System32`、`C:\Program Files`、`C:\Program Files (x86)`。大小写不敏感。
+- 规范化分隔符、去掉 `\\?\` 扩展长度前缀与末尾斜杠后再比。
+- 拒绝 `process.env.SystemRoot`（其次 `windir`，缺省时用 `C:\Windows`）及其子路径。
+- 拒绝 `C:\Windows`、`C:\Windows\System32`，以及 `ProgramFiles` / `ProgramFiles(x86)` / `ProgramW6432` 三个环境变量（缺省时用 `C:\Program Files`、`C:\Program Files (x86)`）。大小写不敏感，这样系统装在 D: 盘也覆盖得到。
 - 不要拒绝用户目录，例如 `C:\Users\...\Windows` 这种名字里碰巧带 Windows 的路径。用“路径等于前缀，或前缀后紧跟 `\`”判断。
 
 测试放在 `open` 的现有单测里：`C:\Windows\System32\notepad.exe` 抛禁止打开；`C:\Users\me\notes` 可以通过黑名单（文件不存在时仍是“路径不存在”，那是另一条错误）。
@@ -480,14 +480,15 @@ function intervalHasStarted(code: Agent, requestId: SessionRequestId): boolean {
 根因：`DeferredInstall` 没有这个字段。`deferUntilExit` 在探测到已映射镜像时、以及 `EPERM` 之后，都不把 `install()` 收到的 `approvedBuilds` 放进 `job.json`。脚本的 argv 被写死成 `pnpm add <spec> --save-exact --registry=...`。
 
 - `DeferredInstall` 增加 `approvedBuilds: readonly string[]`。两处 `deferUntilExit` 都把本次参数传进去。没有批准时传空数组。
-- 脚本在 `pnpm add` 之前，若数组非空，把这些包名合并进 profile 的 `pnpm-workspace.yaml`。pnpm 10/11 的键是文件顶层的 `onlyBuiltDependencies` 数组，不是 `minimumReleaseAgeExclude` 那种缩进在块下面的列表。不要复用 `withReleaseAgeExclusion` 的解析。读写时只动这个顶层键，别的键原样留下。本仓库里没有官方 `installBundle` 对 `approvedBuilds` 的实现；动手前在已安装的 dsh 里再搜一次这个键名。搜到的若不是 `onlyBuiltDependencies`，以安装包里的实现为准，并在 PR 里写明文件位置。脚本不能忽略 `job.approvedBuilds`。
-- `koffi` 在名单里时，退出后的安装会执行它的构建脚本。
+- 脚本在 `pnpm add` 之前，若数组非空，把这些包名合并进 profile 的 `pnpm-workspace.yaml` 的**顶层 `allowBuilds` 映射**（`name: true`），不是 `minimumReleaseAgeExclude` 那种缩进在块下面的列表。不要复用 `withReleaseAgeExclusion` 的解析。读写时只动这个键，别的键原样留下。
+  - **勘误（2026-10-11 实测，已按此实现）**：本节初稿写的 `onlyBuiltDependencies` **键名和形状都错**。应用内置的 pnpm 11.7.0（`DeepSeek Harness.app/Contents/Resources/runtime/pnpm/dist/pnpm.mjs`）里 `onlyBuiltDependencies` 0 命中，批准构建读的是 `allowBuilds`（它的报错文案就是 "add its name to allowBuilds and set to true"）；本机两份 profile 现成的写法也是 `allowBuilds:` 下 `koffi: true`，与官方 host `approveBuilds` 的写入形状一致。
+- `koffi` 在名单里时，退出后的安装会执行它的构建脚本。官方 profile 生成器默认已写 `allowBuilds: koffi: true`，所以真正需要这条兜底的是其他被 pnpm 挂起的包。
 
 测试：`deferUntilExit` 的 job 含 `['koffi']`。生成的 workspace 文件在顶层有
 
 ```yaml
-onlyBuiltDependencies:
-  - koffi
+allowBuilds:
+  koffi: true
 ```
 
 空数组不新增这个键。文件里已有的 `minimumReleaseAgeExclude` 还在。

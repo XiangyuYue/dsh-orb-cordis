@@ -121,7 +121,7 @@ Desktop 上新建 `code_agent` 会在 `session.create` 之后、`session.prompt`
 | [`src/code-agent-completion.ts`](src/code-agent-completion.ts) | Code 会话与 Computer Use 调用方都空闲后投递的插件通知；停止时可中止 |
 | [`src/code-agent-unattended.ts`](src/code-agent-unattended.ts) | 在活的 Code agent 上前置自动允许 `approval/request` 与自动应答 `user-questions/request` |
 | [`src/macos.ts`](src/macos.ts) | Darwin 用 `screencapture -R` 取前台应用窗口并集、并裁到拥有它的那块显示器（区域参数由该显示器按其像素倍率读取，副屏窗口不会再返回主屏像素），或在设置了 overlay 窗口 id 时走排除 overlay 的 ScreenCaptureKit `--region=`（Desktop IPC 进 Electron，CLI 派生 helper）；click、scroll、hotkey、长按与拖拽走 JXA `CGEvent`；`input_text` 通过 NSPasteboard 粘贴；`list_apps` / `open_app` 走 NSWorkspace；`open_in_browser` / `open_in_finder` 走 `/usr/bin/open`；`inspectForeground` 绑定 `CGWindowListCopyWindowInfo` 再 unwrap（跳过 overlay id）加 Finder AppleScript |
-| [`src/windows.ts`](src/windows.ts) | Win32 用 GDI 把选中窗口并集截成 PNG，坐标是每监视器物理像素；click、scroll、hotkey、长按与拖拽走 `SendInput`；`input_text` 用 Ctrl+V 粘贴，并在粘贴发出后再恢复字符串剪贴板；`open_in_finder` 打开资源管理器；提权的前台窗口拒绝输入 |
+| [`src/windows.ts`](src/windows.ts) | Win32 用 GDI 把选中窗口并集截成 PNG，坐标是每监视器物理像素；click、scroll、hotkey、长按与拖拽走 `SendInput`；`input_text` 用 Ctrl+V 粘贴，并在粘贴发出后恢复保存下来的各种剪贴板格式；`open_in_finder` 打开资源管理器；提权的目标窗口拒绝输入 |
 | [`src/windows-foreground.ts`](src/windows-foreground.ts) | 纯 z-order 选择：跳过 overlay HWND、任务栏和桌面；合并同一监视器上的菜单与有 owner 的弹出窗口 |
 | [`src/observation-limits.ts`](src/observation-limits.ts) | 共用的最小窗口边长和瞬时窗口外扩，macOS 上是 point，Windows 上是物理像素 |
 | [`src/macos-sck-capture.swift`](src/macos-sck-capture.swift) | Darwin helper 与进程内库：窗口捕获或排除 overlay 后的区域裁切，仍省略 overlay CGWindowID；CLI 先在主 actor 启动 `NSApplication`；库入口不改 activation policy |
@@ -240,13 +240,13 @@ Keyboard focus is on another window. hotkey brings this window forward first; cl
 - **屏幕录制、辅助功能与自动化 TCC** — 捕获需要屏幕录制；点击、输入、滚动、热键、长按与拖拽需要辅助功能；Finder 当前文件夹查询需要访达的自动化权限。插件不会提示授予这些权限。Desktop overlay 会在 overlay `session/prompt` 前盖住屏幕录制与辅助功能；访达自动化仍在第一次使用访达时弹出。执行时缺权限仍会点名对应 TCC。Desktop 排除 overlay 的捕获使用 Electron 进程里 DeepSeek Orb 的屏幕录制授权；CLI 仍派生 `macos-sck-capture`。
 - **没有逐次点击批准** — 安装或 patch 插件就是同意门槛；视觉循环不能在每个动作上询问。
 - **宿主 chrome 不是最前窗口时不会进图** — Web 窗口只在它是最前窗口时出现。Desktop 主窗口在 overlay 跳过后仍可被截到。macOS overlay 与观察框彩带由 ScreenCaptureKit 的 exclude id 校验从 Computer Use 截图中省略（display exclude 加裁切），overlay 在 HID 突发、`open_app` 及其 recapture 期间通过带确认的 overlay-guard IPC 点击穿透。Windows 在前台选择里跳过这些 overlay HWND，并在捕获区间以及包含 recapture 的 HID 区间设置显示亲和性。前台检查与 `listScreens` 都跳过这些 overlay 窗口 id，因此主窗口可以出现在 `<frontmost_app>` 里。
-- **输入会使用字符串剪贴板** — `input_text` 在 macOS 上通过 Cmd+V 粘贴，在 Windows 上通过 Ctrl+V 粘贴，然后恢复先前的字符串剪贴板。Windows 会在 Ctrl+V 之后等待，再做这次恢复。其他剪贴板类型不会被恢复。`screenshot` 会用捕获的图片替换剪贴板，不恢复先前内容。
+- **输入会保存并恢复整个剪贴板** — `input_text` 在 macOS 上通过 Cmd+V 粘贴，在 Windows 上通过 Ctrl+V 粘贴，然后把保存下来的每种格式都放回去，用户复制的图片或文件列表不会因为这次粘贴消失。Windows 会在 Ctrl+V 之后等待再做这次恢复，快照最多取 16 MB 的格式（纯文本优先），并在什么都放不回去时打日志。`screenshot` 会用捕获的图片替换剪贴板，不恢复先前内容。
 - **Retina 与附件尺寸** — backing scale 与请求栅格可能和捕获栅格不同；千分比会话对可见截图使用 0–1000 比例坐标。Overlay 像素会话按 Computer Use 信封上该次观察的附件 WxH 相除。
 - **固定等待** — 动作后延迟是 inspect 与截取像素之前的 `postActionWaitMs`；没有像素差 stall。
 - **没有套索或 `manage_files`** — GUI 覆盖是 click、type、scroll、hotkey、wait、long_wait、screenshot、长按、拖拽、open-in-browser、open-in-finder、list-apps 与 open-app。切换应用用 `open_app`，不要去点 Dock。后台文档与代码走 `code_agent`。
 - **`code_agent` 通知需要活的 Agent** — execute 仍在入队接受后返回。找不到活的 Code agent、Computer Use 调用方已销毁、或 Code 会话再也不回到空闲，都会丢掉通知。`code_agent_stop` 会中止该区间的监视。后台 Code agent 自动允许批准并自动应答向用户提问；Computer Use 自己仍在球上显示提问。策略拦不住仍然调用 `wait` 或 `long_wait` 的模型。
 - **桌面 overlay** — macOS 与 Windows 会创建悬浮球。Linux 不会。Windows 在捕获和 HID 期间用显示亲和性把球排除出截图，前台选择也会跳过球的 HWND。未提权进程不能点击提权窗口。实验包是签名 runtime extra，不是 Desktop Host 的 npm 依赖。
-- **Windows 键盘焦点** — 前台 HWND 被跳过时，`<frontmost_app>` 命名下一个可操作窗口，观察加上 `<focus_note>`。`hotkey` 在 `SendInput` 之前用 Alt 加 `SetForegroundWindow` 把该窗口带到前台。该窗口没有成为前台时，`hotkey` 抛出 `computer-use: keyboard focus could not be moved to <app>; click inside the window, then retry hotkey`，并且不发送按键。`input_text` 靠点击聚焦，不走这次恢复。
+- **Windows 键盘焦点** — 前台 HWND 被跳过时，`<frontmost_app>` 命名下一个可操作窗口，观察加上 `<focus_note>`。`hotkey` 在 `SendInput` 之前用 Alt 加 `SetForegroundWindow` 把该窗口带到前台，并先确认这个句柄仍属于本次会话观察到的应用（Windows 会回收 HWND）、且该窗口未提权。句柄已经换了应用时抛 `computer-use: the <app> window this session observed is gone; click inside the window, then retry hotkey`；窗口只是没能成为前台时抛 `computer-use: keyboard focus could not be moved to <app>; click inside the window, then retry hotkey`。两种情况都不发送按键。`input_text` 靠点击聚焦，不走这次恢复。
 - **实验性原型，不提供稳定性承诺** — 本包为私有；schema 与后端可以自由变更。
 
 <a id="dev-note"></a>
