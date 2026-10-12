@@ -322,11 +322,22 @@ describe('settings section', () => {
     assert.deepEqual(JSON.parse(modelCall.options.body), { provider: 'deepseek-official', model: 'deepseek-pro' })
 
     const choose = find(view, (node) => node.type === 'button' && node.children?.includes('选择图片'))[0]
-    page.setFile({ size: 3 * 1024 * 1024, async arrayBuffer() { throw new Error('unread') } })
+    // Over the cap: the message names the file's own size, so nobody has to guess whether
+    // the file or the plugin was at fault.
+    page.setFile({ size: 5 * 1024 * 1024 + 300 * 1024, async arrayBuffer() { throw new Error('unread') } })
     choose.props.onClick()
     view = page.render()
-    assert.equal(find(view, (node) => node.children?.includes('图片超过 2 MB。')).length, 1)
+    assert.equal(find(view, (node) => node.children?.includes('图片 5.3 MB，超过 4 MB 上限。')).length, 1)
     assert.equal(page.calls.some((call) => call.path === '/.dsh-orb/avatar'), false)
+    // Under the cap but unreadable: the upload must say so rather than do nothing at all.
+    page.setFile({ size: 1024, async arrayBuffer() { throw new Error('unread') } })
+    choose.props.onClick()
+    await settle()
+    view = page.render()
+    assert.equal(find(view, (node) => node.children?.includes('读不到这个文件，请重新选择一次。')).length, 1)
+    assert.equal(page.calls.some((call) => call.path === '/.dsh-orb/avatar'), false)
+    // The copy states the same limit the check enforces.
+    assert.equal(find(view, (node) => node.children?.includes('点一张内置动图，或选择自己的图片。上传支持 GIF、PNG、WebP，4 MB 以内。')).length, 1)
 
     // Built-in GIFs: one animated thumbnail per shipped preset, named, and pickable.
     const gallery = find(view, (node) => node.props?.className === 'dsh-orb-set-presets-row')[0]

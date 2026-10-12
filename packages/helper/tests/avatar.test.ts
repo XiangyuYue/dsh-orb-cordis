@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { readAvatarChoice } from '../src/avatar.ts'
+import { MAX_AVATAR_RESPONSE_BYTES, readAvatarChoice } from '../src/avatar.ts'
+import { MAX_AVATAR_BYTES } from '../../host/src/preferences.ts'
 
 describe('avatar messages', () => {
   it('reads a preset as the relative source the ball page can load', () => {
@@ -38,5 +39,15 @@ describe('avatar messages', () => {
     assert.deepEqual(readAvatarChoice({ version: 12 }), { kind: 'default' })
     assert.deepEqual(readAvatarChoice({ kind: 'default', version: 12 }), { kind: 'default' })
     assert.deepEqual(readAvatarChoice({}), { kind: 'default' })
+  })
+
+  it('reads more of an upload than the host will ever accept', () => {
+    // The two caps live in different packages, and the failure when they cross is silent:
+    // the host stores an upload the helper then refuses to read, so the ball keeps the old
+    // image and nothing says why. This is that invariant.
+    assert.ok(
+      MAX_AVATAR_RESPONSE_BYTES > MAX_AVATAR_BYTES,
+      `helper cap ${MAX_AVATAR_RESPONSE_BYTES} must exceed the host cap ${MAX_AVATAR_BYTES}`,
+    )
   })
 })

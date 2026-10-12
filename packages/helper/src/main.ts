@@ -6,7 +6,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeTheme, scre
 import { request as httpRequest } from 'node:http'
 import { createConnection, type Socket } from 'node:net'
 import { fileURLToPath } from 'node:url'
-import { readAvatarChoice, type AvatarChoice } from './avatar.ts'
+import { MAX_AVATAR_RESPONSE_BYTES, readAvatarChoice, type AvatarChoice } from './avatar.ts'
 import { collectChromeWindowIds, type NativeHandleWindow } from './chrome-windows.ts'
 import { AGENT_STRIP_WIDTH, FloatingPlacement, initialWindowBounds } from './geometry.ts'
 import { contextMenuTemplate } from './menu.ts'
@@ -699,7 +699,7 @@ function fetchAvatar(version: number): Promise<{ mime: string; body: Buffer } | 
       let size = 0
       res.on('data', (chunk: Buffer) => {
         size += chunk.length
-        if (size > 2_500_000) {
+        if (size > MAX_AVATAR_RESPONSE_BYTES) {
           req.destroy()
           resolve(undefined)
           return

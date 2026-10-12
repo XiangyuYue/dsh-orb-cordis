@@ -58,7 +58,13 @@ const DEFAULT_MODEL: AgentModelSelection = {
   reasoningEffort: 'max',
 }
 
-export const MAX_AVATAR_BYTES = 2 * 1024 * 1024
+/**
+ * Upload cap, enforced by the settings page and again by the avatar route. The gallery
+ * this page links to serves GIFs up to ~2.6 MB, so anything tighter rejects the very
+ * files the flow sends people to fetch; the ball re-fetches the bytes on every chrome
+ * publish, which is what keeps this a budget rather than a formality.
+ */
+export const MAX_AVATAR_BYTES = 4 * 1024 * 1024
 
 /**
  * Active official profile directory.

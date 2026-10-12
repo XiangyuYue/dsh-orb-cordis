@@ -19,7 +19,7 @@ window.__ModuleLoader__.load({
       ball: '启用悬浮球',
       ballDescription: '关闭后插件仍在，Computer Use 仍可在主窗口使用。',
       avatarTitle: '悬浮球头像',
-      avatarDescription: '点一张内置动图，或选择自己的图片。上传支持 GIF、PNG、WebP，2 MB 以内。',
+      avatarDescription: '点一张内置动图，或选择自己的图片。上传支持 GIF、PNG、WebP，{limit} MB 以内。',
       avatarAlt: '悬浮球头像预览',
       avatarBuiltin: '内置动图',
       avatarMore: '更多动图',
@@ -34,7 +34,9 @@ window.__ModuleLoader__.load({
       },
       chooseImage: '选择图片',
       restoreDefault: '恢复默认',
-      tooLarge: '图片超过 2 MB。',
+      tooLarge: '图片超过 {limit} MB。',
+      tooLargeSize: '图片 {size} MB，超过 {limit} MB 上限。',
+      unreadable: '读不到这个文件，请重新选择一次。',
       invalidType: '请选择 GIF、PNG 或 WebP 图片。',
       overlayTitle: '悬浮球 Agent',
       overlayDescription: '悬浮球 Computer Use 会话使用的模型与思考强度。',
@@ -96,7 +98,7 @@ window.__ModuleLoader__.load({
       ball: 'Enable the floating ball',
       ballDescription: 'Turning this off keeps the plugin loaded. Computer Use stays available in the main window.',
       avatarTitle: 'Ball image',
-      avatarDescription: 'Pick a built-in animation, or choose your own image. Uploads accept GIF, PNG, and WebP up to 2 MB.',
+      avatarDescription: 'Pick a built-in animation, or choose your own image. Uploads accept GIF, PNG, and WebP up to {limit} MB.',
       avatarAlt: 'Floating-ball image preview',
       avatarBuiltin: 'Built-in animations',
       avatarMore: 'More animations',
@@ -111,7 +113,9 @@ window.__ModuleLoader__.load({
       },
       chooseImage: 'Choose image',
       restoreDefault: 'Restore default',
-      tooLarge: 'The image is larger than 2 MB.',
+      tooLarge: 'The image is larger than {limit} MB.',
+      tooLargeSize: 'The image is {size} MB — over the {limit} MB limit.',
+      unreadable: 'That file could not be read. Choose it again.',
       invalidType: 'Choose a GIF, PNG, or WebP image.',
       overlayTitle: 'Floating-ball Agent',
       overlayDescription: 'Model and reasoning effort for the ball\'s Computer Use session.',
@@ -165,6 +169,20 @@ window.__ModuleLoader__.load({
     // outbound link: the desktop shell hands http(s) window opens to the system
     // browser, and a page served in a browser just opens a tab.
     const AVATAR_GALLERY_URL = 'https://dshgif.hicp.fun/'
+
+    /**
+     * Upload cap, mirroring the host's MAX_AVATAR_BYTES. The check here is for the
+     * message, not for safety: it turns a rejected upload into a sentence with the file's
+     * own size in it, instead of a 413 the page can only report as "too large".
+     */
+    const AVATAR_MAX_BYTES = 4 * 1024 * 1024
+    const AVATAR_MAX_MB = String(AVATAR_MAX_BYTES / (1024 * 1024))
+
+    /** One decimal below 10 MB, whole numbers above: 3.4 MB, 12 MB. */
+    function megabytes(bytes) {
+      const value = bytes / (1024 * 1024)
+      return value >= 10 ? value.toFixed(0) : value.toFixed(1)
+    }
 
     // The main window's resolved locale rides <html lang> (dsh-client-locale);
     // a page without it falls back to the browser languages.
@@ -293,6 +311,8 @@ window.__ModuleLoader__.load({
         catalog: { groups: [] },
         busy: false,
         avatarError: '',
+        /** Size of the file that failed the check, 0 when only the host knows it. */
+        avatarSize: 0,
       })
 
       // Responses overtake each other: a focus-triggered load, a poll, and a save can all be
@@ -339,13 +359,13 @@ window.__ModuleLoader__.load({
 
       async function load() {
         const ticket = takeTicket(false)
-        setState((prev) => ({ ...prev, status: prev.snapshot ? prev.status : 'loading', error: '', avatarError: '' }))
+        setState((prev) => ({ ...prev, status: prev.snapshot ? prev.status : 'loading', error: '', avatarError: '', avatarSize: 0 }))
         try {
           const [snapshot, catalog] = await Promise.all([
             request('/.dsh-orb/settings'),
             request('/.dsh-orb/models'),
           ])
-          applyGet(ticket, { status: 'ready', error: '', snapshot, catalog: catalog || { groups: [] }, busy: false, avatarError: '' })
+          applyGet(ticket, { status: 'ready', error: '', snapshot, catalog: catalog || { groups: [] }, busy: false, avatarError: '', avatarSize: 0 })
         } catch (error) {
           applyGet(ticket, (prev) => ({
             ...prev,
@@ -415,7 +435,7 @@ window.__ModuleLoader__.load({
               : { 'content-type': 'application/json' },
             body: body instanceof ArrayBuffer ? body : JSON.stringify(body),
           })
-          settleSave(ticket, (prev) => ({ ...prev, status: 'ready', snapshot, busy: false, avatarError: '' }))
+          settleSave(ticket, (prev) => ({ ...prev, status: 'ready', snapshot, busy: false, avatarError: '', avatarSize: 0 }))
         } catch (error) {
           const code = error instanceof Error ? error.message : ''
           settleSave(ticket, (prev) => ({
@@ -437,11 +457,17 @@ window.__ModuleLoader__.load({
 
       const snap = state.snapshot
       const disabled = !snap.supported || state.busy
+      // A local check knows the file's size, so say it: "2.6 MB, over the 4 MB limit" is a
+      // sentence; "too large" is a puzzle. Only a host-side 413 arrives without a size.
       const avatarMessage = state.avatarError === 'too-large'
-        ? text.tooLarge
+        ? (state.avatarSize > 0 ? text.tooLargeSize : text.tooLarge)
+          .replaceAll('{size}', megabytes(state.avatarSize))
+          .replaceAll('{limit}', AVATAR_MAX_MB)
         : state.avatarError === 'invalid-type'
           ? text.invalidType
-          : ''
+          : state.avatarError === 'unreadable'
+            ? text.unreadable
+            : ''
       return h('div', { className: 'dsh-orb-set' },
         h('h2', { className: 'dsh-orb-set-title' }, text.nav),
         h('p', { className: 'dsh-orb-set-intro' }, text.intro),
@@ -464,7 +490,7 @@ window.__ModuleLoader__.load({
           })),
           h('section', { className: 'dsh-orb-set-card' },
             h('h3', null, text.avatarTitle),
-            h('p', null, text.avatarDescription),
+            h('p', null, text.avatarDescription.replaceAll('{limit}', AVATAR_MAX_MB)),
             h('div', { className: 'dsh-orb-set-avatar-row' },
               h('img', { className: 'dsh-orb-set-avatar', src: snap.avatarUrl, alt: text.avatarAlt }),
               h('div', { className: 'dsh-orb-set-actions' },
@@ -479,11 +505,16 @@ window.__ModuleLoader__.load({
                     input.onchange = () => {
                       const file = input.files && input.files[0]
                       if (!file) return
-                      if (file.size > 2 * 1024 * 1024) {
-                        setState((prev) => ({ ...prev, avatarError: 'too-large' }))
+                      if (file.size > AVATAR_MAX_BYTES) {
+                        setState((prev) => ({ ...prev, avatarError: 'too-large', avatarSize: file.size }))
                         return
                       }
-                      void file.arrayBuffer().then((bytes) => mutate('/.dsh-orb/avatar', bytes))
+                      // A failed read used to vanish into the void: no request, no message,
+                      // nothing on the ball. Say so instead.
+                      void file.arrayBuffer().then(
+                        (bytes) => mutate('/.dsh-orb/avatar', bytes),
+                        () => { setState((prev) => ({ ...prev, avatarError: 'unreadable', avatarSize: 0 })) },
+                      )
                     }
                     input.click()
                   },
@@ -728,7 +759,8 @@ window.__ModuleLoader__.load({
 .dsh-orb-set { display: flex; flex-direction: column; gap: 16px; max-width: 720px; color: inherit; }
 .dsh-orb-set-title { margin: 0; font-size: 20px; }
 .dsh-orb-set-intro, .dsh-orb-set p { margin: 4px 0 0; color: color-mix(in srgb, currentColor 72%, transparent); font-size: 13px; line-height: 1.45; }
-.dsh-orb-set-banner, .dsh-orb-set-error { color: inherit; }
+.dsh-orb-set-banner { color: inherit; }
+.dsh-orb-set-error { color: var(--dsw-alias-state-error-primary, #d92d20); }
 .dsh-orb-set-fields { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .dsh-orb-set-card { border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 12px; padding: 14px 16px; }
 .dsh-orb-set-row, .dsh-orb-set-avatar-row, .dsh-orb-set-tcc { display: flex; justify-content: space-between; gap: 16px; align-items: center; }

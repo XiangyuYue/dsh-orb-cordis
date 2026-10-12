@@ -235,6 +235,15 @@ describe('settings routes', () => {
     assert.equal(invalid.status, 400)
     assert.equal(JSON.parse(invalid.body.toString('utf8')).error, 'invalid-type')
 
+    // The gallery the settings page links to serves GIFs up to ~2.6 MB, and the page's own
+    // check uses the same number: a body at the cap is a real upload, not a rejection.
+    assert.ok(MAX_AVATAR_BYTES > 2_600_000, 'the cap covers the largest gallery GIF')
+    const atCap = Buffer.concat([Buffer.from('GIF89a', 'binary'), Buffer.alloc(2_600_000)])
+    const accepted = response()
+    await handler(request('POST', '/.dsh-orb/avatar', atCap, { 'x-dsh-user': 'ok' }), accepted)
+    assert.equal(accepted.status, 200)
+    assert.deepEqual(store.avatarSelection(), { kind: 'custom', mime: 'image/gif' })
+
     const restored = response()
     await handler(request('POST', '/.dsh-orb/avatar/restore', '{}', { 'x-dsh-user': 'ok' }), restored)
     assert.equal(JSON.parse(restored.body.toString('utf8')).avatarUrl, '/.dsh-orb/avatar?v=0')
