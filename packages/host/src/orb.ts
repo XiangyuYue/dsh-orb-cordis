@@ -165,8 +165,8 @@ const RUNTIME_RETRY_DELAYS_MS = [5_000, 30_000, 2 * 60_000]
 const HELPER_RETRY_DELAYS_MS = [500, 2_000, 10_000, 5 * 60_000]
 /** Strip poll cadence; the helper ticks elapsed clocks itself. */
 const AGENT_POLL_MS = 1_000
-/** How long a ball-initiated jump target stays valid: long enough for a cold app launch. */
-const JUMP_TTL_MS = 30_000
+/** How long a ball-initiated main-window target (session jump, settings) stays valid: long enough for a cold app launch. */
+const MAIN_WINDOW_TARGET_TTL_MS = 30_000
 /** Caller conversations cycle through this many attribution colors. */
 const AGENT_COLOR_COUNT = 4
 
@@ -286,6 +286,8 @@ export class OrbRuntime {
   private lastAgentsPayload = ''
   private readonly readAgentIds = new Set<string>()
   private jumpTarget: { readonly sessionId: string; readonly at: number } | undefined
+  /** One-shot "open the ball's own settings page" request for the main window's client plugin. */
+  private settingsTarget: { readonly at: number } | undefined
   private readonly callerColors = new Map<string, number>()
   private callerTitles: { readonly at: number; readonly byId: Map<string, string> } | undefined
   private callerTitlesTask: Promise<void> | undefined
@@ -543,6 +545,7 @@ export class OrbRuntime {
     this.helperPid = undefined
     this.overlayWaiters.clear()
     this.jumpTarget = undefined
+    this.settingsTarget = undefined
     this.selection.stop()
     this.foreground.stop()
     this.killChild()
@@ -1592,6 +1595,10 @@ export class OrbRuntime {
       this.run('open-main', () => this.openMain())
       return
     }
+    if (record.type === 'open-settings') {
+      this.run('open-settings', () => this.openSettings())
+      return
+    }
     if (record.type === 'tcc') {
       this.broadcast({ type: 'tcc', status: this.tcc.status() })
       return
@@ -1780,6 +1787,17 @@ export class OrbRuntime {
     await openMainWindow(this.ctx)
   }
 
+  /**
+   * The ball's "open floating-ball settings" click: arm the request the main window's
+   * client plugin polls for, then bring that window forward. The window may be closed —
+   * the target outlives the launch (`MAIN_WINDOW_TARGET_TTL_MS`) so a cold start still
+   * lands on the settings page.
+   */
+  private async openSettings(): Promise<void> {
+    this.settingsTarget = { at: Date.now() }
+    await this.openMain()
+  }
+
   private startAgentPoll(): void {
     if (this.agentTimer) return
     this.agentTimer = setInterval(() => this.pollAgents(), AGENT_POLL_MS)
@@ -1886,7 +1904,7 @@ export class OrbRuntime {
   takeJump(): { sessionId: string; at: number } | null {
     const target = this.jumpTarget
     if (target === undefined) return null
-    if (Date.now() - target.at > JUMP_TTL_MS) {
+    if (Date.now() - target.at > MAIN_WINDOW_TARGET_TTL_MS) {
       this.jumpTarget = undefined
       return null
     }
@@ -1895,6 +1913,25 @@ export class OrbRuntime {
 
   confirmJump(sessionId: string): void {
     if (this.jumpTarget?.sessionId === sessionId) this.jumpTarget = undefined
+  }
+
+  /**
+   * The armed floating-ball-settings request, for the main window's client plugin.
+   * `null` once confirmed or expired; reading it does not consume it, so a window that
+   * cannot open the section yet retries instead of losing the click.
+   */
+  takeSettingsOpen(): { at: number } | null {
+    const target = this.settingsTarget
+    if (target === undefined) return null
+    if (Date.now() - target.at > MAIN_WINDOW_TARGET_TTL_MS) {
+      this.settingsTarget = undefined
+      return null
+    }
+    return { at: target.at }
+  }
+
+  confirmSettingsOpen(at: number): void {
+    if (this.settingsTarget?.at === at) this.settingsTarget = undefined
   }
 
   /** A bookmark click: mark read, arm the main window's jump, and focus the main window. */

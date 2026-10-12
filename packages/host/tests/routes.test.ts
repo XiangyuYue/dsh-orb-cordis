@@ -78,6 +78,8 @@ describe('settings routes', () => {
       helperAuthorized: (token) => tokensMatch(token, 'helper-secret'),
       takeJump: () => null,
       confirmJump() {},
+      takeSettingsOpen: () => null,
+      confirmSettingsOpen() {},
       async publishChrome() { calls.push('chrome') },
       async setOverlayModel(selection) { store.setOverlay(selection); calls.push(['overlay', selection]) },
       async setBackgroundModel(selection) { store.setBackground(selection); calls.push(['background', selection]) },
@@ -294,6 +296,8 @@ describe('settings routes', () => {
       helperAuthorized: () => false,
       takeJump: () => null,
       confirmJump() {},
+      takeSettingsOpen: () => null,
+      confirmSettingsOpen() {},
       async publishChrome() {},
       async setOverlayModel() {},
       async setBackgroundModel() {},
@@ -359,13 +363,18 @@ describe('settings routes', () => {
     dispose()
   })
 
-  it('hands a bookmark jump target to the main window once', async () => {
+  it('hands a bookmark jump and a settings target to the main window once', async () => {
     let armed: string | undefined = 'session-agent-9'
+    let settings: number | undefined = 4242
     const control: OrbControl = {
       helperAuthorized: () => false,
       takeJump: () => armed === undefined ? null : { sessionId: armed, at: 1234 },
       confirmJump(sessionId) {
         if (armed === sessionId) armed = undefined
+      },
+      takeSettingsOpen: () => settings === undefined ? null : { at: settings },
+      confirmSettingsOpen(at) {
+        if (settings === at) settings = undefined
       },
       async publishChrome() {},
       async setOverlayModel() {},
@@ -418,6 +427,33 @@ describe('settings routes', () => {
     const invalidPost = response()
     await handler(request('POST', '/.dsh-orb/jump', '{}', { 'x-dsh-user': 'ok' }), invalidPost)
     assert.equal(invalidPost.status, 400)
+
+    // The settings row rides the same bridge, with the arm timestamp as its identity.
+    const settingsDenied = response()
+    await handler(request('GET', '/.dsh-orb/settings-open'), settingsDenied)
+    assert.equal(settingsDenied.status, 401)
+
+    const armedSettings = response()
+    await handler(request('GET', '/.dsh-orb/settings-open', undefined, { 'x-dsh-user': 'ok' }), armedSettings)
+    assert.equal(armedSettings.status, 200)
+    assert.equal((JSON.parse(armedSettings.body.toString('utf8')) as { at: number }).at, 4242)
+
+    // Reading twice must not consume: the window may still be starting up.
+    const reread = response()
+    await handler(request('GET', '/.dsh-orb/settings-open', undefined, { 'x-dsh-user': 'ok' }), reread)
+    assert.equal((JSON.parse(reread.body.toString('utf8')) as { at: number }).at, 4242)
+
+    const invalidSettings = response()
+    await handler(request('POST', '/.dsh-orb/settings-open', JSON.stringify({ at: 'now' }), { 'x-dsh-user': 'ok' }), invalidSettings)
+    assert.equal(invalidSettings.status, 400)
+
+    const confirmedSettings = response()
+    await handler(request('POST', '/.dsh-orb/settings-open', JSON.stringify({ at: 4242 }), { 'x-dsh-user': 'ok' }), confirmedSettings)
+    assert.equal(confirmedSettings.status, 200)
+
+    const consumedSettings = response()
+    await handler(request('GET', '/.dsh-orb/settings-open', undefined, { 'x-dsh-user': 'ok' }), consumedSettings)
+    assert.equal((JSON.parse(consumedSettings.body.toString('utf8')) as { at: number | null }).at, null)
     dispose()
   })
 
@@ -428,6 +464,8 @@ describe('settings routes', () => {
       helperAuthorized: () => false,
       takeJump: () => null,
       confirmJump() {},
+      takeSettingsOpen: () => null,
+      confirmSettingsOpen() {},
       async publishChrome() {},
       async setOverlayModel() {},
       async setBackgroundModel() {},

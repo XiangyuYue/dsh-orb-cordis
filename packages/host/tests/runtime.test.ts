@@ -695,6 +695,35 @@ describe('ball control socket', { concurrency: 1 }, () => {
     }
   })
 
+  it('arms the main window settings bridge when the ball menu asks for it', async () => {
+    const harness = boot()
+    const client = await connect(harness.runtime)
+    try {
+      // Nothing armed until the row is clicked.
+      assert.equal(harness.runtime.takeSettingsOpen(), null)
+
+      client.send({ type: 'open-settings' })
+      let target: { at: number } | null = null
+      await waitFor(() => (target = harness.runtime.takeSettingsOpen()) !== null)
+      assert.ok(target !== null && Number.isFinite(target.at))
+      // Reading it twice keeps the click alive: the main window may still be launching.
+      assert.deepEqual(harness.runtime.takeSettingsOpen(), target)
+
+      harness.runtime.confirmSettingsOpen(target.at)
+      assert.equal(harness.runtime.takeSettingsOpen(), null)
+
+      // A confirm for a target the ball never armed cannot clear a fresh one.
+      client.send({ type: 'open-settings' })
+      let second: { at: number } | null = null
+      await waitFor(() => (second = harness.runtime.takeSettingsOpen()) !== null)
+      harness.runtime.confirmSettingsOpen(second.at - 1)
+      assert.deepEqual(harness.runtime.takeSettingsOpen(), second)
+    } finally {
+      client.socket.destroy()
+      harness.runtime.halt()
+    }
+  })
+
   it('renders a plugin notice live and marks the wake turn running without a ball prompt', async () => {
     const harness = boot()
     const client = await connect(harness.runtime)

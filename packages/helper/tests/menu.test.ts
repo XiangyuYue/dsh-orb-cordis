@@ -111,7 +111,7 @@ describe('ball menu', () => {
     }), [{ label: '没有可用的模型。', enabled: false }])
   })
 
-  it('lists open, both models, coordinates, update, and disable', () => {
+  it('lists open, settings, both models, coordinates, update, and disable', () => {
     const actions: string[] = []
     const template = contextMenuTemplate({
       catalog,
@@ -122,6 +122,7 @@ describe('ball menu', () => {
       update: '0.2.0',
     }, true, {
       openMain: () => { actions.push('open') },
+      openSettings: () => { actions.push('settings') },
       setOverlay: () => { actions.push('overlay') },
       setBackground: () => { actions.push('background') },
       setMillifraction: (enabled) => { actions.push(`fraction:${enabled}`) },
@@ -130,6 +131,7 @@ describe('ball menu', () => {
     })
     assert.deepEqual(template.map((item) => item.label ?? item.type), [
       '打开主窗口',
+      '打开悬浮球设置',
       '悬浮球 Agent 模型',
       '后台 Agent 模型',
       '千分比坐标',
@@ -139,13 +141,14 @@ describe('ball menu', () => {
     ])
     assert.equal(template[0]?.enabled, true)
     template[0]?.click?.({ checked: false })
-    template[3]?.click?.({ checked: true })
-    template[4]?.click?.({ checked: false })
-    template[6]?.click?.({ checked: false })
-    const background = template[2]?.submenu?.find((item) => item.label === '✓ Flash')
+    template[1]?.click?.({ checked: false })
+    template[4]?.click?.({ checked: true })
+    template[5]?.click?.({ checked: false })
+    template[7]?.click?.({ checked: false })
+    const background = template[3]?.submenu?.find((item) => item.label === '✓ Flash')
     assert.equal(background?.submenu?.find((item) => item.label === 'Max')?.checked, true)
     background?.submenu?.[0]?.click?.({ checked: true })
-    assert.deepEqual(actions, ['open', 'fraction:true', 'update', 'disable', 'background'])
+    assert.deepEqual(actions, ['open', 'settings', 'fraction:true', 'update', 'disable', 'background'])
     const english = contextMenuTemplate({
       catalog: { groups: [] },
       overlay: { provider: 'deepseek-official', model: 'plain' },
@@ -155,6 +158,7 @@ describe('ball menu', () => {
       update: null,
     }, false, {
       openMain() {},
+      openSettings() {},
       setOverlay() {},
       setBackground() {},
       setMillifraction() {},
@@ -163,6 +167,9 @@ describe('ball menu', () => {
     })
     assert.equal(english[0]?.label, 'Open Main Window')
     assert.equal(english[0]?.enabled, false)
+    // The settings panel is a main-window surface: no main window, no row to click.
+    assert.equal(english[1]?.label, 'Open floating-ball settings')
+    assert.equal(english[1]?.enabled, false)
     // Without a version waiting there is no row to click, and no gap either.
     assert.equal(english.some((item) => String(item.label ?? '').startsWith('Update to')), false)
     assert.deepEqual(english.map((item) => item.label ?? item.type).slice(-2), ['separator', 'Disable floating ball'])

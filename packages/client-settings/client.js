@@ -757,6 +757,9 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-fields:disabled { opacity: 0.55; }
 `
 
+    /** Settings-section id of this page; the ball's menu row asks the shell to show exactly this one. */
+    const SECTION_ID = 'orb'
+
     const inject = ['slots']
 
     function apply(ctx) {
@@ -770,23 +773,72 @@ window.__ModuleLoader__.load({
         document.head.append(styleNode)
       }
       styleNode.textContent = style
+      /**
+       * Show the floating-ball section in the main window's settings modal, switching
+       * away from whichever section is up. The shell owns modal visibility: its store
+       * handle is the ledger currency of the `sidebar.settings` entry, and its create()
+       * hands back the mounted instance, whose openSection also opens the modal. Reports
+       * false when no shell can be reached yet, so the caller leaves the ball's request
+       * armed and retries instead of dropping the click.
+       */
+      function showOrbSettings() {
+        let entries
+        let sections
+        try {
+          entries = ctx.slots.entries('sidebar.settings')
+          sections = ctx.slots.entries('settings.section')
+        } catch {
+          return false
+        }
+        // openSection does not validate its id: opening one this page no longer occupies
+        // would show the panel with no matching nav row and nothing in it.
+        const ours = (sections ?? []).some((entry) => entry && entry.options && entry.options.id === SECTION_ID)
+        if (!ours) return false
+        for (const entry of entries ?? []) {
+          // The handle rides the entry itself: SlotCore keeps only id/order/label/priority
+          // inside `options`, and the mounted-store axis resolves `entry.store`.
+          const handle = entry === undefined || entry === null
+            ? undefined
+            : entry.store ?? (entry.options === undefined ? undefined : entry.options.store)
+          if (!handle || typeof handle !== 'object' || typeof handle.create !== 'function') continue
+          let instance
+          try {
+            // A mounted shell returns the same instance every time; a bare store handle
+            // would mint a fresh, invisible one per call — opening that helps nobody.
+            instance = handle.create()
+            if (instance !== handle.create()) continue
+          } catch {
+            continue
+          }
+          const openSection = instance && instance.actions ? instance.actions.openSection : undefined
+          if (typeof openSection !== 'function') continue
+          try {
+            openSection(SECTION_ID)
+          } catch {
+            return false
+          }
+          return true
+        }
+        return false
+      }
       ctx.slots.inject('settings.section', () => ctx.slots.register({
         name: 'settings.section',
-        id: 'orb',
+        id: SECTION_ID,
         order: 25,
         label: () => copy().nav,
         inject: () => ({}),
       }, OrbSettingsSection))
-      // Bookmark jump bridge: the ball arms a target on click, the main window
-      // consumes it by opening that session. Switching must go through the
-      // workspace navigator: a bare sessions.retain would stack a second
-      // mainView reference while the current session keeps its own, and the
-      // main view would never move. The armed target is confirmed with a POST
-      // via request() — mutate() lives inside the settings component and is
-      // not in scope here.
+      // Main-window bridge. The ball cannot reach this window, so it arms targets on the
+      // host and this page consumes them. Bookmark jumps open a session through the
+      // workspace navigator: a bare sessions.retain would stack a second mainView
+      // reference while the current session keeps its own, and the main view would never
+      // move. The settings row asks this page to show the floating-ball section the ball
+      // belongs to. Both are confirmed with a POST via request() — mutate() lives inside
+      // the settings component and is not in scope here.
       ctx.effect(() => {
         let openedKey = ''
-        const poll = setInterval(() => { void consume() }, 2000)
+        let openedSettingsAt = 0
+        const poll = setInterval(() => { void consume(); void consumeSettings() }, 2000)
         async function consume() {
           let target
           try {
@@ -829,10 +881,42 @@ window.__ModuleLoader__.load({
             // Consuming is best-effort; the same-target guard above stops any yank loop.
           }
         }
+        async function consumeSettings() {
+          let target
+          try {
+            target = await request('/.dsh-orb/settings-open')
+          } catch {
+            return
+          }
+          const at = target && typeof target.at === 'number' ? target.at : 0
+          if (at === 0) {
+            openedSettingsAt = 0
+            return
+          }
+          // Same guard as jumps, keyed on the arm timestamp: a confirm that got lost
+          // re-confirms on the next poll instead of re-opening the panel.
+          if (at !== openedSettingsAt) {
+            if (!showOrbSettings()) {
+              // The settings shell is not on the ledger yet (a cold launch composes
+              // plugins after the first poll); the target stays armed and we retry.
+              return
+            }
+            openedSettingsAt = at
+          }
+          try {
+            await request('/.dsh-orb/settings-open', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ at }),
+            })
+          } catch {
+            // Consuming is best-effort; the arm timestamp guard stops any reopen loop.
+          }
+        }
         return () => {
           clearInterval(poll)
         }
-      }, 'dsh-orb: bookmark jump bridge')
+      }, 'dsh-orb: main-window bridge')
     }
 
     exports.apply = apply

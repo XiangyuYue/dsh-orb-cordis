@@ -18,6 +18,12 @@ function loadSection(hooks = {}) {
   let mode = 'ready'
   let confirm = false
   let jump = null
+  /** Armed floating-ball-settings target, as `/.dsh-orb/settings-open` reports it. */
+  let settingsOpen = null
+  /** The `sidebar.settings` ledger, where a mounted settings shell leaves its store handle. */
+  const shellEntries = []
+  /** This page's own `settings.section` row, as the shell shell's ledger holds it. */
+  const sectionEntries = []
   let workspace
   const intervals = []
   const snapshot = {
@@ -126,6 +132,13 @@ function loadSection(hooks = {}) {
         if (jump === null) return { ok: false, status: 404, async text() { return JSON.stringify({ error: 'missing' }) } }
         return json(jump)
       }
+      if (path === '/.dsh-orb/settings-open') {
+        if (options.method === 'POST') {
+          if (settingsOpen !== null && settingsOpen.at === JSON.parse(options.body).at) settingsOpen = null
+          return json({ ok: true })
+        }
+        return json({ at: settingsOpen === null ? null : settingsOpen.at })
+      }
       if (path === '/.dsh-orb/settings') {
         return json(mode === 'linux' ? { ...snapshot, supported: false, tcc: { ...snapshot.tcc, applicable: false } } : snapshot)
       }
@@ -166,7 +179,16 @@ function loadSection(hooks = {}) {
   const ctx = {
     slots: {
       inject(_name, register) { register() },
-      register(spec, Component) { registered = { spec, Component } },
+      register(spec, Component) {
+        registered = { spec, Component }
+        sectionEntries.length = 0
+        sectionEntries.push({ options: { id: spec.id } })
+      },
+      entries(name) {
+        if (name === 'sidebar.settings') return shellEntries
+        if (name === 'settings.section') return sectionEntries
+        return []
+      },
     },
     get(name) {
       return name === 'uiWorkspace' ? workspace : undefined
@@ -213,6 +235,19 @@ function loadSection(hooks = {}) {
     setConfirm(next) { confirm = next },
     /** Arm (or clear) the ball-initiated jump target the bridge polls for. */
     setJump(next) { jump = next },
+    /**
+     * Mount (or remove) a stand-in for the settings shell's `sidebar.settings` entry.
+     * The shape mirrors SlotCore's register(): the store handle is a field of the entry
+     * itself, while `options` carries only id/order/label/priority.
+     */
+    setShell(next) {
+      shellEntries.length = 0
+      if (next !== undefined) shellEntries.push({ component: null, options: {}, store: next })
+    },
+    /** Take this page's own `settings.section` row off the ledger (as a reload would). */
+    dropSection() { sectionEntries.length = 0 },
+    /** Arm (or clear) the settings target the ball's menu row leaves behind. */
+    setSettingsOpen(next) { settingsOpen = next },
     /** Provide (or remove) the workspace navigator the bridge opens sessions through. */
     setWorkspace(next) { workspace = next },
     setFile(next) { file = next },
@@ -463,6 +498,57 @@ describe('settings section', () => {
     await page.tick()
     assert.deepEqual(opened, ['session-agent-9', 'session-agent-9'])
     assert.equal(posts().length, 3)
+  })
+
+  it('opens the floating-ball section when the ball asks for it', async () => {
+    const page = loadSection()
+    const opened = []
+    const instance = { actions: { openSection(id) { opened.push(id) } } }
+    const handle = { create: () => instance }
+    const posts = () => page.calls.filter((call) => call.path === '/.dsh-orb/settings-open' && call.options.method === 'POST')
+
+    // The ball was clicked while this window was still composing its plugins: the
+    // target must survive, and nothing may be confirmed before the panel really opens.
+    page.setSettingsOpen({ at: 11 })
+    await page.tick()
+    assert.deepEqual(opened, [])
+    assert.equal(posts().length, 0)
+
+    page.setShell(handle)
+    await page.tick()
+    assert.deepEqual(opened, ['orb'])
+    assert.equal(posts().length, 1, 'the opened target is consumed with a POST')
+    assert.deepEqual(JSON.parse(posts()[0].options.body), { at: 11 })
+
+    // A lost confirm re-confirms on the next poll; the panel must not be re-opened.
+    page.setSettingsOpen({ at: 11 })
+    await page.tick()
+    assert.deepEqual(opened, ['orb'])
+    assert.equal(posts().length, 2)
+
+    // A fresh click carries a new arm timestamp and switches the panel again.
+    page.setSettingsOpen({ at: 12 })
+    await page.tick()
+    assert.deepEqual(opened, ['orb', 'orb'])
+    assert.equal(posts().length, 3)
+
+    // A bare store handle (create() mints a fresh store) is not a mounted shell: the
+    // click stays armed rather than reporting an open nobody can see.
+    page.setShell({ create: () => ({ actions: { openSection(id) { opened.push(id) } } }) })
+    page.setSettingsOpen({ at: 13 })
+    await page.tick()
+    assert.deepEqual(opened, ['orb', 'orb'])
+    assert.equal(posts().length, 3)
+
+    // Without this page's own row on the section ledger there is nothing to show:
+    // opening anyway would leave an empty panel, so the click stays armed.
+    page.setShell(handle)
+    page.dropSection()
+    page.setSettingsOpen({ at: 14 })
+    await page.tick()
+    assert.deepEqual(opened, ['orb', 'orb'])
+    assert.equal(posts().length, 3)
+    page.setSettingsOpen(null)
   })
 
   it('offers the new version and installs it without leaving the page', async () => {

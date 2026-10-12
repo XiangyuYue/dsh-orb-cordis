@@ -14,6 +14,7 @@ export interface ContextMenuState {
 
 export interface ContextMenuActions {
   openMain(): void
+  openSettings(): void
   setOverlay(selection: MenuSelection): void
   setBackground(selection: MenuSelection): void
   setMillifraction(enabled: boolean): void
@@ -32,6 +33,13 @@ export function contextMenuTemplate(state: ContextMenuState, zh: boolean, action
       label: zh ? '打开主窗口' : 'Open Main Window',
       enabled: state.openMain,
       click: () => { actions.openMain() },
+    },
+    {
+      // The settings panel only exists inside the main window, so this row lives
+      // and dies with the same availability flag as the row above.
+      label: zh ? '打开悬浮球设置' : 'Open floating-ball settings',
+      enabled: state.openMain,
+      click: () => { actions.openSettings() },
     },
     {
       label: zh ? '悬浮球 Agent 模型' : 'Floating-ball Agent model',

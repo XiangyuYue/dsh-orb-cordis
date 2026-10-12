@@ -607,6 +607,7 @@ function selectionOr(value: MenuSelection | undefined, fallback: MenuSelection):
 async function showMenu(window: BrowserWindow): Promise<void> {
   const template = contextMenuTemplate(chrome, menuZh(), {
     openMain: () => { write({ type: 'open-main' }) },
+    openSettings: () => { write({ type: 'open-settings' }) },
     setOverlay: (selection) => { write({ type: 'set-overlay', selection }) },
     setBackground: (selection) => { write({ type: 'set-background', selection }) },
     setMillifraction: (enabled) => { void confirmMillifraction(window, enabled) },

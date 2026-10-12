@@ -58,6 +58,10 @@ export interface OrbControl {
   takeJump(): { sessionId: string; at: number } | null
   /** Consumes the jump target armed by a matching bookmark click. */
   confirmJump(sessionId: string): void
+  /** The pending ball-initiated floating-ball-settings target, or null once confirmed or expired. */
+  takeSettingsOpen(): { at: number } | null
+  /** Consumes the settings target armed by the ball's menu row. */
+  confirmSettingsOpen(at: number): void
   updateState(): UpdateState
   checkUpdate(): Promise<void>
   /** Starts the upgrade and returns at once; the page polls {@link updateState} while it runs. */
@@ -172,6 +176,23 @@ async function handle(deps: RouteDeps, req: IncomingMessage, res: ServerResponse
       return
     }
     deps.control.confirmJump(sessionId)
+    sendJson(res, 200, { ok: true })
+    return
+  }
+  // The ball's settings row rides the same bridge as jumps: the ball arms the request
+  // and focuses the main window, whose client plugin opens the floating-ball section.
+  if (method === 'GET' && path === `${PREFIX}/settings-open`) {
+    const target = deps.control.takeSettingsOpen()
+    sendJson(res, 200, { at: target?.at ?? null })
+    return
+  }
+  if (method === 'POST' && path === `${PREFIX}/settings-open`) {
+    const at = asRecord(await readJson(req))?.at
+    if (typeof at !== 'number' || !Number.isFinite(at)) {
+      sendJson(res, 400, { error: 'invalid-target' })
+      return
+    }
+    deps.control.confirmSettingsOpen(at)
     sendJson(res, 200, { ok: true })
     return
   }
