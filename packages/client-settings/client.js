@@ -22,6 +22,8 @@ window.__ModuleLoader__.load({
       avatarDescription: '点一张内置动图，或选择自己的图片。上传支持 GIF、PNG、WebP，2 MB 以内。',
       avatarAlt: '悬浮球头像预览',
       avatarBuiltin: '内置动图',
+      avatarMore: '更多动图',
+      avatarMoreHint: '在图库 dshgif.hicp.fun 里浏览并下载更多动图',
       avatarPresetNames: {
         point: '指点',
         rice: '干饭',
@@ -97,6 +99,8 @@ window.__ModuleLoader__.load({
       avatarDescription: 'Pick a built-in animation, or choose your own image. Uploads accept GIF, PNG, and WebP up to 2 MB.',
       avatarAlt: 'Floating-ball image preview',
       avatarBuiltin: 'Built-in animations',
+      avatarMore: 'More animations',
+      avatarMoreHint: 'Browse and download more animations from the dshgif.hicp.fun gallery',
       avatarPresetNames: {
         point: 'Point',
         rice: 'Rice',
@@ -156,6 +160,11 @@ window.__ModuleLoader__.load({
       updateAutoDescription: 'Asks npmmirror once a day (falling back to npm) for the newest version. Nothing identifying is sent.',
       updateManual: 'This Harness build ships no plugin manager — update from the Plugins page instead.',
     }
+
+    // The community GIF gallery behind the "more animations" tile. It is a plain
+    // outbound link: the desktop shell hands http(s) window opens to the system
+    // browser, and a page served in a browser just opens a tab.
+    const AVATAR_GALLERY_URL = 'https://dshgif.hicp.fun/'
 
     // The main window's resolved locale rides <html lang> (dsh-client-locale);
     // a page without it falls back to the browser languages.
@@ -638,29 +647,56 @@ window.__ModuleLoader__.load({
         control)
     }
 
-    /** The shipped GIFs as clickable animated thumbnails; the host owns the list, this page the names. */
+    /**
+     * The shipped GIFs as clickable animated thumbnails, with the outbound link to the
+     * community gallery trailing the row. The host owns the preset list, this page the
+     * names; the gallery link is this page's own, so an older host that sends no presets
+     * still gets it.
+     */
     function presetGallery(text, snap, disabled, mutate) {
       const presets = Array.isArray(snap.avatarPresets) ? snap.avatarPresets : []
-      if (presets.length === 0) return null
       const names = text.avatarPresetNames || {}
+      const tiles = presets.map((preset) => {
+        const name = names[preset.id] || preset.id
+        const selected = snap.avatarPresetId === preset.id
+        return h('button', {
+          key: preset.id,
+          type: 'button',
+          className: `dsh-orb-set-preset${selected ? ' is-selected' : ''}`,
+          'aria-pressed': selected ? 'true' : 'false',
+          title: name,
+          disabled,
+          onClick: () => { void mutate('/.dsh-orb/avatar/preset', { preset: preset.id }) },
+        },
+          h('img', { src: preset.url, alt: '', draggable: false }),
+          h('span', null, name))
+      })
+      // A text link taking the row's leftover space, not a seventh tile: it is no avatar, so
+      // the row keeps exactly the built-ins. An anchor rather than a button, so the shell
+      // hands the https open to the system browser — and so browsing the gallery stays
+      // available while the ball is off or a save is in flight, where fieldset disabled-ness
+      // cannot reach it. Kept to the label alone (no arrow, no padding): the leftover after
+      // six 72px tiles is about 62px in a half-width window, and a wider link would wrap onto
+      // a line of its own instead of sitting in that space. With no presets it sits flush left.
+      tiles.push(h('a', {
+        key: 'more',
+        className: `dsh-orb-set-more${presets.length === 0 ? ' is-alone' : ''}`,
+        href: AVATAR_GALLERY_URL,
+        target: '_blank',
+        rel: 'noopener noreferrer',
+        title: text.avatarMoreHint,
+      }, text.avatarMore))
       return h('div', { className: 'dsh-orb-set-presets' },
-        h('p', { className: 'dsh-orb-set-presets-title', id: 'dsh-orb-presets-label' }, text.avatarBuiltin),
-        h('div', { className: 'dsh-orb-set-presets-row', role: 'group', 'aria-labelledby': 'dsh-orb-presets-label' },
-          ...presets.map((preset) => {
-            const name = names[preset.id] || preset.id
-            const selected = snap.avatarPresetId === preset.id
-            return h('button', {
-              key: preset.id,
-              type: 'button',
-              className: `dsh-orb-set-preset${selected ? ' is-selected' : ''}`,
-              'aria-pressed': selected ? 'true' : 'false',
-              title: name,
-              disabled,
-              onClick: () => { void mutate('/.dsh-orb/avatar/preset', { preset: preset.id }) },
-            },
-              h('img', { src: preset.url, alt: '', draggable: false }),
-              h('span', null, name))
-          })))
+        presets.length === 0
+          ? null
+          : h('p', { className: 'dsh-orb-set-presets-title', id: 'dsh-orb-presets-label' }, text.avatarBuiltin),
+        h('div', {
+          className: 'dsh-orb-set-presets-row',
+          role: 'group',
+          ...(presets.length === 0
+            ? { 'aria-label': text.avatarMore }
+            : { 'aria-labelledby': 'dsh-orb-presets-label' }),
+        }, ...tiles))
     }
 
     function tccCard(text, snap, disabled, mutate) {
@@ -706,6 +742,9 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-preset span { font-size: 11px; line-height: 1.2; }
 .dsh-orb-set-preset:hover { border-color: color-mix(in srgb, currentColor 20%, transparent); }
 .dsh-orb-set-preset.is-selected { border-color: var(--dsw-alias-button-info-fill, #2f6fed); }
+.dsh-orb-set-more { margin-left: auto; align-self: center; color: var(--dsw-alias-button-info-fill, #2f6fed); font-size: 12px; line-height: 1.2; text-decoration: none; white-space: nowrap; }
+.dsh-orb-set-more.is-alone { margin-left: 0; }
+.dsh-orb-set-more:hover { text-decoration: underline; }
 .dsh-orb-set-actions, .dsh-orb-set-pickers { display: flex; gap: 8px; align-items: center; }
 .dsh-orb-set-button, .dsh-orb-set select { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 8px; padding: 6px 10px; font: inherit; }
 .dsh-orb-set-ghost { border-color: transparent; }
@@ -721,12 +760,16 @@ window.__ModuleLoader__.load({
     const inject = ['slots']
 
     function apply(ctx) {
-      if (!document.getElementById('dsh-orb-settings-style')) {
-        const node = document.createElement('style')
-        node.id = 'dsh-orb-settings-style'
-        node.textContent = style
-        document.head.append(node)
+      // Rewrite the node, don't just skip when it exists: a hot reload keeps the previous
+      // run's <style> in the document, and an early return would leave old rules applied
+      // to markup that already expects the new ones.
+      let styleNode = document.getElementById('dsh-orb-settings-style')
+      if (!styleNode) {
+        styleNode = document.createElement('style')
+        styleNode.id = 'dsh-orb-settings-style'
+        document.head.append(styleNode)
       }
+      styleNode.textContent = style
       ctx.slots.inject('settings.section', () => ctx.slots.register({
         name: 'settings.section',
         id: 'orb',

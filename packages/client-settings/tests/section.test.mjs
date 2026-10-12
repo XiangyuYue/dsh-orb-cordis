@@ -14,6 +14,7 @@ const { AVATAR_PRESETS } = await import(pathToFileURL(join(root, 'packages/host/
 
 function loadSection(hooks = {}) {
   const calls = []
+  const styles = []
   let mode = 'ready'
   let confirm = false
   let jump = null
@@ -99,8 +100,8 @@ function loadSection(hooks = {}) {
     window: { confirm: () => confirm },
     document: {
       documentElement: { lang: '' },
-      getElementById: () => null,
-      head: { append() {} },
+      getElementById: (id) => styles.find((node) => node.id === id) ?? null,
+      head: { append(node) { styles.push(node) } },
       createElement(tag) {
         if (tag !== 'input') return { id: '', textContent: '' }
         const input = {
@@ -190,6 +191,9 @@ function loadSection(hooks = {}) {
     calls,
     spec: registered.spec,
     snapshot,
+    styles,
+    /** A hot reload applies the plugin again over the same document. */
+    reapply() { plugin.apply(ctx) },
     render,
     flush,
     /** Re-render the page, then run every registered interval once (timers persist). */
@@ -293,7 +297,8 @@ describe('settings section', () => {
     const gallery = find(view, (node) => node.props?.className === 'dsh-orb-set-presets-row')[0]
     assert.ok(gallery)
     const thumbs = gallery.children
-    assert.equal(thumbs.length, AVATAR_PRESETS.length)
+    // The built-ins, plus the trailing text link into the community GIF gallery.
+    assert.equal(thumbs.length, AVATAR_PRESETS.length + 1)
     for (const [index, preset] of AVATAR_PRESETS.entries()) {
       const button = thumbs[index]
       const image = find(button, (node) => node.type === 'img')[0]
@@ -303,6 +308,19 @@ describe('settings section', () => {
       assert.equal(name.children[0] === preset.id, false, `${preset.id} has a real label, not the raw id`)
       assert.equal(button.props['aria-pressed'], 'false')
     }
+    // "More animations" is a text link in the row's leftover space, not a seventh tile: it
+    // must not borrow the preset styling, and it is a plain outbound link — the shell turns
+    // a window open into the system browser, so it carries the gallery URL and never a
+    // fetch of our own.
+    const more = thumbs.at(-1)
+    assert.equal(more.type, 'a')
+    assert.equal(more.props.className, 'dsh-orb-set-more')
+    assert.equal(more.props.href, 'https://dshgif.hicp.fun/')
+    assert.equal(more.props.target, '_blank')
+    assert.equal(more.props.rel, 'noopener noreferrer')
+    assert.ok(more.props.title.length > 0, 'the tooltip names the gallery')
+    assert.deepEqual(more.children, ['更多动图'], 'the label alone, sized to fit the leftover space')
+    assert.equal(page.calls.some((call) => String(call.path).includes('dshgif')), false)
     thumbs[1].props.onClick()
     await settle()
     const pick = page.calls.find((call) => call.path === '/.dsh-orb/avatar/preset')
@@ -337,6 +355,50 @@ describe('settings section', () => {
     assert.equal(client.includes('划词'), false)
     assert.equal(client.includes('selectionToggle'), false)
     assert.equal(client.includes('authenticatedUrl'), false)
+  })
+
+  it('offers the GIF gallery on every host, under the interface language', async () => {
+    const page = loadSection()
+    page.render()
+    await page.flush()
+    // An older host sends no built-in list at all. The gallery link is this page's own, so it
+    // must survive that — without leaving a stray "内置动图" heading over an empty row.
+    page.snapshot.avatarPresets = []
+    await page.tick()
+    let view = page.render()
+    assert.equal(find(view, (node) => node.props?.className === 'dsh-orb-set-presets-title').length, 0)
+    const row = find(view, (node) => node.props?.className === 'dsh-orb-set-presets-row')[0]
+    assert.ok(row, 'the gallery link does not depend on the host preset list')
+    assert.equal(row.props['aria-label'], '更多动图')
+    assert.equal(row.props['aria-labelledby'], undefined)
+    assert.equal(row.children.length, 1)
+    const link = row.children[0]
+    assert.equal(link.type, 'a')
+    assert.equal(link.props.className, 'dsh-orb-set-more is-alone', 'nothing to trail, so it sits flush left')
+    assert.equal(link.props.href, 'https://dshgif.hicp.fun/')
+    assert.equal(link.props.target, '_blank')
+
+    // The link's copy follows <html lang> like the rest of the page; the URL never does.
+    page.setLang('en')
+    view = page.render()
+    const translated = find(view, (node) => node.type === 'a' && node.props?.href === 'https://dshgif.hicp.fun/')[0]
+    assert.deepEqual(translated.children, ['More animations'])
+    page.setLang('')
+  })
+
+  it('rewrites its stylesheet when the plugin is applied again', () => {
+    const page = loadSection()
+    assert.equal(page.styles.length, 1, 'one stylesheet per document')
+    const node = page.styles[0]
+    assert.equal(node.id, 'dsh-orb-settings-style')
+    assert.match(node.textContent, /\.dsh-orb-set-more \{/, 'the gallery link is styled')
+    // A hot reload keeps the previous run's <style> in the document. Skipping the write
+    // because the node exists would leave old rules on markup that already expects new ones
+    // (a wrapped, underlined plain <a> in place of the link), which is exactly what shipped.
+    node.textContent = 'stale rules'
+    page.reapply()
+    assert.equal(page.styles.length, 1, 'no second stylesheet node')
+    assert.match(node.textContent, /\.dsh-orb-set-more \{/, 'the live node is rewritten, not left stale')
   })
 
   it('explains the first-launch runtime wait and offers a retry when it failed', async () => {
