@@ -57,6 +57,7 @@ Thumbs.db
 .cursor/
 .zcode/
 .zcodeignore
+.dsh-notes/
 
 # Assembled by packages/bundle/scripts/assemble.mjs
 packages/bundle/lib/
