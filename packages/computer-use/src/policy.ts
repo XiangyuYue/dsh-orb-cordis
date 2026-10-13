@@ -66,6 +66,43 @@ export function policyFor(mode: CoordinateMode): string {
 }
 
 /**
+ * Replacement for the paragraph that teaches the coordinate space, for a session that may not touch
+ * the screen at all. The parenthetical spans are quoted from {@link MILLIFRACTION_COORDINATES} and
+ * {@link PIXEL_COORDINATES}; a rewrite that drops either one fails loudly in the unit suite rather
+ * than shipping a background session whose prompt still describes screenshots it will never see.
+ */
+const BACKGROUND_NO_COORDINATES = [
+  'Coordinates: none. You are in the background, so this session cannot take or receive screenshots.',
+  'Every GUI tool (click, input_text, scroll, hotkey, wait, long_wait, screenshot, long_press, drag,',
+  'open_in_browser, open_in_finder, list_apps, open_app) and the shell (bash) is refused for you and',
+  'will fail if you call it. Do not call them, and do not describe acting on the screen.',
+].join(' ')
+
+/**
+ * Policy section text for a ball conversation the panel does not currently show.
+ *
+ * The desktop belongs to the conversation the user is looking at: a completion notice may wake any
+ * conversation, and only that one may move the mouse. The model still gets the full delegation and
+ * coordination rules — it can answer, search, ask, and hand work to a background Code session — so
+ * this replaces the capability sentences instead of dropping the policy. See `screen-owner.ts` for
+ * the matching execution-time guard.
+ * @returns the assembled background policy section text.
+ */
+export function backgroundPolicyFor(): string {
+  const foreground = policyFor('millifraction')
+  // The capability sentences are the coordinate paragraph, which is a single string constant. A
+  // rewrite that splits or renames it must fail loudly in the unit suite rather than quietly hand a
+  // background session a prompt that still describes screenshots it will never receive. At runtime
+  // the fallback is the foreground text: teaching too much is survivable, while letting a prompt
+  // assembly throw would take the whole request down.
+  if (!foreground.includes(MILLIFRACTION_COORDINATES)) {
+    console.error('computer-use: the coordinate paragraph moved; the background policy falls back to the foreground text')
+    return foreground
+  }
+  return foreground.replace(MILLIFRACTION_COORDINATES, BACKGROUND_NO_COORDINATES)
+}
+
+/**
  * Stable millifraction Computer Use policy text. Assemblies without an agent
  * and Headless/Web sessions without a coordinate-mode event use this text.
  */

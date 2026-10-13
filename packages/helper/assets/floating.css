@@ -495,6 +495,38 @@ body.expand-up #transcript {
   color: var(--pin);
 }
 
+/* One inline notice for a locked control: over the panel's top edge, where the two conversation
+ * controls live, and gone on its own. Never a dialog — the click it answers was a stray one. */
+#hint {
+  position: absolute;
+  z-index: 3;
+  top: calc(var(--chrome) + 48px);
+  left: 50%;
+  max-width: calc(100% - 40px);
+  box-sizing: border-box;
+  transform: translateX(-50%);
+  margin: 0;
+  border-radius: 999px;
+  padding: 7px 14px;
+  color: var(--black);
+  background: var(--input-bg);
+  box-shadow: 0 4px 16px rgba(17, 17, 17, 0.18);
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: center;
+}
+
+#hint[hidden] {
+  display: none;
+}
+
+/* The two conversation-switch controls while this conversation's agent holds a turn. The action
+ * still runs so the notice can explain itself; see the click guards in shell.js. */
+body.work-locked #history,
+body.work-locked #new-conversation {
+  opacity: 0.45;
+}
+
 #composer {
   position: absolute;
   z-index: 2;

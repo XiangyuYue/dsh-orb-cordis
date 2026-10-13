@@ -86,3 +86,51 @@ describe('ball page render guards', () => {
     assert.match(code, /syncGif\(\)\n(?:\s*\/\/[^\n]*\n)*\s+void syncStrip\(\)\n\}/)
   })
 })
+
+/**
+ * A turn in the conversation on screen must be visible: the ball comes back from the screen edge,
+ * the panel opens and stays pinned. The page only ever sees the displayed conversation's turns —
+ * the host streams that one session — so this cannot fire for a background conversation's agent.
+ */
+describe('agent work keeps the panel on screen', () => {
+  it('promotes the panel from the collapsed and docked states when a turn starts', () => {
+    assert.match(code, /if \(next\) \{\n(?:\s*\/\/[^\n]*\n)*\s+void showWorkPanel\(\)/)
+    assert.match(code, /async function showWorkPanel\(\) \{\n\s+if \(pageClosed\(\)\) return\n(?:\s*\/\/[^\n]*\n)*\s+if \(docked !== undefined\) await unsnapDocked\(\)\n\s+await setExpanded\(true\)\n\s+pinBall\(\)/)
+  })
+
+  it('never collapses or docks while the turn is running', () => {
+    // Every collapse path already consults `running`; the dock paths carry it to the main process
+    // as `canDock`, which is what stops a release on a screen edge from docking.
+    assert.match(code, /function scheduleCollapse\(\) \{\n\s+if \(pinned \|\| running \|\| asking\(\) \|\| dragging\) return/)
+    assert.match(code, /if \(!force && \(pinned \|\| running \|\| asking\(\)\)\) return/)
+    assert.match(code, /api\.dragEnd\(!\(running \|\| asking\(\)\)\)/)
+    assert.match(code, /api\.dragMove\(!\(running \|\| asking\(\)\)\)/)
+  })
+
+  it('locks only the two conversation-switch controls, and only while running', () => {
+    assert.match(code, /function setWorkLocked\(locked\) \{[\s\S]{0,220}document\.body\.classList\.toggle\('work-locked', locked\)/)
+    // The lock follows the turn, and a transcript reset (a conversation switch) clears it.
+    assert.match(code, /setWorkLocked\(running\)/)
+    assert.match(code, /function clearTranscript\(\) \{[\s\S]{0,600}setRunning\(false\)/)
+    // Both controls answer a click while locked with the inline notice instead of switching.
+    assert.match(code, /historyButton\.addEventListener\('click', \(\) => \{\n\s+if \(workLocked\) \{\n\s+showHint\(messages\.workLocked\)/)
+    assert.match(code, /newConversation\.addEventListener\('click', \(\) => \{\n\s+if \(workLocked\) \{\n\s+showHint\(messages\.workLocked\)/)
+    // A notice, never a dialog, and it clears itself.
+    assert.match(code, /hintTimer = setTimeout\(\(\) => \{\n\s+hintTimer = undefined\n\s+hint\.hidden = true\n\s+\}, HINT_MS\)/)
+    assert.equal(code.includes('confirm('), false)
+    assert.equal(code.includes('alert('), false)
+  })
+
+  it('gives both locked controls a tooltip that explains the refusal', () => {
+    assert.match(code, /historyButton\.title = workLocked \? messages\.historyLocked : messages\.history/)
+    assert.match(code, /newConversation\.title = workLocked \? messages\.newLocked : messages\.fresh/)
+    assert.match(code, /function refreshAllText\(\) \{\n\s+applyStaticText\(\)\n\s+applyLockedLabels\(\)/)
+  })
+
+  it('ships the notice element and its styles', () => {
+    const html = readFileSync(join(here, '../assets/floating.html'), 'utf8')
+    const css = readFileSync(join(here, '../assets/floating.css'), 'utf8')
+    assert.match(html, /<p id="hint" role="status" hidden><\/p>/)
+    assert.match(css, /body\.work-locked #history,\nbody\.work-locked #new-conversation \{\n\s+opacity: 0\.45;/)
+  })
+})

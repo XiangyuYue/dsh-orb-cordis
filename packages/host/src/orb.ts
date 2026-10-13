@@ -32,6 +32,7 @@ import {
   type SelectionStarter,
 } from './selection.ts'
 import { pinSessionId } from './services.ts'
+import { publishScreenOwner } from './screen-owner.ts'
 import { selectModelKeepDefault } from './select-model.ts'
 import { createForegroundMemory } from './windows-foreground.ts'
 import { EMPTY_UPDATE_STATE, type UpdateChecker, type UpdateState } from './update.ts'
@@ -549,6 +550,9 @@ export class OrbRuntime {
     this.selection.stop()
     this.foreground.stop()
     this.killChild()
+    // No ball means no displayed conversation: leaving the owner behind would keep the GUI tools
+    // denied to every session, which is a restriction nobody asked for once the ball is off.
+    publishScreenOwner(undefined)
   }
 
   /** Claim questions for this orb session. Register this while the plugin fiber is active. */
@@ -761,6 +765,10 @@ export class OrbRuntime {
   private async remember(sessionId: string): Promise<string> {
     this.sessionId = sessionId
     this.sessionError = undefined
+    // The panel shows this conversation from here on. Publishing it is what keeps every other ball
+    // conversation — each still a live agent a completion notice can wake — off the screen and the
+    // shell: they keep their text, search, question, and background tools, and lose the rest.
+    publishScreenOwner(sessionId)
     try {
       await mkdir(dirname(this.sessionFile), { recursive: true })
       await writeFile(this.sessionFile, `${JSON.stringify({ sessionId })}\n`)

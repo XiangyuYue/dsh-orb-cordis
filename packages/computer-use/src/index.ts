@@ -42,7 +42,17 @@ export type { ResolvedComputerUseConfig } from './config.ts'
 export { createFakeDesktopBackend, FAKE_DESKTOP_PNG } from './fake.ts'
 export type { FakeDesktopAction, FakeDesktopBackend, FakeDesktopOptions } from './fake.ts'
 export { applyComputerUse, PLUGIN_NAME, POLICY_SECTION_ORDER } from './plugin.ts'
-export { POLICY } from './policy.ts'
+export { POLICY, backgroundPolicyFor, policyFor } from './policy.ts'
+export {
+  BALL_PRESET,
+  NOT_SCREEN_OWNER_MESSAGE,
+  desktopToolDenial,
+  isDesktopTool,
+  presetOf,
+  screenOwnerId,
+  screenOwnerState,
+  setScreenOwner,
+} from './screen-owner.ts'
 export { wrapDesktopBackend } from './overlay-guard.ts'
 export type { ComputerUseOverlayGuard } from './overlay-guard.ts'
 

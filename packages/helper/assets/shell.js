@@ -13,6 +13,7 @@ import {
 const api = window.dshOrb
 const COLLAPSE_MS = 180
 const ANIMATION_MS = 300
+const HINT_MS = 2600
 const DOCK_HOVER_DELAY_MS = 800
 const DOCK_DRAG_OFF_PX = 24
 const COMPOSER_MIN_PX = 72
@@ -50,6 +51,9 @@ const zh = {
   tooLong: '最多 8000 个字符，已保留输入。',
   truncated: '已截断',
   chipDismiss: '移除',
+  workLocked: '悬浮球 Agent 执行期间不能切换对话',
+  historyLocked: 'Agent 执行期间不能查看历史对话',
+  newLocked: 'Agent 执行期间不能新建对话',
   tccTitle: '使用桌面 agent 需要两项 Mac 权限',
   tccAppHint: '在列表里打开 {name}。',
   tccScreenName: '屏幕录制',
@@ -102,6 +106,9 @@ const en = {
   tooLong: 'Limit is 8000 characters. The text was kept.',
   truncated: 'truncated',
   chipDismiss: 'Remove',
+  workLocked: 'Cannot switch conversations while the floating-ball agent is working',
+  historyLocked: 'History is unavailable while the agent is working',
+  newLocked: 'A new conversation cannot start while the agent is working',
   tccTitle: 'Desktop agent needs two Mac permissions',
   tccAppHint: 'In the list, turn on {name}.',
   tccScreenName: 'Screen Recording',
@@ -259,6 +266,7 @@ function main() {
   const historyList = document.querySelector('#history-list')
   const agentStrip = document.querySelector('#agent-strip')
   const status = document.querySelector('#status')
+  const hint = document.querySelector('#hint')
   const prompt = document.querySelector('#prompt')
   const composer = document.querySelector('#composer')
   applyStaticText()
@@ -266,6 +274,8 @@ function main() {
   let expanded = false
   let pinned = false
   let running = false
+  let workLocked = false
+  let hintTimer
   let attachedSelection = ''
   let tccGateVisible = false
   let processGroup
@@ -352,6 +362,7 @@ function main() {
   /** Re-render every text surface after the dictionary switched. */
   function refreshAllText() {
     applyStaticText()
+    applyLockedLabels()
     renderPermission()
     renderHistory()
     renderAgentStrip()
@@ -433,8 +444,13 @@ function main() {
     if (pageClosed()) return
     document.body.classList.toggle('running', running)
     stop.hidden = !expanded || !running
+    setWorkLocked(running)
     syncGif()
     if (next) {
+      // The conversation on screen is the one that may operate the desktop and the shell, so its
+      // work must be visible: a wake turn from a background Code agent used to run behind a
+      // collapsed ball, where nothing on screen said the agent was busy.
+      void showWorkPanel()
       const group = ensureProcess()
       if (!group.live) {
         group.live = true
@@ -638,6 +654,60 @@ function main() {
       collapseTimer = undefined
       void setExpanded(false)
     }, COLLAPSE_MS)
+  }
+
+  /**
+   * Lock the two conversation-switch controls while this conversation's agent works.
+   *
+   * A turn belongs to the conversation the panel shows, and that conversation is the only one
+   * allowed to operate the desktop: switching away mid-turn would hand the screen to another
+   * conversation and strip this one's tools halfway through its work. Everything else on the panel
+   * — the composer, the permission chip, history rows already on screen — stays usable.
+   * @param locked - whether the agent currently holds a turn.
+   */
+  function setWorkLocked(locked) {
+    if (pageClosed()) return
+    workLocked = locked
+    document.body.classList.toggle('work-locked', locked)
+    applyLockedLabels()
+  }
+
+  /** Tooltips are the only explanation available to a pointer that never clicks. */
+  function applyLockedLabels() {
+    historyButton.title = workLocked ? messages.historyLocked : messages.history
+    newConversation.title = workLocked ? messages.newLocked : messages.fresh
+  }
+
+  /**
+   * One inline notice, never a dialog: `#hint` sits over the panel's top edge and clears itself.
+   * A second click restarts the timer instead of stacking notices.
+   */
+  function showHint(text) {
+    if (pageClosed() || text === '') return
+    hint.textContent = text
+    hint.hidden = false
+    if (hintTimer !== undefined) clearTimeout(hintTimer)
+    hintTimer = setTimeout(() => {
+      hintTimer = undefined
+      hint.hidden = true
+    }, HINT_MS)
+  }
+
+  /**
+   * A turn started in the conversation on screen: bring the ball back from the screen edge and show
+   * the panel, pinned. Pinning is what makes it survive the pointer, matching a hover-expanded panel
+   * the user clicked; unpinning stays a click on the ball.
+   *
+   * A turn for any other conversation never reaches this page — the host streams the displayed
+   * conversation only — so this cannot fire for a background conversation's agent.
+   */
+  async function showWorkPanel() {
+    if (pageClosed()) return
+    // The unsnap slide is an animation this page does not own: growing the window mid-slide would
+    // fight the frames the main process is still writing.
+    if (docked !== undefined) await unsnapDocked()
+    await setExpanded(true)
+    pinBall()
   }
 
   /** Input clicks only pin; unpinning stays a ball click (or drag). */
@@ -1853,6 +1923,9 @@ function main() {
     transcript.replaceChildren()
     pending = undefined
     syncQuestion()
+    // A switch can land while the previous conversation's turn was still running: the host sends
+    // `turn: false` right behind this, but the lock must not outlive the transcript it described.
+    setRunning(false)
   }
 
   function setHistoryOpen(next) {
@@ -2284,8 +2357,18 @@ function main() {
     if (permissionRoot.contains(event.target)) return
     setPermissionOpen(false)
   })
-  historyButton.addEventListener('click', () => { setHistoryOpen(!historyOpen) })
+  historyButton.addEventListener('click', () => {
+    if (workLocked) {
+      showHint(messages.workLocked)
+      return
+    }
+    setHistoryOpen(!historyOpen)
+  })
   newConversation.addEventListener('click', () => {
+    if (workLocked) {
+      showHint(messages.workLocked)
+      return
+    }
     setHistoryOpen(false)
     setPermissionOpen(false)
     api.newSession()

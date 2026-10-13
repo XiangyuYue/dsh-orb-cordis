@@ -94,7 +94,13 @@ function recordOptions(overrides: Partial<Parameters<ReturnType<typeof createCod
 describe('registry provider plugin', () => {
   it('provides the shared registry under the app-level service name', () => {
     const provided = new Map<string, unknown>()
-    const ctx = { provide: (key: string, value: unknown) => { provided.set(key, value) } } as unknown as Context
+    const ctx = {
+      provide: (key: string, value: unknown) => { provided.set(key, value) },
+      // This plugin also installs the process-wide desktop-ownership guard. The fake context only
+      // records the provide, so the effect and the guard registration are no-ops here.
+      effect: (run: () => () => void) => run(),
+      tools: { guard: () => () => {} },
+    } as unknown as Context
     apply(ctx)
     expect(provided.get(CODE_AGENT_REGISTRY)).toBe(sharedCodeAgentRegistry())
   })

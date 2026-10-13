@@ -19,6 +19,7 @@ import * as ComputerUse from '../src/index.ts'
 import { POLICY, policyFor } from '../src/policy.ts'
 import { formatScreenEnvelope } from '../src/observe.ts'
 import { screenLockState } from '../src/gui-lock.ts'
+import { screenOwnerState } from '../src/screen-owner.ts'
 import { UNSUPPORTED_DESKTOP_MESSAGE } from '../src/unsupported.ts'
 import * as waitModule from '../src/wait.ts'
 import * as screenshotModule from '../src/screenshot.ts'
@@ -85,6 +86,9 @@ afterEach(async () => {
   vi.restoreAllMocks()
   for (const ctx of contexts.splice(0)) await ctx.fiber.dispose()
   for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true })
+  // The desktop owner is a process-global record shared with the host; a test that published one
+  // must not decide the next test's policy text.
+  screenOwnerState().ownerId = ''
 })
 
 beforeEach(() => {

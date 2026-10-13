@@ -53,9 +53,10 @@ import {
   type ObservedScreen,
 } from './observe.ts'
 import { isUsableObservationRaster } from './raster.ts'
-import { policyFor } from './policy.ts'
+import { policyFor, backgroundPolicyFor } from './policy.ts'
 import { assertImageCapableRoute, routeAcceptsImages } from './route.ts'
 import { withScreenLock } from './gui-lock.ts'
+import { BALL_PRESET, presetOf, screenOwnerId } from './screen-owner.ts'
 import { isDesktopSelectionTurn } from './selection-turn.ts'
 import { pairScreenshotFiles, writeDesktopScreenshots } from './screenshot.ts'
 import { delay } from './wait.ts'
@@ -264,7 +265,18 @@ export function applyComputerUse(
   ctx.systemPrompt.section({
     name: 'tool:computer-use',
     order: POLICY_SECTION_ORDER,
-    text: context => policyFor(coordinateModeOf(context.agent?.session)),
+    text: (context) => {
+      // Ownership is read per assembly, so a conversation that becomes — or stops being — the one
+      // the ball shows gets the matching capability text on its very next request. Two doors stay
+      // open: an absent owner is the unrestricted case (web, CLI, ball switched off), and a session
+      // that is not a ball conversation keeps the full policy whatever the owner is.
+      const agent = context.agent
+      const owner = screenOwnerId()
+      if (agent !== undefined && owner !== undefined && owner !== agent.id && presetOf(agent) === BALL_PRESET) {
+        return backgroundPolicyFor()
+      }
+      return policyFor(coordinateModeOf(agent?.session))
+    },
   })
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const nextAssembly = await next()
