@@ -695,6 +695,68 @@ describe('ball control socket', { concurrency: 1 }, () => {
     }
   })
 
+  it('consumes a bookmark only once its task has finished', async () => {
+    const entry: Record<string, unknown> = {
+      sessionId: 'session-agent-run',
+      callerId: 'session-caller-b',
+      task: '抓天气',
+      cwd: '/tmp/weather',
+      startedAt: Date.now() - 5_000,
+      state: 'running',
+    }
+    const harness = boot({ agentRegistry: { list: () => [entry] } })
+    const client = await connect(harness.runtime)
+    const payloads = (): { items: { sessionId: string; unread: boolean }[] }[] => (
+      client.messages
+        .filter((message) => message.type === 'agents')
+        .map((message) => message as unknown as { items: { sessionId: string; unread: boolean }[] })
+    )
+    const shownUnread = (): boolean => (
+      payloads().at(-1)?.items.some((item) => item.sessionId === 'session-agent-run' && item.unread) === true
+    )
+    /**
+     * One bookmark click, settled: the jump target is armed before the click handler returns, so
+     * consuming it proves the click was handled — including its read decision.
+     */
+    const clickBookmark = async (): Promise<void> => {
+      client.send({ type: 'agent-open', sessionId: 'session-agent-run' })
+      await waitFor(() => harness.runtime.takeJump()?.sessionId === 'session-agent-run')
+      harness.runtime.confirmJump('session-agent-run')
+    }
+    try {
+      await waitFor(() => shownUnread() === false && payloads().length >= 1)
+      assert.deepEqual(payloads().at(-1)?.items.map((item) => item.sessionId), ['session-agent-run'])
+
+      // Clicking a running bookmark jumps to the session and must not consume the bookmark: the
+      // completion still owes the user an unread entry.
+      await clickBookmark()
+      entry.state = 'completed'
+      entry.endedAt = Date.now()
+      entry.outcome = '晴'
+      await waitFor(shownUnread)
+
+      // Now, and only now, a click retires it.
+      await clickBookmark()
+      await waitFor(() => payloads().at(-1)?.items.length === 0)
+
+      // A continued stretch reuses the session id: its completion is unread again even though the
+      // previous stretch was clicked away.
+      entry.state = 'running'
+      entry.startedAt = Date.now()
+      delete entry.endedAt
+      delete entry.outcome
+      await waitFor(() => payloads().at(-1)?.items.some((item) => item.sessionId === 'session-agent-run') === true)
+      await clickBookmark()
+      entry.state = 'completed'
+      entry.endedAt = Date.now()
+      entry.outcome = '晴'
+      await waitFor(shownUnread)
+    } finally {
+      client.socket.destroy()
+      harness.runtime.halt()
+    }
+  })
+
   it('arms the main window settings bridge when the ball menu asks for it', async () => {
     const harness = boot()
     const client = await connect(harness.runtime)

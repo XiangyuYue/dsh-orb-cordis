@@ -285,6 +285,12 @@ export class OrbRuntime {
   private giveUp: ReturnType<typeof setTimeout> | undefined
   private agentTimer: ReturnType<typeof setInterval> | undefined
   private lastAgentsPayload = ''
+  /**
+   * Sessions whose *finished* bookmark the user clicked away. A running stretch is never in here:
+   * a click during the run only jumps to the session, so the completion still raises an unread
+   * bookmark. {@link agentItems} drops the id the moment that session runs again, which is what
+   * gives a continued session a fresh unread bookmark for its next stretch.
+   */
   private readonly readAgentIds = new Set<string>()
   private jumpTarget: { readonly sessionId: string; readonly at: number } | undefined
   /** One-shot "open the ball's own settings page" request for the main window's client plugin. */
@@ -1861,7 +1867,14 @@ export class OrbRuntime {
 
   /** Running first (oldest start at the top), finished after (newest first); read ones dropped. */
   private agentItems(registry: AgentBookmarkRegistry): AgentBookmarkItem[] {
-    const visible = registry.list().filter((bookmark) => (
+    const bookmarks = registry.list()
+    // A running stretch is never read. Clearing here — not only at click time — is what re-arms a
+    // continued session: the previous stretch was clicked away, this one starts running, and its
+    // completion must raise an unread bookmark again.
+    for (const bookmark of bookmarks) {
+      if (bookmark.state === 'running') this.readAgentIds.delete(bookmark.sessionId)
+    }
+    const visible = bookmarks.filter((bookmark) => (
       bookmark.state === 'running' || !this.readAgentIds.has(bookmark.sessionId)
     ))
     visible.sort((left, right) => {
@@ -1942,13 +1955,34 @@ export class OrbRuntime {
     if (this.settingsTarget?.at === at) this.settingsTarget = undefined
   }
 
-  /** A bookmark click: mark read, arm the main window's jump, and focus the main window. */
+  /**
+   * A bookmark click: arm the main window's jump and focus the main window.
+   *
+   * Only a finished bookmark is consumed. Clicking one that is still running is a plain jump —
+   * no matter how often it happens — so the completion that follows still raises an unread
+   * bookmark with its outcome.
+   */
   private async openAgent(sessionId: string): Promise<void> {
     if (!sessionId.startsWith('session-') || sessionId.length > 80) return
-    this.readAgentIds.add(sessionId)
+    const state = this.bookmarkState(sessionId)
+    if (state !== undefined && state !== 'running') {
+      this.readAgentIds.add(sessionId)
+      this.pollAgents(true)
+    }
     this.jumpTarget = { sessionId, at: Date.now() }
-    this.pollAgents(true)
     await this.openMain()
+  }
+
+  /**
+   * Live state of one bookmark, or undefined when no record answers for it (already dropped, or the
+   * registry is unavailable). A click falls back to a plain jump in that case.
+   */
+  private bookmarkState(sessionId: string): AgentBookmarkItem['state'] | undefined {
+    try {
+      return this.agentRegistry()?.list().find((bookmark) => bookmark.sessionId === sessionId)?.state
+    } catch {
+      return undefined
+    }
   }
 }
 

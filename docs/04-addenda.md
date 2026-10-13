@@ -218,3 +218,12 @@ Windows 上的实测反馈:在浏览器里点球、输入、回车提交后,**Ag
 - **提示改成能自证**:`avatarError` 旁边加一个 `avatarSize`,超限时渲染「图片 5.3 MB,超过 4 MB 上限。」(host 侧 413 那个分支没有尺寸,回落成「图片超过 4 MB。」);颜色改用官方 `--dsw-alias-state-error-primary`(全站失败提示本来就有这个 token),不再和正文同色。另补一条 `unreadable`:本地读文件失败过去被 `void file.arrayBuffer().then(...)` 吞掉(没请求、没提示、球上没反应),现在说「读不到这个文件,请重新选择一次。」。
 - **测试**:设置页 12 例(超限那条改成断言带尺寸的整句、新增「读不到文件」一例、文案与上限同源);`host/tests/routes.test.ts` 新增一例——2.6 MB 的合法 GIF 在 4 MB 上限下被接受并落成 `{kind:'custom'}`,同时断言上限大于 2.6 MB(图库最大那张过得去);`helper/tests/avatar.test.ts` 新增跨包不变量一例。`pnpm typecheck` 通过。
 - **装机**:client.js / dist/host/index.js / dist/helper/lib/main.js 三处按第 14 节的流程(先备份到 `~/.dsh/dsh-orb-installed-backup-<时间戳>/`,再 `cp` 到临时名 `mv` 落位)同步进 `~/.dsh/profiles/desktop/node_modules/dsh-orb/`。这次动到了 host 与 helper,所以**必须重启应用**才生效(顺带会把第 14 节的菜单行一起带上去)。
+
+## 16. 后台 agent 书签该消失时不消失、不该消失时自己消失(2026-10-13)
+
+现象:后台 Code agent 的书签有时在任务跑完的瞬间自己消失,有时又一直挂着、必须点一下才走。启动侧(调用 `code_agent` 就登记书签)没有问题,问题全在"消失规则"。
+
+- **根因是已读的粒度**:`host/src/orb.ts` 的书签条只有一条过滤规则——`state === 'running' || !readAgentIds.has(sessionId)`;而 `readAgentIds` 原先只在 `openAgent()` 里写入,既不判断书签状态、也从不清理。于是"已读"是**按会话(session id)永久**的,书签却是**按一段任务**的:① 运行期间点书签(跳去主窗口看进度)也算已读,这一段跑完后书签一翻成 `completed` 就被同一行过滤掉——表现为"一完成就自己消失";② 用同一个 `session_id` 续做时 `registry.record()` 复用同一条会话,上一段留下的已读标记会把续做那一段的完成书签一并吞掉。没被标记过的那次则表现为"挂着小红点,点一下才消失"(既有 `runtime.test.ts` 一例固化的正是这条,却没覆盖运行中点的情况)。
+- **修法两条**:(1) `openAgent()` 先向注册表要这条书签的实时状态,只有**已完成/已停止**的才记已读并重推(点运行中的书签只跳转,点多少次都不消费);(2) `agentItems()` 在每次组包时对 `running` 的书签清掉该 session 的已读标记——这样续做(新一段开始跑)会重新武装书签,它跑完后照样是未读。两条合起来即"执行期间点不掉,完成后点一下才消失",且新一段任务重新算未读。
+- **测试**:`host/tests/runtime.test.ts` 新增一例「consumes a bookmark only once its task has finished」——运行中点击只布防跳转、完成后书签以 `unread` 回来、此时点击才退休、同一 session 续做后再次以 `unread` 回来。该用例在旧逻辑下实测超时失败(`waitFor` 等不到未读书签),在新逻辑下通过;既有那例(点已完成书签即退休)保持不改。全量 `pnpm test`(node:test 272 例 + vitest 312 例)与 `pnpm typecheck` 通过。
+- **装机**:只动到 host,按第 14 节流程把 `packages/bundle/dist/host/index.js` 备份后同步进 `~/.dsh/profiles/desktop/node_modules/dsh-orb/`(备份在 `~/.dsh/dsh-orb-installed-backup-<时间戳>-bookmark-read/`)。host 在进程启动时加载,**需重启应用**生效。
