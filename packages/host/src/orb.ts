@@ -1563,6 +1563,10 @@ export class OrbRuntime {
       this.run('agent-open', () => this.openAgent(record.sessionId as string))
       return
     }
+    if (record.type === 'agent-dismiss' && typeof record.sessionId === 'string') {
+      this.run('agent-dismiss', () => this.dismissAgent(record.sessionId as string))
+      return
+    }
     if (record.type === 'new') {
       this.run('new', () => this.newSession())
       return
@@ -1983,6 +1987,22 @@ export class OrbRuntime {
     } catch {
       return undefined
     }
+  }
+
+  /**
+   * The chip's dismiss control: retire a finished bookmark on the spot, without the main-window
+   * jump {@link openAgent} performs — the whole point is not having to look at that session.
+   *
+   * A running stretch has no dismiss control and is refused here too: while it runs the chip is the
+   * only trace of the task, and stopping it stays `code_agent_stop`'s job.
+   */
+  private async dismissAgent(sessionId: string): Promise<void> {
+    if (!sessionId.startsWith('session-') || sessionId.length > 80) return
+    const state = this.bookmarkState(sessionId)
+    if (state === undefined || state === 'running') return
+    if (this.readAgentIds.has(sessionId)) return
+    this.readAgentIds.add(sessionId)
+    this.pollAgents(true)
   }
 }
 

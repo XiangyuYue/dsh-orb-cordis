@@ -167,7 +167,7 @@ body.has-strip.strip-right #agent-strip {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   box-sizing: border-box;
   flex: none;
   width: 64px;
@@ -182,7 +182,6 @@ body.has-strip.strip-right #agent-strip {
   font: inherit;
   font-size: 12px;
   line-height: 1;
-  cursor: pointer;
   overflow: hidden;
   white-space: nowrap;
   box-shadow: 0 2px 6px rgba(17, 17, 17, 0.18);
@@ -191,9 +190,32 @@ body.has-strip.strip-right #agent-strip {
 }
 
 .agent-chip:hover,
-.agent-chip:focus-visible {
+.agent-chip:focus-within {
   width: 100%;
   transition-delay: 0ms;
+}
+
+/* The click that opens the session. It carries the whole row minus the dismiss control, so the
+ * chip still reads as one target while the × stays a target of its own. */
+.agent-chip-open {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  text-align: left;
+  cursor: pointer;
+  /* The collapsed row is narrower than its contents, so the tail clips here instead of
+   * painting over the dismiss control that shares the row. */
+  overflow: hidden;
 }
 
 .agent-chip-status {
@@ -248,16 +270,37 @@ body.has-strip.strip-right #agent-strip {
 }
 
 .agent-chip:hover .agent-chip-name,
-.agent-chip:focus-visible .agent-chip-name {
+.agent-chip:focus-within .agent-chip-name {
   opacity: 1;
 }
 
-.agent-chip-unread {
+/* A finished stretch the user has not looked at yet: one click removes the chip without opening
+ * the main window. Visible in the expanded row, which is what a hover produces. */
+.agent-chip-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: none;
-  width: 7px;
-  height: 7px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
-  background: var(--error);
+  background: none;
+  color: var(--pin);
+  cursor: pointer;
+}
+
+.agent-chip-dismiss:hover,
+.agent-chip-dismiss:focus-visible {
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  color: var(--error);
+}
+
+/* The collapsed row cannot hold status + elapsed + ×, and a half-cut digit beside the × reads as a
+ * glitch. The elapsed time is what steps aside; the tooltip and the expanded row still carry it. */
+.agent-chip[data-dismiss="true"]:not(:hover):not(:focus-within) .agent-chip-time {
+  display: none;
 }
 
 body.expand-down #panel {

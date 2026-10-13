@@ -227,3 +227,14 @@ Windows 上的实测反馈:在浏览器里点球、输入、回车提交后,**Ag
 - **修法两条**:(1) `openAgent()` 先向注册表要这条书签的实时状态,只有**已完成/已停止**的才记已读并重推(点运行中的书签只跳转,点多少次都不消费);(2) `agentItems()` 在每次组包时对 `running` 的书签清掉该 session 的已读标记——这样续做(新一段开始跑)会重新武装书签,它跑完后照样是未读。两条合起来即"执行期间点不掉,完成后点一下才消失",且新一段任务重新算未读。
 - **测试**:`host/tests/runtime.test.ts` 新增一例「consumes a bookmark only once its task has finished」——运行中点击只布防跳转、完成后书签以 `unread` 回来、此时点击才退休、同一 session 续做后再次以 `unread` 回来。该用例在旧逻辑下实测超时失败(`waitFor` 等不到未读书签),在新逻辑下通过;既有那例(点已完成书签即退休)保持不改。全量 `pnpm test`(node:test 272 例 + vitest 312 例)与 `pnpm typecheck` 通过。
 - **装机**:只动到 host,按第 14 节流程把 `packages/bundle/dist/host/index.js` 备份后同步进 `~/.dsh/profiles/desktop/node_modules/dsh-orb/`(备份在 `~/.dsh/dsh-orb-installed-backup-<时间戳>-bookmark-read/`)。host 在进程启动时加载,**需重启应用**生效。
+
+## 17. 完成的书签要能"就地扔掉":× 图标 + 不跳主窗口(2026-10-13)
+
+需求(用户原话):后台 agent 做完任务后,有时并不想进主窗口看内容,但也不想让书签一直挂着;原来必须点书签(等于强制跳主窗口)才能让它消失。要改成——**悬浮展开后,末尾不是红点而是一个小图标,点它直接移除书签**。
+
+- **交接面**:新增一条助手→宿主消息 `agent-dismiss`(`shell.js` → `preload.cjs` 的 `dismissAgent` → `helper/src/main.ts` 的 `orb:agent-dismiss` → `host/orb.ts` 的 `dismissAgent()`),与 `agent-open` 平行,但**不布防跳转、不聚焦主窗口**。
+- **只有跑完的才可丢弃**:`dismissAgent()` 与 `openAgent()` 一样先读注册表实时状态,`running`(以及注册表答不上来)一律拒绝——运行期间那张书签是任务唯一的痕迹,停任务仍是 `code_agent_stop` 的事。测试用"拒绝时连推送都不该多一次"来锁这条(拒绝分支只 return,不 `pollAgents`),把 `state === 'running'` 判断删掉后该用例立刻红(实测 4 次推送 vs 期望 3 次)。
+- **标记与结构**:红点 `span.agent-chip-unread` 删除,改成一个 `.agent-chip-dismiss` 按钮(12px 的 × 图标,`CLOSE` 加进 `icons.js`)。**按钮不能嵌按钮**(无效标记且会吞掉内层点击),所以 chip 从 `<button>` 改成 `<div>` 容器:内部 `.agent-chip-open`(状态 + 时长 + 任务名,点击=跳主窗口)与 `.agent-chip-dismiss` 两个按钮各自独立;hover/`:focus-within` 触发展开的规则从 `:focus-visible` 换成 `:focus-within`,键盘 Tab 到任一控件都能展开。
+- **收起来那一行的取舍**:64px 的收起态装不下"状态 + 时长 + ×",时长会被切成半个数字贴着 ×(肉眼看像乱码)。所以加一条 `.agent-chip[data-dismiss="true"]:not(:hover):not(:focus-within) .agent-chip-time { display: none }`——收起时只留 `✓ ×`,展开后时长回来;`.agent-chip-open` 加 `overflow: hidden`,让收起的尾巴裁在自己盒子里,永远盖不到 × 上。
+- **验证**:除了 `host/tests/runtime.test.ts` 新增的「dismisses a finished bookmark without opening the main window」(丢弃后 `takeJump()` 为空、运行中被拒、拒绝不多推送)与 `helper/tests/shell-render.test.ts` 的结构/桥接守卫,这次还写了真机渲染冒烟 `.zcode/smoke/orb-agent-strip-smoke.cjs`(复用第 15 节那套 Electron 冒烟办法):加载真实 `floating.html`,走生产通道灌 `orb:agents`,断言 收起 64px→展开 220px、`✓`/`×` 各就各位、`querySelectorAll('.agent-chip button button').length === 0`、点 × 只调 `dismissAgent` 而点chip 主体只调 `openAgent`,并截两张图(`/tmp/orb-strip-collapsed.png`、`-expanded.png`)肉眼确认。首轮冒烟就抓到上面那条"时长半个数字"的排版问题,改完 `SMOKE-PASS`。
+- **装机**:这次动到 host + helper(主进程与 preload)+ 球页面资源,同步 `dist/host/index.js`、`dist/helper/lib/main.js`、`dist/helper/preload.cjs`、`dist/helper/assets/{shell.js,icons.js,floating.css}` 到 `~/.dsh/profiles/desktop/node_modules/dsh-orb/`(先备份)。**需重启应用**生效。

@@ -757,6 +757,58 @@ describe('ball control socket', { concurrency: 1 }, () => {
     }
   })
 
+  it('dismisses a finished bookmark without opening the main window', async () => {
+    const entry: Record<string, unknown> = {
+      sessionId: 'session-agent-done',
+      callerId: 'session-caller-a',
+      task: '写周报',
+      cwd: '/tmp/week',
+      startedAt: Date.now() - 200_000,
+      endedAt: Date.now() - 1_000,
+      state: 'completed',
+      outcome: '已完成',
+    }
+    const harness = boot({ agentRegistry: { list: () => [entry] } })
+    const client = await connect(harness.runtime)
+    const pushes = (): { type?: unknown }[] => client.messages.filter((message) => message.type === 'agents')
+    const items = (): { sessionId: string; unread: boolean }[] | undefined => (
+      pushes().map((message) => message as unknown as { items: { sessionId: string; unread: boolean }[] })
+        .at(-1)?.items
+    )
+    try {
+      await waitFor(() => items()?.length === 1)
+
+      // The dismiss control retires the chip on the spot and arms no jump: the user asked for
+      // exactly that — no trip to the main window.
+      client.send({ type: 'agent-dismiss', sessionId: 'session-agent-done' })
+      await waitFor(() => items()?.length === 0)
+      assert.equal(harness.runtime.takeJump(), null)
+
+      // A running stretch has no dismiss control, and the host refuses the message too: while it
+      // runs, the chip is the only trace of the task. A refusal must not even re-push the strip.
+      entry.state = 'running'
+      delete entry.endedAt
+      delete entry.outcome
+      await waitFor(() => items()?.length === 1)
+      const before = pushes().length
+      client.send({ type: 'agent-dismiss', sessionId: 'session-agent-done' })
+      // Fence: the open below arms its jump only after the dismiss above was handled.
+      client.send({ type: 'agent-open', sessionId: 'session-agent-done' })
+      await waitFor(() => harness.runtime.takeJump()?.sessionId === 'session-agent-done')
+      harness.runtime.confirmJump('session-agent-done')
+      assert.equal(pushes().length, before)
+
+      // Finishing the stretch afterwards still owes an unread chip: nothing was consumed meanwhile.
+      entry.state = 'completed'
+      entry.endedAt = Date.now()
+      entry.outcome = '已完成'
+      await waitFor(() => items()?.some((item) => item.sessionId === 'session-agent-done' && item.unread) === true)
+    } finally {
+      client.socket.destroy()
+      harness.runtime.halt()
+    }
+  })
+
   it('arms the main window settings bridge when the ball menu asks for it', async () => {
     const harness = boot()
     const client = await connect(harness.runtime)

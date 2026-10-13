@@ -85,6 +85,34 @@ describe('ball page render guards', () => {
     // Once on startup, so a state message lost across a page load heals before the first hover.
     assert.match(code, /syncGif\(\)\n(?:\s*\/\/[^\n]*\n)*\s+void syncStrip\(\)\n\}/)
   })
+
+  it('dismisses a finished chip from its own control instead of the chip body', () => {
+    const css = readFileSync(join(here, '../assets/floating.css'), 'utf8')
+    const preload = readFileSync(join(here, '../preload.cjs'), 'utf8')
+    const main = readFileSync(join(here, '../src/main.ts'), 'utf8')
+    // A button inside a button is invalid markup and swallows the inner click, so the row is a
+    // container and each control is a button of its own.
+    assert.match(code, /const chip = document\.createElement\('div'\)/)
+    assert.equal(code.includes("const chip = document.createElement('button')"), false)
+    assert.match(code, /open\.className = 'agent-chip-open'/)
+    assert.match(code, /dismiss\.className = 'agent-chip-dismiss'/)
+    assert.match(code, /api\.dismissAgent\?\.\(item\.sessionId\)/)
+    // Only a finished stretch has anything to dismiss: while it runs, that chip is the only trace
+    // of the task. The × sits exactly where the unread dot used to.
+    assert.match(code, /if \(item\.unread === true\) \{\n\s+chip\.dataset\.dismiss = 'true'\n\s+const dismiss = document\.createElement\('button'\)/)
+    assert.equal(code.includes('agent-chip-unread'), false)
+    assert.equal(css.includes('agent-chip-unread'), false)
+    assert.match(css, /\.agent-chip-dismiss \{/)
+    // The collapsed row cannot hold status + elapsed + ×, so the elapsed time steps aside instead of
+    // being cut into a half glyph beside the ×.
+    assert.match(css, /\.agent-chip\[data-dismiss="true"\]:not\(:hover\):not\(:focus-within\) \.agent-chip-time \{\n\s+display: none;/)
+    // Hovering — or tabbing into either control — expands the row, which is what reveals both the
+    // task name and the ×.
+    assert.match(css, /\.agent-chip:hover,\n\.agent-chip:focus-within \{\n\s+width: 100%;/)
+    // The click has a bridge: page → preload → helper → host.
+    assert.match(preload, /ipcRenderer\.send\('orb:agent-dismiss', id\)/)
+    assert.match(main, /ipcMain\.on\('orb:agent-dismiss',[\s\S]{0,160}?type: 'agent-dismiss'/)
+  })
 })
 
 /**

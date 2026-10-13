@@ -202,6 +202,11 @@ ipcMain.on('orb:agent-open', (event, sessionId) => {
   if (typeof sessionId === 'string') write({ type: 'agent-open', sessionId })
 })
 
+ipcMain.on('orb:agent-dismiss', (event, sessionId) => {
+  if (!fromBall(event)) return
+  if (typeof sessionId === 'string') write({ type: 'agent-dismiss', sessionId })
+})
+
 ipcMain.on('orb:new', (event) => {
   if (!fromBall(event)) return
   write({ type: 'new' })

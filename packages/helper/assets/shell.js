@@ -7,7 +7,7 @@ import {
 } from './transcript-model.js'
 import { upgradeCodeBlocks } from './highlight.js'
 import {
-  icon, THINK, CHEVRON_DOWN, CHEVRON_UP, SEARCH, GLOBE, BROWSE, EDIT, CODE, API, SPARKLE, COPY, CHECK, stateSpinner,
+  icon, THINK, CHEVRON_DOWN, CHEVRON_UP, SEARCH, GLOBE, BROWSE, EDIT, CODE, API, SPARKLE, COPY, CHECK, CLOSE, stateSpinner,
 } from './icons.js'
 
 const api = window.dshOrb
@@ -77,6 +77,7 @@ const zh = {
   agentFrom: '来自对话',
   agentDir: '工作目录',
   agentOpen: '点击在主窗口打开',
+  agentDismiss: '移除这张书签（不打开主窗口）',
   noticeTitle: '后台任务报告',
 }
 const en = {
@@ -132,6 +133,7 @@ const en = {
   agentFrom: 'From chat',
   agentDir: 'Folder',
   agentOpen: 'Click to open in the main window',
+  agentDismiss: 'Remove this bookmark without opening the main window',
   noticeTitle: 'Background task report',
 }
 
@@ -1805,12 +1807,15 @@ function main() {
     if (typeof item.cwd === 'string' && item.cwd !== '') parts.push(`${messages.agentDir}: ${item.cwd}`)
     if (typeof item.outcome === 'string' && item.outcome !== '') parts.push(item.outcome)
     parts.push(messages.agentOpen)
+    if (item.unread === true) parts.push(messages.agentDismiss)
     return parts.join('\n')
   }
 
   function agentChip(item) {
-    const chip = document.createElement('button')
-    chip.type = 'button'
+    // The chip is a row, not a button: a finished stretch carries a second control (the dismiss
+    // ×), and a button inside a button is invalid markup and swallows the inner click. So each
+    // control is its own button and the row is only the hover target that expands them.
+    const chip = document.createElement('div')
     chip.className = 'agent-chip'
     chip.dataset.state = typeof item.state === 'string' ? item.state : 'running'
     const color = Number(item.colorIndex)
@@ -1838,17 +1843,31 @@ function main() {
     const name = document.createElement('span')
     name.className = 'agent-chip-name'
     name.textContent = typeof item.task === 'string' ? item.task : ''
-    chip.append(status, time, name)
-    if (item.unread === true) {
-      const dot = document.createElement('span')
-      dot.className = 'agent-chip-unread'
-      chip.append(dot)
-    }
-    chip.title = agentTip(item)
-    chip.setAttribute('aria-label', `${agentStateText(item.state)}: ${name.textContent}`)
-    chip.addEventListener('click', () => {
+    const open = document.createElement('button')
+    open.type = 'button'
+    open.className = 'agent-chip-open'
+    open.title = agentTip(item)
+    open.setAttribute('aria-label', `${agentStateText(item.state)}: ${name.textContent}`)
+    open.append(status, time, name)
+    open.addEventListener('click', () => {
       if (typeof item.sessionId === 'string') api.openAgent?.(item.sessionId)
     })
+    chip.append(open)
+    // Only a finished stretch can be dismissed: while it runs, the chip is the only trace of the
+    // task. The × sits where the unread marker used to be, which is why it replaces it.
+    if (item.unread === true) {
+      chip.dataset.dismiss = 'true'
+      const dismiss = document.createElement('button')
+      dismiss.type = 'button'
+      dismiss.className = 'agent-chip-dismiss'
+      dismiss.title = messages.agentDismiss
+      dismiss.setAttribute('aria-label', messages.agentDismiss)
+      dismiss.append(icon(CLOSE, 12))
+      dismiss.addEventListener('click', () => {
+        if (typeof item.sessionId === 'string') api.dismissAgent?.(item.sessionId)
+      })
+      chip.append(dismiss)
+    }
     return chip
   }
 

@@ -41,6 +41,9 @@ contextBridge.exposeInMainWorld('dshOrb', {
   openAgent(id) {
     ipcRenderer.send('orb:agent-open', id)
   },
+  dismissAgent(id) {
+    ipcRenderer.send('orb:agent-dismiss', id)
+  },
   newSession() {
     ipcRenderer.send('orb:new')
   },
