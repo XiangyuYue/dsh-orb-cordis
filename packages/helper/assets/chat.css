@@ -680,6 +680,38 @@
   accent-color: var(--dsw-alias-label-secondary);
 }
 
+/* ----- Math (KaTeX, vendored) ----- */
+
+/* A display-math placeholder holds its TeX source as text until math.js
+ * typesets it, so it carries the paragraph margins on its own. */
+.md-math[data-math-display='true'] {
+  margin: 16px 0;
+}
+
+/* The ball panel is narrow, so a formula that does not fit scrolls on its own
+ * axis instead of widening the transcript. `max-content` makes the scrollable
+ * content exactly as wide as the formula — a centered block wider than its box
+ * leaves the left half unreachable — while `min-width` keeps a formula that
+ * fits centered, the way the main window shows it. */
+.md .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.md .katex-display > .katex {
+  width: max-content;
+  min-width: 100%;
+}
+
+/* Keep KaTeX's inline baseline and scroll the containing block only when a
+ * formula runs past the panel. */
+.md :is(p, h1, h2, h3, h4, h5, h6, ul, ol):has(.katex) {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 1px;
+}
+
 .md-table-scroll {
   max-width: 100%;
   overflow-x: auto;
@@ -817,6 +849,18 @@
 
 .md-compact th {
   font-weight: 600;
+}
+
+.md-compact .katex {
+  font-size: 1em;
+}
+
+.md-compact .katex-display {
+  margin: 4px 0;
+}
+
+.md-compact .md-math[data-math-display='true'] {
+  margin: 4px 0;
 }
 
 /* ----- Code block (CodeBlock) ----- */

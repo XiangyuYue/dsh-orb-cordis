@@ -74,4 +74,44 @@ describe('transcript markdown', () => {
     const html = renderMarkdown('text', { compact: true })
     assert.match(html, /^<div class="md md-compact"><p>text<\/p><\/div>$/)
   })
+
+  it('emits a display-math placeholder for a $$ block, same line or fenced', () => {
+    const oneLine = renderMarkdown('$$E = mc^2$$')
+    assert.match(oneLine, /^<div class="md"><div class="md-math" data-math-display="true">E = mc\^2<\/div><\/div>$/)
+    const fenced = renderMarkdown('$$\n\\rho\\left(\\frac{\\partial \\mathbf{u}}{\\partial t}\\right) = -\\nabla p\n$$')
+    assert.match(fenced, /data-math-display="true">\\rho\\left\(\\frac\{\\partial \\mathbf\{u\}\}\{\\partial t\}\\right\) = -\\nabla p<\/div>/)
+    // A paragraph never swallows the block: the formula is a sibling of the prose.
+    assert.match(renderMarkdown('公式：\n\n$$a+b$$'), /<p>公式：<\/p><div class="md-math" data-math-display="true">a\+b<\/div>/)
+    assert.match(renderMarkdown('\\[\nE = mc^2\n\\]'), /data-math-display="true">E = mc\^2<\/div>/)
+  })
+
+  it('emits an inline-math placeholder for $…$ and \\(…\\)', () => {
+    assert.match(renderMarkdown('由 $E=mc^2$ 可得'), /<p>由 <span class="md-math" data-math-display="false">E=mc\^2<\/span> 可得<\/p>/)
+    assert.match(renderMarkdown('设 \\(x \\in R\\)'), /<span class="md-math" data-math-display="false">x \\in R<\/span>/)
+    assert.match(renderMarkdown('由 $$E=mc^2$$ 可得'), /<span class="md-math" data-math-display="false">E=mc\^2<\/span>/)
+  })
+
+  it('escapes the TeX source it parks in the placeholder', () => {
+    assert.match(renderMarkdown('$$a < b & c$$'), /data-math-display="true">a &lt; b &amp; c<\/div>/)
+  })
+
+  it('keeps currency, escaped dollars, and code spans out of math', () => {
+    assert.equal(renderMarkdown('价格 $100 与 $200 元').includes('md-math'), false)
+    assert.equal(renderMarkdown('成本 \\$5 而已').includes('md-math'), false)
+    assert.equal(renderMarkdown('用 `$x$` 表示').includes('md-math'), false)
+    assert.equal(renderMarkdown('```latex\n$$x$$\n```').includes('md-math'), false)
+    // An unterminated block delimiter is prose, not a formula.
+    assert.equal(renderMarkdown('看这个 $$E = mc^2').includes('md-math'), false)
+  })
+
+  it('lets emphasis pair up across a formula', () => {
+    assert.match(renderMarkdown('**粗 $x$ 体**'), /<p><strong>粗 <span class="md-math" data-math-display="false">x<\/span> 体<\/strong><\/p>/)
+  })
+
+  it('leaves TeX literal while the text is still streaming', () => {
+    const live = renderMarkdown('由 $E=mc^2$ 可得\n\n$$\na+b\n$$', { live: true })
+    assert.equal(live.includes('md-math'), false)
+    assert.match(live, /<p>由 \$E=mc\^2\$ 可得<\/p>/)
+    assert.match(live, /\$\$ a\+b \$\$|<p>\$\$ a\+b \$\$<\/p>/)
+  })
 })

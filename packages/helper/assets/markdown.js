@@ -1,7 +1,13 @@
 /** Transcript markdown. GFM block parser emitting the Harness MarkdownText
  * DOM: h1-h4, paragraphs, nested lists, task items, tables, blockquotes, hr,
  * and fenced code as CodeBlock cards. Links render as real anchors; the shell
- * routes clicks out through the host. */
+ * routes clicks out through the host.
+ *
+ * TeX ($…$, $$…$$, \(…\), \[…\]) becomes a `.md-math` placeholder carrying its
+ * source as text; math.js typesets the placeholders with the vendored KaTeX
+ * bundle. Two arms, like the Harness chat: a settled document recognizes math,
+ * a streaming one (`live`) leaves TeX as plain text — an incomplete `$` or a
+ * half-arrived `\frac{` must not flash a typeset error mid-stream. */
 
 const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 
@@ -14,6 +20,106 @@ const SAFE_URL = /^(https?:\/\/|mailto:)/i
 function safeHref(url) {
   const trimmed = url.trim()
   return SAFE_URL.test(trimmed) ? escapeHtml(trimmed) : ''
+}
+
+/** Settled arm typesets TeX; the streaming arm leaves it literal. Set by
+ * `renderMarkdown` and read by the inline pass, the way the Harness renderer
+ * picks one of its two mdast grammars per arm. */
+let settled = true
+
+/** One formula placeholder: the TeX source stays as text so a page whose
+ * typesetter has not landed yet (or never loads) still shows the source. */
+function mathPlaceholder(tex, display) {
+  const source = display ? tex.trim() : tex
+  if (source === '') return ''
+  const tag = display ? 'div' : 'span'
+  return `<${tag} class="md-math" data-math-display="${display ? 'true' : 'false'}">${escapeHtml(source)}</${tag}>`
+}
+
+/** Index of the closing delimiter that ends a display-math line, or -1 when the
+ * line does not close one. Only trailing whitespace may follow it, so `$$a$$ + b`
+ * stays prose and the inline pass gets it. */
+function closingTail(line, close) {
+  for (let at = line.indexOf(close); at !== -1; at = line.indexOf(close, at + 1)) {
+    if (line[at - 1] === '\\') continue
+    if (line.slice(at + close.length).trim() === '') return at
+  }
+  return -1
+}
+
+const MATH_BLOCK_OPEN = /^ {0,3}(\$\$|\\\[)[ \t]*(.*)$/
+
+/** A `$$`/`\[` line opening a display-math block, closed by `$$`/`\]` on the
+ * same line or on a later one. Unterminated delimiters are prose. */
+function renderMathBlock(lines, start) {
+  if (!settled) return null
+  const match = MATH_BLOCK_OPEN.exec(lines[start] ?? '')
+  if (match === null) return null
+  const close = match[1] === '$$' ? '$$' : '\\]'
+  const head = match[2] ?? ''
+  const sameLine = closingTail(head, close)
+  if (sameLine !== -1) {
+    return { html: mathPlaceholder(head.slice(0, sameLine), true), next: start + 1 }
+  }
+  const body = head === '' ? [] : [head]
+  let index = start + 1
+  while (index < lines.length) {
+    const line = lines[index] ?? ''
+    const at = closingTail(line, close)
+    if (at !== -1) {
+      body.push(line.slice(0, at))
+      return { html: mathPlaceholder(body.join('\n'), true), next: index + 1 }
+    }
+    body.push(line)
+    index += 1
+  }
+  return null
+}
+
+/** Index of the next `close` at or after `from` that can end an inline span, or
+ * -1. An escaped delimiter and one that follows whitespace never close; a `$`
+ * that merely lengthens a run is not a delimiter of its own. */
+function closingMarker(text, close, from) {
+  const dollar = close[0] === '$'
+  for (let at = text.indexOf(close, from); at !== -1; at = text.indexOf(close, at + 1)) {
+    if (text[at - 1] === '\\') continue
+    if (/\s/.test(text[at - 1] ?? '')) continue
+    if (dollar && (text[at - 1] === '$' || text[at + close.length] === '$')) continue
+    return at
+  }
+  return -1
+}
+
+/** Inline TeX spans in one line of text: `$…$`, `$$…$$`, `\(…\)`, `\[…\]`.
+ * A `$` run opens only before non-space and closes only after non-space, which
+ * is what keeps `$100 与 $200` prose. */
+function mathSpans(text) {
+  const spans = []
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '\\') {
+      const next = text[index + 1]
+      if (next !== '(' && next !== '[') {
+        index += 1
+        continue
+      }
+      const close = next === '(' ? '\\)' : '\\]'
+      const at = closingMarker(text, close, index + 2)
+      if (at === -1) continue
+      spans.push({ start: index, end: at + close.length, tex: text.slice(index + 2, at), display: false })
+      index = at + close.length - 1
+      continue
+    }
+    if (char !== '$') continue
+    const size = text[index + 1] === '$' ? 2 : 1
+    const from = index + size
+    if (text.slice(from, from + 1).trim() === '') continue
+    const at = closingMarker(text, text.slice(index, from), from)
+    if (at === -1) continue
+    spans.push({ start: index, end: at + size, tex: text.slice(from, at), display: false })
+    index = at + size - 1
+  }
+  return spans
 }
 
 /** Inline pass: code spans first, then links/autolinks, strong, em, del. */
@@ -40,18 +146,46 @@ function renderInline(text, inLink = false) {
 
 const URL_PATTERN = /(\bhttps?:\/\/[^\s<>()\[\]{}"']+[^\s<>()\[\]{}"'.,!?:;])/g
 
+/** Math first — its TeX stays literal — then links, autolinks, bare URLs, and
+ * emphasis in the stretches between the formulas. A formula is masked while
+ * those passes run, so emphasis around it (`**a $x$ b**`) still pairs up, and
+ * the mask is swapped for the placeholder once the HTML is built. */
 function renderInlineText(text, inLink = false) {
+  const spans = settled ? mathSpans(text) : []
+  if (spans.length === 0) return renderLinks(text, inLink)
+  let masked = ''
+  let cursor = 0
+  for (let index = 0; index < spans.length; index += 1) {
+    const span = spans[index]
+    masked += text.slice(cursor, span.start) + mask(index)
+    cursor = span.end
+  }
+  masked += text.slice(cursor)
+  let html = renderLinks(masked, inLink)
+  for (let index = 0; index < spans.length; index += 1) {
+    const span = spans[index]
+    html = html.split(mask(index)).join(mathPlaceholder(span.tex, span.display))
+  }
+  return html
+}
+
+/** Private-use delimiters: they survive HTML escaping and match no markdown. */
+function mask(index) {
+  return `\uE000${index}\uE001`
+}
+
+function renderLinks(text, inLink = false) {
   let html = ''
   let cursor = 0
-  const patterns = /(\[[^\]\n]*\]\([^)\s]+\))|(<https?:\/\/[^>\s]+>)/g
-  for (let match = patterns.exec(text); match !== null; match = patterns.exec(text)) {
+  // Local: the pass re-enters itself through a link label, and a shared global
+  // pattern's `lastIndex` would jump back into the enclosing text.
+  const pattern = /(\[[^\]\n]*\]\([^)\s]+\))|(<https?:\/\/[^>\s]+>)/g
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
     html += renderDecorations(text.slice(cursor, match.index), inLink)
     const token = match[0]
     if (match[1] !== undefined) {
       const split = token.indexOf('](')
-      const label = token.slice(1, split)
-      const url = token.slice(split + 2, -1)
-      html += anchor(label, url)
+      html += anchor(token.slice(1, split), token.slice(split + 2, -1))
     } else {
       html += anchor(token.slice(1, -1), token.slice(1, -1))
     }
@@ -61,6 +195,7 @@ function renderInlineText(text, inLink = false) {
   return html
 }
 
+/** Bare URLs become anchors, and the rest takes emphasis markers. */
 function renderDecorations(text, inLink = false) {
   let html = ''
   let cursor = 0
@@ -186,8 +321,19 @@ function codeBlock(infoLine, body, streaming, copyLabel) {
     + '</div></div>'
 }
 
-/** Render one markdown document to the Harness chat DOM (HTML string). */
+/** Render one markdown document to the Harness chat DOM (HTML string). The
+ * `live` option picks the arm: true while the text is still streaming. */
 export function renderMarkdown(text, options = {}) {
+  const outer = settled
+  settled = options.live !== true
+  try {
+    return renderDocument(text, options)
+  } finally {
+    settled = outer
+  }
+}
+
+function renderDocument(text, options) {
   const source = typeof text === 'string' ? text : ''
   const compact = options.compact === true
   const blocks = []
@@ -235,7 +381,7 @@ export function renderMarkdown(text, options = {}) {
         quoted.push((lines[index] ?? '').replace(/^ {0,3}> /, ''))
         index += 1
       }
-      blocks.push(`<blockquote>${renderMarkdown(quoted.join('\n'))}</blockquote>`)
+      blocks.push(`<blockquote>${renderDocument(quoted.join('\n'), options)}</blockquote>`)
       continue
     }
     if (/^\s*([-*+]|\d{1,9}[.)])\s+/.test(line)) {
@@ -251,6 +397,12 @@ export function renderMarkdown(text, options = {}) {
         index = table.next
         continue
       }
+    }
+    const math = renderMathBlock(lines, index)
+    if (math !== null) {
+      blocks.push(math.html)
+      index = math.next
+      continue
     }
     const paragraph = []
     while (index < lines.length) {
@@ -272,6 +424,7 @@ function isBlockStart(line) {
   return /^ {0,3}(?:#{1,6}\s|```|~~~|> )/.test(line)
     || /^\s*([-*+]|\d{1,9}[.)])\s+/.test(line)
     || /^ {0,3}(?:\*{3,}|-{3,}|_{3,})\s*$/.test(line)
+    || (settled && MATH_BLOCK_OPEN.test(line))
 }
 
 /**

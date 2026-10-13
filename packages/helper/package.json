@@ -18,11 +18,12 @@
     "assets"
   ],
   "scripts": {
-    "build": "tsdown && tsdown --config tsdown.vendor.config.ts",
-    "build:vendor": "tsdown --config tsdown.vendor.config.ts"
+    "build": "tsdown && pnpm build:vendor",
+    "build:vendor": "tsdown --config tsdown.vendor.config.ts && node ./scripts/vendor-katex-assets.mjs"
   },
   "devDependencies": {
     "@shikijs/langs": "^4.3.1",
+    "katex": "^0.16.47",
     "shiki": "^4.3.1"
   },
   "license": "MIT"

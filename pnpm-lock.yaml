@@ -162,6 +162,9 @@ importers:
       '@shikijs/langs':
         specifier: ^4.3.1
         version: 4.4.3
+      katex:
+        specifier: ^0.16.47
+        version: 0.16.47
       shiki:
         specifier: ^4.3.1
         version: 4.4.3
@@ -1411,6 +1414,10 @@ packages:
   comma-separated-tokens@2.0.3:
     resolution: {integrity: sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg==}
 
+  commander@8.3.0:
+    resolution: {integrity: sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww==}
+    engines: {node: '>= 12'}
+
   defu@6.1.7:
     resolution: {integrity: sha512-7z22QmUWiQ/2d0KkdYmANbRUVABpZ9SNYyH5vx6PZ+nE5bcC0l7uFvEfHlyld/HcGBFTL536ClDt3DEcSlEJAQ==}
 
@@ -1494,6 +1501,10 @@ packages:
 
   json-schema-traverse@1.0.0:
     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
+
+  katex@0.16.47:
+    resolution: {integrity: sha512-Eeo8Ys1doU1z+x8AZsPpQu+p/QcZBI5PeOo7QGQdy2x2m0MU/hYagBbGOmXwr5KVbEfVuWv9LpnQWeehogurjg==}
+    hasBin: true
 
   koffi@3.3.1:
     resolution: {integrity: sha512-FZYfhBfYQr/cmHhZpaQ9rhbKpkjHhxaytn2A0mbPhiD5yV8QzF3SiQwR1w/34rCJ1fw+6qBQSj/ZoXRdC+Xc2Q==}
@@ -3008,6 +3019,8 @@ snapshots:
 
   comma-separated-tokens@2.0.3: {}
 
+  commander@8.3.0: {}
+
   defu@6.1.7: {}
 
   dequal@2.0.3: {}
@@ -3074,6 +3087,10 @@ snapshots:
       argparse: 2.0.1
 
   json-schema-traverse@1.0.0: {}
+
+  katex@0.16.47:
+    dependencies:
+      commander: 8.3.0
 
   koffi@3.3.1:
     optionalDependencies:

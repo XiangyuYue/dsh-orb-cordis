@@ -62,6 +62,11 @@ function checkInstalled(profile, root) {
     'dist/helper/selection-preload.cjs',
     'dist/helper/assets/floating.html',
     'dist/helper/assets/deepseek-avatar-square.gif',
+    // The ball's typesetter: the KaTeX bundle plus the sheet and faces it needs.
+    'dist/helper/assets/math.js',
+    'dist/helper/assets/vendor/katex.js',
+    'dist/helper/assets/vendor/katex/katex.min.css',
+    'dist/helper/assets/vendor/katex/fonts/KaTeX_Main-Regular.woff2',
     // Every built-in avatar the host can offer has to be in the installed tree.
     ...readdirSync(join(repo, 'packages/helper/assets/avatars')).map((file) => `dist/helper/assets/avatars/${file}`),
     'dist/native-selection/src/index.js',

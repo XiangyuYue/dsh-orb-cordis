@@ -6,6 +6,7 @@ import {
   usageLabels, tokenUsageTotal, formatTokenCount,
 } from './transcript-model.js'
 import { upgradeCodeBlocks } from './highlight.js'
+import { typesetMath } from './math.js'
 import {
   icon, THINK, CHEVRON_DOWN, CHEVRON_UP, SEARCH, GLOBE, BROWSE, EDIT, CODE, API, SPARKLE, COPY, CHECK, CLOSE, stateSpinner,
 } from './icons.js'
@@ -1089,10 +1090,15 @@ function main() {
   }
 
   function renderMarkdownBody(element, text, { compact = false, live = false } = {}) {
-    element.innerHTML = renderMarkdown(text, { compact, copyLabel: chatLabels.copy })
+    element.innerHTML = renderMarkdown(text, { compact, copyLabel: chatLabels.copy, live })
     wireCopyButtons(element)
-    // Shiki runs on settled content only; re-highlighting every delta is too costly while streaming.
-    if (!live) void upgradeCodeBlocks(element)
+    // Shiki and KaTeX run on settled content only; re-highlighting and
+    // re-typesetting every delta is too costly while streaming, and a
+    // half-arrived `$` or `\frac{` would flash a typeset error mid-stream.
+    if (!live) {
+      void upgradeCodeBlocks(element)
+      void typesetMath(element)
+    }
   }
 
   function shimmer(element, active) {
