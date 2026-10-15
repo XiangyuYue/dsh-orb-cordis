@@ -57,11 +57,15 @@ describe('finder paths', () => {
     expect(isForbiddenOpenPath('/Users/test/Desktop')).toBe(false)
   })
 
-  it('blacklists Windows system directories without catching lookalike user folders', () => {
+  it('blacklists the Windows directory without catching user folders or installed apps', () => {
     expect(isForbiddenOpenPath('C:\\Windows\\System32\\notepad.exe')).toBe(true)
     expect(isForbiddenOpenPath('c:/windows/system32')).toBe(true)
-    expect(isForbiddenOpenPath('C:\\Program Files\\App\\app.exe')).toBe(true)
-    expect(isForbiddenOpenPath('C:\\Program Files (x86)\\App')).toBe(true)
+    expect(isForbiddenOpenPath('C:\\Windows\\win.ini')).toBe(true)
+    // Program Files holds the user's own applications — the counterpart of macOS
+    // /Applications, which this blacklist has never covered — so it stays openable.
+    expect(isForbiddenOpenPath('C:\\Program Files')).toBe(false)
+    expect(isForbiddenOpenPath('C:\\Program Files\\App\\app.exe')).toBe(false)
+    expect(isForbiddenOpenPath('C:\\Program Files (x86)\\App')).toBe(false)
     // Only a whole path segment matches: the user's own folder is not the system directory.
     expect(isForbiddenOpenPath('C:\\Users\\me\\Windows')).toBe(false)
     expect(isForbiddenOpenPath('C:\\Users\\me\\notes')).toBe(false)
@@ -75,8 +79,11 @@ describe('finder paths', () => {
       process.env.SystemRoot = 'D:\\Windows'
       process.env.ProgramFiles = 'D:\\Program Files'
       process.env['ProgramFiles(x86)'] = 'D:\\Program Files (x86)'
+      process.env.ProgramW6432 = 'D:\\Program Files'
       expect(isForbiddenOpenPath('D:\\Windows\\System32\\cmd.exe')).toBe(true)
-      expect(isForbiddenOpenPath('D:\\Program Files\\App\\app.exe')).toBe(true)
+      expect(isForbiddenOpenPath('D:\\Windows\\win.ini')).toBe(true)
+      // Program Files follows the installation and stays openable on that drive too.
+      expect(isForbiddenOpenPath('D:\\Program Files\\App\\app.exe')).toBe(false)
       // The literal C: forms stay covered for a machine that also has them.
       expect(isForbiddenOpenPath('C:\\Windows\\win.ini')).toBe(true)
       expect(isForbiddenOpenPath('D:\\Users\\me\\Windows')).toBe(false)

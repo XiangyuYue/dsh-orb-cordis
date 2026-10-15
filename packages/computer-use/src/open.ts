@@ -45,16 +45,13 @@ function normalizeWindowsPath(path: string): string {
  * Windows system prefixes that must never be opened, in the {@link normalizeWindowsPath} form.
  * The environment answers for a Windows installed on another drive (`D:\Windows`), and the
  * literal `C:` forms stand in when it does not.
+ *
+ * Only the OS directory is listed. `Program Files` holds the user's own applications — the
+ * Windows counterpart of macOS `/Applications`, which this blacklist has never covered — so
+ * refusing it would refuse every installed program the user asks to open or reveal.
  */
 function windowsSystemPrefixes(): readonly string[] {
   const root = process.env.SystemRoot ?? process.env.windir ?? 'C:\\Windows'
-  const programFiles = [
-    process.env.ProgramFiles,
-    process.env['ProgramFiles(x86)'],
-    process.env.ProgramW6432,
-    'C:\\Program Files',
-    'C:\\Program Files (x86)',
-  ].filter((entry): entry is string => typeof entry === 'string' && entry !== '')
   return [
     root,
     `${root}\\System32`,
@@ -62,7 +59,6 @@ function windowsSystemPrefixes(): readonly string[] {
     // hold these, and a system-looking path is never worth opening.
     'C:\\Windows',
     'C:\\Windows\\System32',
-    ...programFiles,
   ].map(prefix => normalizeWindowsPath(prefix))
 }
 
