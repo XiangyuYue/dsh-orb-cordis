@@ -100,6 +100,10 @@ export async function withDownloadLock(parent: string, task: () => Promise<void>
   const lock = join(parent, 'electron-runtime.download.lock')
   const deadline = Date.now() + 10 * 60 * 1000
   for (;;) {
+    // Checked first, so that every path is bounded — including the immediate retry after a stale
+    // lock is swept. A rename refused for a reason other than a held lock (a handle on the
+    // staging directory, a deny on the parent) must not turn this into an unbounded spin.
+    if (Date.now() > deadline) throw new Error('dsh-orb: Electron download is locked by another process')
     const staging = `${lock}.${randomBytes(6).toString('hex')}.tmp`
     try {
       await mkdir(staging)
@@ -123,7 +127,6 @@ export async function withDownloadLock(parent: string, task: () => Promise<void>
         await rm(lock, { recursive: true, force: true })
         continue
       }
-      if (Date.now() > deadline) throw new Error('dsh-orb: Electron download is locked by another process')
       await new Promise((resolve) => setTimeout(resolve, 250))
     }
   }
@@ -153,7 +156,9 @@ export async function lockExpired(lock: string): Promise<boolean> {
       const info = await stat(lock)
       return Date.now() - info.mtimeMs > 30_000
     } catch {
-      return true
+      // The directory is gone: there is nothing to sweep, and "no lock at all" is not "an expired
+      // lock". Answering true here would send the caller straight back around with no backoff.
+      return false
     }
   }
   const [pidText, startedText] = text.split('\n')

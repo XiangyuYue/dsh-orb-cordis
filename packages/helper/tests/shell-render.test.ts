@@ -10,9 +10,21 @@ import { fileURLToPath } from 'node:url'
  * transcript-model guard shell.js. Comments are stripped: only live code counts.
  */
 const here = fileURLToPath(new URL('.', import.meta.url))
-const shell = readFileSync(join(here, '../assets/shell.js'), 'utf8')
+
+/**
+ * An asset as the pins below read it, with its line endings normalized. The patterns anchor on
+ * `\n`, and a Windows checkout (`core.autocrlf=true`) has CRLF on disk, which is not what any of
+ * them are pinning.
+ * @param relative - asset path relative to this test file.
+ * @returns the asset text with `\r\n` folded to `\n`.
+ */
+function source(relative: string): string {
+  return readFileSync(join(here, relative), 'utf8').replaceAll('\r\n', '\n')
+}
+
+const shell = source('../assets/shell.js')
 const code = shell.replaceAll(/\/\*[\s\S]*?\*\//g, '').replaceAll(/^\s*\/\/.*$/gm, '')
-const highlight = readFileSync(join(here, '../assets/highlight.js'), 'utf8')
+const highlight = source('../assets/highlight.js')
 
 describe('ball page render guards', () => {
   it('appends the web-fetch meta without the undefined url reference', () => {
@@ -58,7 +70,7 @@ describe('ball page render guards', () => {
   })
 
   it('keeps the ball wrapped: only the panel far edge moves for the strip', () => {
-    const css = readFileSync(join(here, '../assets/floating.css'), 'utf8')
+    const css = source('../assets/floating.css')
     // The panel is the window minus its chrome, so the ball at the near edge always sits
     // inside it: a stale strip state must never leave the ball outside the panel.
     assert.equal(/--panel-w|width:\s*var\(--panel-w\)/.test(css), false)
@@ -87,9 +99,9 @@ describe('ball page render guards', () => {
   })
 
   it('dismisses a finished chip from its own control instead of the chip body', () => {
-    const css = readFileSync(join(here, '../assets/floating.css'), 'utf8')
-    const preload = readFileSync(join(here, '../preload.cjs'), 'utf8')
-    const main = readFileSync(join(here, '../src/main.ts'), 'utf8')
+    const css = source('../assets/floating.css')
+    const preload = source('../preload.cjs')
+    const main = source('../src/main.ts')
     // A button inside a button is invalid markup and swallows the inner click, so the row is a
     // container and each control is a button of its own.
     assert.match(code, /const chip = document\.createElement\('div'\)/)
@@ -156,8 +168,8 @@ describe('agent work keeps the panel on screen', () => {
   })
 
   it('ships the notice element and its styles', () => {
-    const html = readFileSync(join(here, '../assets/floating.html'), 'utf8')
-    const css = readFileSync(join(here, '../assets/floating.css'), 'utf8')
+    const html = source('../assets/floating.html')
+    const css = source('../assets/floating.css')
     assert.match(html, /<p id="hint" role="status" hidden><\/p>/)
     assert.match(css, /body\.work-locked #history,\nbody\.work-locked #new-conversation \{\n\s+opacity: 0\.45;/)
   })

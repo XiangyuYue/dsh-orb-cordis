@@ -21,6 +21,25 @@ const SHELL_CLASSES = new Set([
  */
 const CROSS_PID_TRANSIENT_CLASSES = new Set(['#32768', 'ComboLBox'])
 
+/**
+ * The process a top-level window's app identity comes from, which is what
+ * {@link WindowsWindowFact.appName} is derived from.
+ *
+ * A UWP/Store window is a frame (`ApplicationFrameWindow`) owned by
+ * `ApplicationFrameHost.exe`; the app the user names lives in the frame's `Windows.UI.Core.CoreWindow`
+ * child. Every caller that turns a handle into an app name must go through this, or the same
+ * window answers two different names and a name check between them can never pass.
+ * @param className - top-level class of the window.
+ * @param ownPid - pid that owns the window handle itself.
+ * @param coreWindowPid - resolves the frame's CoreWindow child pid; only called for a frame,
+ * because the probe walks the child windows.
+ * @returns pid whose base name is the window's app name.
+ */
+export function appOwnerPid(className: string, ownPid: number, coreWindowPid: () => number | undefined): number {
+  if (className !== 'ApplicationFrameWindow') return ownPid
+  return coreWindowPid() ?? ownPid
+}
+
 /** One top-level window in z-order, already in physical pixels. */
 export interface WindowsWindowFact {
   readonly hwnd: number

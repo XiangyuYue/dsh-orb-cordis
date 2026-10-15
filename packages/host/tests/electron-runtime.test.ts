@@ -134,6 +134,17 @@ describe('Electron download lock', () => {
     }
   })
 
+  it('treats a lock that is not there as absent, not as expired', async () => {
+    // `true` here would send `withDownloadLock` straight back around the loop with no backoff,
+    // which is an unbounded spin whenever a rename is refused for a reason other than the lock.
+    assert.equal(await lockExpired(join(parent(), lockName)), false)
+    // A directory that vanished between reading its owner and stating it is the same answer.
+    const dir = parent()
+    const lock = staleLock(dir, undefined)
+    rmSync(lock, { recursive: true, force: true })
+    assert.equal(await lockExpired(lock), false)
+  })
+
   it('reads every rename refusal as a held lock, and a real failure as an error', () => {
     // Windows refuses a directory-over-directory rename with EPERM or EACCES rather than
     // the POSIX EEXIST/ENOTEMPTY; all four mean someone else holds the lock.

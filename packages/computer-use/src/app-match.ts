@@ -49,5 +49,13 @@ function titleMatches(title: string, wanted: string): boolean {
   if (title.startsWith(wanted) && !/[a-z0-9_]/u.test(title.charAt(wanted.length))) return true
   // "Document1 - Word" and "Docs - Google Chrome": the app name is the trailing segment.
   // Equality per segment is still far stricter than the old substring test.
-  return title.split(TITLE_SEPARATORS).some((segment) => segment.trim() === wanted)
+  return title.split(TITLE_SEPARATORS).some((segment) => {
+    const text = segment.trim()
+    if (text === wanted) return true
+    // A segment that *ends* with the name still names that app: Windows brands Edge as
+    // "New tab - Personal - Microsoft Edge" while the process is `msedge`, so the title is the
+    // only place the model's own word can land. The leading space keeps the boundary real —
+    // and keeps "source code review" refusing `code`, which a substring test would not.
+    return text.endsWith(` ${wanted}`)
+  })
 }

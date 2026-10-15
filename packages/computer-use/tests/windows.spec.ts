@@ -14,7 +14,7 @@ vi.mock('../src/windows-native.ts', () => ({
       mouseButton: () => undefined,
       scrollWheel: () => undefined,
       key: () => undefined,
-      saveClipboard: () => ({ entries: [] }),
+      saveClipboard: () => ({ entries: [], dropped: [] }),
       restoreClipboard: () => undefined,
       setClipboardText: () => undefined,
       copyImageFile: () => undefined,
@@ -32,6 +32,7 @@ import { runWithCaptureExcludeWindowIds } from '../src/capture-exclude.ts'
 import { wrapDesktopBackend } from '../src/overlay-guard.ts'
 import type { WindowsDesktopSnapshot, WindowsWindowFact } from '../src/windows-foreground.ts'
 import {
+  clipboardRestoreIncomplete,
   createWindowsDesktopBackend,
   encodeBgraPng,
   windowsKeyIsExtended,
@@ -84,7 +85,7 @@ function ops(overrides: Partial<WindowsDesktopOps> = {}): WindowsDesktopOps & {
     },
     saveClipboard: () => {
       calls.push('clip-save')
-      return { entries: [{ format: 13, bytes: Buffer.from('previous\0', 'utf16le') }] }
+      return { entries: [{ format: 13, bytes: Buffer.from('previous\0', 'utf16le') }], dropped: [] }
     },
     restoreClipboard: (snapshot) => {
       calls.push(`clip-restore:${snapshot.entries.map(entry => String(entry.format)).join(',')}`)
@@ -205,6 +206,7 @@ describe('windows desktop backend', () => {
         { format: 8, bytes: Buffer.from([1, 2, 3]) },
         { format: 15, bytes: Buffer.from([4, 5]) },
       ],
+      dropped: [],
     }
     const host = ops({
       saveClipboard: () => {
@@ -638,5 +640,24 @@ describe('windows desktop backend', () => {
     await expect(backend.listScreens()).resolves.toEqual([])
     await expect(backend.listScreens()).resolves.toEqual([])
     expect(produced.count).toBe(1)
+  })
+})
+
+describe('clipboard restore completeness', () => {
+  const entry = { format: 13, bytes: Buffer.from('previous\0', 'utf16le') }
+
+  it('reports a restore that lost a format it had copied', () => {
+    expect(clipboardRestoreIncomplete({ entries: [entry], dropped: [] }, 0)).toBe(true)
+    expect(clipboardRestoreIncomplete({ entries: [entry], dropped: [] }, 1)).toBe(false)
+  })
+
+  it('reports a format the snapshot saw but could never copy', () => {
+    // A 4K screenshot is one CF_DIB well past the snapshot budget, so nothing is copied and the
+    // paste is about to empty the clipboard. Silence here is what lost the user's screenshot.
+    expect(clipboardRestoreIncomplete({ entries: [], dropped: [8] }, 0)).toBe(true)
+  })
+
+  it('stays quiet when the clipboard was empty to begin with', () => {
+    expect(clipboardRestoreIncomplete({ entries: [], dropped: [] }, 0)).toBe(false)
   })
 })

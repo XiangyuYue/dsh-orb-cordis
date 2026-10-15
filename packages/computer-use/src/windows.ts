@@ -51,6 +51,27 @@ export interface ClipboardEntry {
 /** Clipboard contents saved before a paste; {@link WindowsDesktopOps.restoreClipboard} puts the formats back. */
 export interface ClipboardSnapshot {
   readonly entries: readonly ClipboardEntry[]
+  /**
+   * Clipboard formats the snapshot saw but could not copy: GDI and owner-display handles that
+   * are not global memory, and formats past the snapshot's memory budget. `restoreClipboard`
+   * empties the clipboard first, so these are formats a paste destroys for good.
+   */
+  readonly dropped: readonly number[]
+}
+
+/**
+ * Whether putting a snapshot back left something behind.
+ *
+ * A restore always empties the clipboard first, so an incomplete one is data loss the user
+ * cannot see: the caller must say so rather than let it pass silently. Counting `dropped`
+ * as well as `entries` is what makes the empty-snapshot case — a full-screen screenshot on a
+ * 4K display is one format over budget — report at all.
+ * @param snapshot - what `saveClipboard` captured.
+ * @param restored - number of formats `restoreClipboard` handed back to the system.
+ * @returns true when at least one format the clipboard held did not return.
+ */
+export function clipboardRestoreIncomplete(snapshot: ClipboardSnapshot, restored: number): boolean {
+  return restored < snapshot.entries.length + snapshot.dropped.length
 }
 
 /**

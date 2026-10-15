@@ -3,11 +3,14 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { deferredDir, type DeferredInstall } from '../src/deferred-install.ts'
 import { ProfileStore } from '../src/preferences.ts'
-import { AUTO_CHECK_INTERVAL_MS, compareVersions, exemptReleaseAge, installRegistry, installSpec, ownPackage, registryTarballUrl, releaseTarballUrl, UpdateChecker, versionFromRegistry, versionFromRelease, withReleaseAgeExclusion } from '../src/update.ts'
+import { AUTO_CHECK_INTERVAL_MS, compareVersions, exemptReleaseAge, installRegistry, installSpec, ownPackage, registryTarballUrl, releaseTarballUrl, renameWithRetry, UpdateChecker, versionFromRegistry, versionFromRelease, withReleaseAgeExclusion } from '../src/update.ts'
+
+const here = fileURLToPath(new URL('.', import.meta.url))
 
 const root = mkdtempSync(join(tmpdir(), 'orb-update-'))
 after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -211,6 +214,48 @@ describe('release-age exemption', () => {
     const profile = store()
     exemptReleaseAge(profile.dir, 'dsh-orb')
     assert.equal(existsSync(join(profile.dir, 'pnpm-workspace.yaml')), false)
+  })
+
+  it('rides out a destination the system refuses for a moment', () => {
+    // pnpm itself, OneDrive, or a scanner can hold `pnpm-workspace.yaml`; the refusal is
+    // transient far more often than it is permanent.
+    const refusals = [Object.assign(new Error('busy'), { code: 'EPERM' }), Object.assign(new Error('busy'), { code: 'EBUSY' })]
+    let attempts = 0
+    const renamed: string[] = []
+    renameWithRetry('staged', 'target', (from, to) => {
+      attempts += 1
+      const refusal = refusals.shift()
+      if (refusal !== undefined) throw refusal
+      renamed.push(`${from}->${to}`)
+    })
+    assert.equal(attempts, 3, 'two refusals, then the rename that lands')
+    assert.deepEqual(renamed, ['staged->target'])
+  })
+
+  it('gives up on a rename that never lands, and reports the real error', () => {
+    const refusal = Object.assign(new Error('still held'), { code: 'EPERM' })
+    let attempts = 0
+    assert.throws(
+      () => renameWithRetry('staged', 'target', () => { attempts += 1; throw refusal }),
+      (error: unknown) => error === refusal,
+    )
+    assert.equal(attempts, 5, 'every attempt is used before the error surfaces')
+  })
+
+  it('survives a workspace file it cannot replace, without leaving the staged copy behind', () => {
+    const profile = store()
+    const file = join(profile.dir, 'pnpm-workspace.yaml')
+    writeFileSync(file, 'packages:\n  - .\n')
+    // A directory where the staged sibling goes: the write cannot land, whichever platform.
+    mkdirSync(`${file}.dsh-orb-tmp`, { recursive: true })
+    exemptReleaseAge(profile.dir, 'dsh-orb')
+    assert.equal(readFileSync(file, 'utf8'), 'packages:\n  - .\n', 'the profile file is untouched')
+    assert.equal(existsSync(`${file}.dsh-orb-tmp`), true, 'what the test itself created is still a directory')
+
+    // The rename path is the one that must clean up after itself. Read with normalized line
+    // endings: the pin is about the code, and a Windows checkout has CRLF on disk.
+    const source = readFileSync(join(here, '../src/update.ts'), 'utf8').replaceAll('\r\n', '\n')
+    assert.match(source, /catch \(error\) \{\n\s+rmSync\(staged, \{ force: true \}\)\n\s+throw error\n\s+\}/u)
   })
 })
 

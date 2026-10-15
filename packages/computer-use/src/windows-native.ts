@@ -12,8 +12,9 @@ import { execFileSync } from 'node:child_process'
 import { selectAppWindow } from './app-match.ts'
 import koffi from './koffi.ts'
 import { compositeCursor, cursorDrawPlacement, flipRows, resolveCursorAlpha } from './cursor.ts'
+import { appOwnerPid } from './windows-foreground.ts'
 import type { WindowsDesktopSnapshot, WindowsWindowFact } from './windows-foreground.ts'
-import { encodeBgraPng, type ClipboardSnapshot, type WindowsDesktopOps, type WindowsRect } from './windows.ts'
+import { clipboardRestoreIncomplete, encodeBgraPng, type ClipboardSnapshot, type WindowsDesktopOps, type WindowsRect } from './windows.ts'
 
 const SRCCOPY = 0x00CC0020
 const MOUSEEVENTF_MOVE = 0x0001
@@ -779,7 +780,7 @@ export function createProductionWindowsOps(): WindowsDesktopOps {
         if (frame === undefined) continue
         const className = classNameOf(api, hwnd)
         const pid = pidOf(api, hwnd)
-        const appPid = className === 'ApplicationFrameWindow' ? coreWindowPid(api, hwnd) ?? pid : pid
+        const appPid = appOwnerPid(className, pid, () => coreWindowPid(api, hwnd))
         const styles = stylesOf(api, hwnd)
         const display = monitorOf(api, hwnd, frame)
         windows.push({
@@ -968,10 +969,14 @@ export function createProductionWindowsOps(): WindowsDesktopOps {
       })
       // A delayed-rendered format still costs one synchronous GetClipboardData above: the
       // budget bounds the memory, not the owner's render time.
-      return { entries: seen.flatMap((entry) => {
+      const entries = seen.flatMap((entry) => {
         const copy = bytes.get(entry.format)
         return copy === undefined ? [] : [{ format: entry.format, bytes: copy }]
-      }) }
+      })
+      // Whatever the clipboard held and this snapshot did not take is lost the moment a paste
+      // empties it, so it travels with the snapshot and the restore reports it.
+      const copied = new Set(entries.map((entry) => entry.format))
+      return { entries, dropped: seen.filter((entry) => !copied.has(entry.format)).map((entry) => entry.format) }
     },
     restoreClipboard(snapshot) {
       let restored = 0
@@ -996,9 +1001,11 @@ export function createProductionWindowsOps(): WindowsDesktopOps {
           restored += 1
         }
       })
-      if (restored === 0 && snapshot.entries.length > 0) {
-        // The clipboard was emptied and nothing went back; say so instead of losing it silently.
-        console.error('computer-use: the clipboard could not be restored after the paste')
+      if (clipboardRestoreIncomplete(snapshot, restored)) {
+        // The clipboard was emptied and something did not go back; say so instead of losing it
+        // silently. This covers the empty snapshot too: a format over budget never got copied,
+        // and without the warning the user's screenshot would just disappear.
+        console.error('computer-use: the clipboard could not be fully restored after the paste')
       }
     },
     setClipboardText(text) {
@@ -1063,7 +1070,13 @@ try { [System.Windows.Forms.Clipboard]::SetImage($image) } finally { $image.Disp
     windowAppName(hwnd) {
       const target = windowPointer(hwnd)
       if (target === undefined) return undefined
-      return perMonitor(() => processBaseName(api, pidOf(api, target)))
+      // The same derivation `listWindows` records in its `appName`: a UWP frame answers with the
+      // app inside it, not with `ApplicationFrameHost`. Answering differently here fails every
+      // name check against a window this session just observed.
+      return perMonitor(() => {
+        const pid = pidOf(api, target)
+        return processBaseName(api, appOwnerPid(classNameOf(api, target), pid, () => coreWindowPid(api, target)))
+      })
     },
     launch(target, parameters) {
       const result = Number(api.ShellExecuteW(null, 'open', target, parameters ?? null, null, SW_SHOWNORMAL))

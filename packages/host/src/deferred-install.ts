@@ -124,14 +124,15 @@ export function deferredInstallInProgress(profileDir: string): boolean {
   try {
     raw = readFileSync(join(dir, 'status.json'), 'utf8')
   } catch {
-    // No status yet: the script may be in its pre-status window.
-    return installPendingAfterExit(dir)
+    // No status yet: the script may be in its pre-status window — unless the outcome is already
+    // on disk, which means it is not in that window at all. The script writes `result.json`
+    // last, and `scheduleInstallAfterExit` clears any earlier one before it writes the job, so
+    // a lingering outcome belongs to this job: on Windows a lock on `job.json` can leave the
+    // pending latch fresh after the script has finished, and reading that as "installing"
+    // reports a finished install as running and holds the start path back.
+    return outcomeWritten(dir) ? false : installPendingAfterExit(dir)
   }
-  try {
-    if (statSync(join(dir, 'result.json')).isFile()) return false
-  } catch {
-    // No outcome yet: the install is still running or the script died.
-  }
+  if (outcomeWritten(dir)) return false
   let status: DeferredStatus | undefined
   try {
     status = JSON.parse(raw) as DeferredStatus
@@ -156,6 +157,22 @@ export function deferredInstallInProgress(profileDir: string): boolean {
     // The profile folder is gone; nothing to report.
   }
   return false
+}
+
+/**
+ * Whether the folder already holds an outcome for its install. The pair `status.json` /
+ * `result.json` is the whole state: the script writes the status first and the outcome last,
+ * and the outcome outlives the status file.
+ * @param dir - the profile's `.dsh-orb-update` folder.
+ * @returns true once the install has written its result.
+ */
+function outcomeWritten(dir: string): boolean {
+  try {
+    return statSync(join(dir, 'result.json')).isFile()
+  } catch {
+    // No outcome yet: the install is still running or the script died.
+    return false
+  }
 }
 
 /**
@@ -377,8 +394,10 @@ for (let attempt = 1; attempt <= 3 && !ok; attempt += 1) {
   }
 }
 writeFileSync(join(dir, 'result.json'), JSON.stringify({ spec: job.spec, ok, detail: detail.slice(0, 200) }) + '\\n')
-rmSync(join(dir, 'status.json'), { force: true })
-// The job is done: leaving it behind would read as a pending install until its mtime ages out.
-rmSync(jobFile, { force: true })
+// The outcome is on disk now, so a lock on either leftover must not take the script down:
+// status.json without result.json would read as a dead install, and job.json has to go or it
+// reads as a pending one until its mtime ages out.
+try { rmSync(join(dir, 'status.json'), { force: true }) } catch (error) { log('could not clear the status file: ' + String(error)) }
+try { rmSync(jobFile, { force: true }) } catch (error) { log('could not clear the job file: ' + String(error)) }
 log(ok ? 'installed ' + job.spec : 'gave up on ' + job.spec)
 `

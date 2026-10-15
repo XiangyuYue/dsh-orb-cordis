@@ -180,4 +180,16 @@ describe('install-in-progress detection', () => {
     writeFileSync(join(deferredDir(dir), 'job.json'), JSON.stringify({ parentPid: process.pid }))
     assert.equal(deferredInstallInProgress(dir), false, 'the package is untouched until that exit')
   })
+
+  it('reports a finished install as finished even when its job file lingers', () => {
+    const dir = profile()
+    const folder = deferredDir(dir)
+    mkdirSync(folder, { recursive: true })
+    // What a Windows lock on job.json leaves behind: the outcome is on disk, the status file is
+    // gone, and the job file is still fresh enough to read as a scheduled install.
+    writeFileSync(join(folder, 'job.json'), JSON.stringify({ parentPid: deadPid(), spec: 'dsh-orb@0.2.0' }))
+    writeFileSync(join(folder, 'result.json'), JSON.stringify({ spec: 'dsh-orb@0.2.0', ok: true, detail: '' }))
+    assert.equal(deferredInstallInProgress(dir), false, 'an outcome on disk means the install is over')
+    assert.deepEqual(takeDeferredOutcome(dir), { spec: 'dsh-orb@0.2.0', ok: true, detail: '' })
+  })
 })

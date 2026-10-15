@@ -36,6 +36,17 @@ describe('open_app window matching', () => {
     expect(selectAppWindow([{ appName: 'chrome', title: 'main.rs - Visual Studio' }], 'code')).toBeUndefined()
   })
 
+  it('matches the name that ends a title segment, word boundary included', () => {
+    // Windows brands Edge "New tab - Personal - Microsoft Edge" while the process is `msedge`,
+    // so the title tail is the only place the model's own word can land.
+    expect(selectAppWindow([{ appName: 'msedge', title: 'New tab - Personal - Microsoft Edge' }], 'Edge')).toBe(0)
+    expect(selectAppWindow([{ appName: 'chrome', title: 'Inbox - me@example.com - Gmail' }], 'gmail')).toBe(0)
+    // Ending the segment is required, and the boundary is a real one: a suffix glued to another
+    // word does not count.
+    expect(selectAppWindow([{ appName: 'chrome', title: 'Straightedge - Docs' }], 'edge')).toBeUndefined()
+    expect(selectAppWindow([{ appName: 'chrome', title: 'Knowledge - Docs' }], 'edge')).toBeUndefined()
+  })
+
   it('matches a whole title and a process base name without .exe', () => {
     expect(selectAppWindow([{ appName: 'Code', title: 'anything' }], 'code')).toBe(0)
     expect(selectAppWindow([{ appName: 'chrome', title: 'Word' }], 'word')).toBe(0)

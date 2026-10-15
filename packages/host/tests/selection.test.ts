@@ -75,6 +75,10 @@ describe('selection lines', () => {
     assert.match(hooks, /\$out\.x = \$rects\[0\]/)
     assert.match(hooks, /monitorScale\(/)
     assert.match(hooks, /dipRect\(/)
+    // A probe that cannot answer must not answer 1: that is a real 100% reading, and standing in
+    // for it would pass physical pixels off as DIP. The rectangle is dropped instead.
+    assert.equal(hooks.includes('if (status !== 0) return 1'), false)
+    assert.match(hooks, /if \(status !== 0\) throw new Error\(/)
   })
 })
 

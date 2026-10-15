@@ -65,6 +65,9 @@ function windowsActivationApi() {
 /**
  * Display scale of the monitor containing a physical point. The mouse hook reports DIP, so a
  * UIA rectangle (physical pixels) must go through the same probe before the two are compared.
+ * Throws when the probe cannot answer: scale 1 is a real reading (100%), so returning it for a
+ * failed probe would hand the caller physical pixels dressed up as DIP. The caller drops the
+ * rectangle instead, which is the documented cost of an unanswerable probe.
  */
 function monitorScale(x, y) {
   const lib = prepareKoffi()
@@ -79,9 +82,10 @@ function monitorScale(x, y) {
       dpiX,
       dpiY,
     )
-  if (status !== 0) return 1
+  if (status !== 0) throw new Error(`dsh-orb: GetDpiForMonitor failed with ${String(status)}`)
   const scale = (dpiX[0] ?? 96) / 96
-  return Number.isFinite(scale) && scale > 0 ? scale : 1
+  if (!Number.isFinite(scale) || scale <= 0) throw new Error('dsh-orb: the monitor DPI reading is unusable')
+  return scale
 }
 
 /** A physical-pixel rectangle in the DIP space the mouse hook uses. */

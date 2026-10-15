@@ -9,7 +9,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { deferredInstallInProgress, scheduleInstallAfterExit, takeDeferredOutcome, type DeferredInstall } from './deferred-install.ts'
 import { mappedImages, ownPackageRoot } from './native-images.ts'
@@ -519,12 +519,22 @@ export function isLockedFileFailure(error: InstallResult['error']): boolean {
  * the caller proceeds on pnpm's own defaults.
  */
 export function exemptReleaseAge(profileDir: string, name: string): void {
+  const file = join(profileDir, 'pnpm-workspace.yaml')
+  let next: string | undefined
   try {
-    const file = join(profileDir, 'pnpm-workspace.yaml')
-    const next = withReleaseAgeExclusion(readFileSync(file, 'utf8'), name)
-    if (next !== undefined) writeProfileFile(file, next)
+    next = withReleaseAgeExclusion(readFileSync(file, 'utf8'), name)
   } catch {
     // No workspace file (dev checkout, older profile): nothing to exempt.
+    return
+  }
+  if (next === undefined) return
+  try {
+    writeProfileFile(file, next)
+  } catch (error) {
+    // Still best-effort — the caller installs either way — but no longer silent: without the
+    // exemption pnpm settles for the previous release for up to a day, which the user reads
+    // as "the update did nothing".
+    console.error(`dsh-orb: could not write the release-age exemption into ${file}: ${error instanceof Error ? error.message : String(error)}`)
   }
 }
 
@@ -532,13 +542,55 @@ export function exemptReleaseAge(profileDir: string, name: string): void {
  * Replace a profile file atomically. The after-exit install script writes the same
  * `pnpm-workspace.yaml` (its build approvals), and a plain write would let a concurrent
  * reader — or pnpm itself — see a truncated document.
+ *
+ * Windows refuses to replace a file another process is holding — pnpm itself, OneDrive, a
+ * scanner — with EPERM/EACCES/EBUSY, and the holder is normally gone within a moment, so the
+ * rename is retried. The staged file never survives a failure: leaving it behind would put a
+ * second copy of the profile's workspace file next to the real one.
  * @param file - absolute path of the profile file.
  * @param text - complete new contents.
  */
 function writeProfileFile(file: string, text: string): void {
   const staged = `${file}.dsh-orb-tmp`
   writeFileSync(staged, text)
-  renameSync(staged, file)
+  try {
+    renameWithRetry(staged, file)
+  } catch (error) {
+    rmSync(staged, { force: true })
+    throw error
+  }
+}
+
+/** Attempts, and the pause before each one, for a rename the system may be refusing for now. */
+const PROFILE_RENAME_ATTEMPTS = 5
+const PROFILE_RENAME_BACKOFF_MS = 50
+
+/**
+ * Rename with a short retry, for the destinations Windows can refuse while another process
+ * holds them. Exported so the retry can be exercised without a real lock.
+ * @param from - staged path.
+ * @param to - destination path.
+ * @param rename - the rename to perform; tests inject one that refuses.
+ * @throws the last rename error once every attempt is used.
+ */
+export function renameWithRetry(
+  from: string,
+  to: string,
+  rename: (from: string, to: string) => void = renameSync,
+): void {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      rename(from, to)
+      return
+    } catch (error) {
+      if (attempt >= PROFILE_RENAME_ATTEMPTS) throw error
+      sleepSync(PROFILE_RENAME_BACKOFF_MS * attempt)
+    }
+  }
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
 /** The package an exemption entry names, with any version or version union dropped. */
