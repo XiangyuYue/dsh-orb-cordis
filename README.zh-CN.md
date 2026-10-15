@@ -108,8 +108,10 @@ minimumReleaseAgeExclude:
 ```sh
 pnpm install
 pnpm build
-pnpm --filter dsh-orb pack        # 生成 ./dsh-orb-<version>.tgz
+pnpm --filter dsh-orb run pack        # 生成 ./dsh-orb-<version>.tgz
 ```
+
+> `run` 不能省。不带 `run` 的 `pnpm pack` 是 pnpm 自带的打包命令，只按 `files` 字段打包工作区目录，捆绑的 `node_modules`（`koffi`、`zod` 与各平台预构建）一个都不会进 tarball。这样打出来的包装得上，但插件加载不了 `koffi`，Computer Use 会直接失败。`run pack` 才会执行 bundle 的 `scripts/pack.mjs`，把各部分组装进包里。
 
 然后在桌面版插件页添加这个 tarball，或者：
 

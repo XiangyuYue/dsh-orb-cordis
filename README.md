@@ -108,8 +108,10 @@ With an older version installed there is no need to reinstall: the floating-ball
 ```sh
 pnpm install
 pnpm build
-pnpm --filter dsh-orb pack        # produces ./dsh-orb-<version>.tgz
+pnpm --filter dsh-orb run pack        # produces ./dsh-orb-<version>.tgz
 ```
+
+> `run` is not optional. A bare `pnpm pack` is pnpm's own command: it packs the workspace folder by its `files` list, so none of the bundled `node_modules` (`koffi`, `zod`, the platform prebuilds) end up in the tarball. The result installs, but the plugin cannot load `koffi` and Computer Use fails. `run pack` executes the bundle's `scripts/pack.mjs`, which assembles every part into the package.
 
 Then either add the tarball in the desktop app's plugin page, or:
 
