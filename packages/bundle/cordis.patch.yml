@@ -13,7 +13,9 @@
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              suffix: Your working directory is {{cwd}}.
+              # No `suffix`: the agent loop registers only `provider` and `model`, and
+              # `dsh-working-directory` already supplies the current directory as
+              # required runtime context. A `{{cwd}}` reference fails prompt assembly.
               prefix: >-
                 You are a desktop GUI agent powered by the {{model}} model.
                 You operate the screen and decide each stretch yourself.

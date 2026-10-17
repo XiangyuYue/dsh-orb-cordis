@@ -265,3 +265,14 @@ Windows 上的实测反馈:在浏览器里点球、输入、回车提交后,**Ag
 - **源码钉桩测试在 CRLF 检出上必红**:本机 `core.autocrlf=true`,工作区是 CRLF,而钉桩正则锚在 `\n` 上。`helper/tests/shell-render.test.ts` 7 例、`update.test.ts` 新增的那例都栽在这里。修法是读取时把 `\r\n` 折成 `\n`(钉的是代码内容,与行尾无关),`shell-render.test.ts` 抽一个 `source()` 助手统一 6 处读取。**这不是产品缺陷**:把 `shell.js`/`floating.css` 临时转成 LF 后同一批用例全过,已实测。
 - **验证**:`pnpm typecheck` 通过;`pnpm build` 通过(KaTeX 资源仍齐);computer-use vitest 全绿;node:test 除 1 例 POSIX 夹具(用 `#!/bin/sh` 造假 `pnpm`、以 `:` 分隔 PATH,产品代码本身在 win32 上正确)外全绿。**未部署**:构建产物留在仓库,`~/.dsh/profiles/desktop/node_modules/dsh-orb/` 一个字节未动(版本仍 0.1.6)。
 - **未改的两项**:① 停靠滑出动画到显示边缘、标签落在工作区边缘,有侧边任务栏时是观感跳变——那是第 522-523 行注释写明的刻意选择,且与 `unsnap()` 的滑入起点对称;② 选区矩形跨不同 DPI 显示器时只按左上角缩放,需要按角逐点换算,而该功能当前被强制禁用。
+
+## 20. dsh 0.2.1 更新后,球里一发指令就报 unknown prompt variable "{{cwd}}"(2026-10-17)
+
+现象:桌面版 dsh 更新到 `0.2.1-rc.1` 后,在悬浮球的显示框里输入任何指令,本轮直接失败:`unknown prompt variable "{{cwd}}" in section "deployment:persona-suffix"; registered variables: provider, model`——请求还没发出去就被提示词组装挡下,球看起来「不能用了」。
+
+- **根因:官方撤掉了 `cwd` 这个提示词变量**。旧包 `dsh-agent-loop@0.1.7-rc.2` 注册三个变量(`provider`/`model`/`cwd`,见旧 `lib/index.js` 第 1549-1551 行),`0.2.1-rc.1` 只剩前两个;而 `dsh-system-prompt` 的插值是**严格**的(两版这段代码逐字相同):遇到未注册的 `{{name}}` 直接抛错,而不是替换成空串。本插件的 Computer Use preset 在 persona 里写了 `suffix: Your working directory is {{cwd}}.`,于是每次组装都在这里炸。官方这次把迁移写进了 `dsh-system-prompt/README.zh.md` 第 79 行:自定义 persona 模板不得依赖内置 `cwd` 变量,请从 home、profile、invocation 的 `personaSuffix` 与 preset 的 `suffix` 里删掉那句,并指出工作目录服务已经提供必需的当前目录上下文。
+- **删掉这句不丢信息**:`0.2.1` 的 `dsh-working-directory` 把 `Current working directory: "…".` 作为 **required** 运行时上下文注入(`required: true`,见该包 `lib/index.js` 第 42-48 行),而该服务就在 `dsh-base` 的补丁里(`cordis.patch.yml` 第 167 行 `- id: working-directory`)。本项目自己的会话快照里也有这一行,所以 persona 里那句本来就是重复的,删掉后模型照样知道工作目录;`{{model}}` 保留,它仍然注册。
+- **改动两处**:`packages/bundle/cordis.patch.yml`(真正装机的那份)删掉 `suffix` 一行并写清为何不能再加,`packages/computer-use/presets/computer-use/agent.cordis.yml`(测试与独立组合用的那份)同步删掉,并改掉原先那句「`{{model}}` 和 `{{cwd}}` 都可解析」的注释。
+- **回归守卫**:`packages/computer-use/tests/preset.spec.ts` 新增一例「references only the prompt variables the agent loop registers」——扫这两个文件里所有 `{{name}}`,只允许 `provider`/`model` 出现;按加载器真正看到的语义**忽略注释行**(注释里点名 `{{cwd}}` 是刻意留给后来人的警告,不该让守卫自己红)。把文件换回旧文本实测立刻红(`unknown: ['cwd']`),修好的文本 `unknown: []`。
+- **验证**:拿仓库依赖里的 `dsh-system-prompt`(插值代码与新版逐字相同)做了一次真实组装:只注册 `provider`/`model` 时,旧后缀抛出的**正是用户看到的那句原话**,新后缀正常渲染且 `{{model}}` 解析出模型名。`pnpm --filter @dsh-orb/computer-use test` 321 例全绿(29 个文件)。
+- **装机**:这次只动配置、没动代码,按第 14 节流程把 `packages/bundle/cordis.patch.yml` 备份到 `~/.dsh/dsh-orb-installed-backup-<时间戳>-dsh-0.2.1-cwd/` 后同步进 `~/.dsh/profiles/desktop/node_modules/dsh-orb/cordis.patch.yml`(临时名 + `mv` 落位)。desktop profile 没声明 `patchReload: live`,配置在启动时读取,所以**必须重启应用**才生效。旁注:`~/.dsh/profiles/web/node_modules/dsh-orb/` 是一份 `0.1.2` 的旧副本(Oct 7),而该 profile 的 package.json 已指向 `file:…/packages/bundle`——要用 web profile 应当先 `pnpm install` 重新链接到修好的仓库,而不是手改那份旧文件。

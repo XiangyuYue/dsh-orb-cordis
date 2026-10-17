@@ -95,6 +95,25 @@ describe('computer-use overlay and extra root', () => {
     expect(composition).not.toContain('@deepseek-ai/dsh-plan-mode')
     expect(composition).not.toContain('@deepseek-ai/dsh-agent-instructions')
   })
+
+  // dsh 0.2.1-rc.1 dropped the `cwd` prompt variable: `dsh-agent-loop` now
+  // registers only `provider` and `model`, and the working-directory service
+  // supplies the current directory as required runtime context. An unknown
+  // reference fails prompt assembly, so the shipped personas must stay clean.
+  // Only value lines count: YAML comments never reach the model, and those
+  // comments name the removed variable on purpose.
+  it('references only the prompt variables the agent loop registers', async () => {
+    const registered = ['provider', 'model']
+    for (const file of [BUILT_OVERLAY, COMPOSITION]) {
+      const values = (await readFile(file, 'utf8'))
+        .split('\n')
+        .filter(line => !/^\s*#/.test(line))
+        .join('\n')
+      const referenced = [...values.matchAll(/\{\{([^{}]+)\}\}/g)].map(match => match[1])
+      expect({ file, unknown: [...new Set(referenced)].filter(name => !registered.includes(name)) })
+        .toEqual({ file, unknown: [] })
+    }
+  })
 })
 
 describe('computer-use scoped registration', () => {
