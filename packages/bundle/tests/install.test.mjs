@@ -125,10 +125,12 @@ describe('dsh-orb install layout', () => {
   })
 
   it('resolves every patch row when the tarball is unpacked into the profile', () => {
-    const { version } = JSON.parse(readFileSync(join(bundle, 'package.json'), 'utf8'))
-    const packed = spawnSync(process.execPath, [join(bundle, 'scripts/pack.mjs')], { cwd: repo, stdio: 'pipe', encoding: 'utf8' })
+    // A test-only version keeps the pack away from a release tarball waiting in the
+    // repository root: the pack writes `dsh-orb-<version>.tgz` there and this test deletes it.
+    const testVersion = '0.0.0-test'
+    const packed = spawnSync(process.execPath, [join(bundle, 'scripts/pack.mjs'), '--version', testVersion], { cwd: repo, stdio: 'pipe', encoding: 'utf8' })
     assert.equal(packed.status, 0, packed.stderr)
-    const tarball = join(repo, `dsh-orb-${version}.tgz`)
+    const tarball = join(repo, `dsh-orb-${testVersion}.tgz`)
     assert.ok(existsSync(tarball))
     try {
       const profile = profileWith((target) => {
