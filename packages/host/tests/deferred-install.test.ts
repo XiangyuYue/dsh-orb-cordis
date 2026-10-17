@@ -10,6 +10,7 @@ import {
   deferredDir,
   deferredInstallInProgress,
   mergeApprovedBuilds,
+  pendingDeferredInstall,
   scheduleInstallAfterExit,
   takeDeferredOutcome,
   type DeferredInstall,
@@ -179,6 +180,62 @@ describe('install-in-progress detection', () => {
     mkdirSync(deferredDir(dir), { recursive: true })
     writeFileSync(join(deferredDir(dir), 'job.json'), JSON.stringify({ parentPid: process.pid }))
     assert.equal(deferredInstallInProgress(dir), false, 'the package is untouched until that exit')
+  })
+
+  it('reports the queued job back to an instance that did not schedule it', () => {
+    const dir = profile()
+    const folder = deferredDir(dir)
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, 'job.json'), JSON.stringify({
+      profileDir: dir,
+      spec: 'dsh-orb@0.2.0',
+      version: '0.2.0',
+      registry: 'x',
+      parentPid: process.pid,
+      approvedBuilds: [],
+    }))
+    assert.deepEqual(pendingDeferredInstall(dir), { spec: 'dsh-orb@0.2.0', version: '0.2.0' })
+  })
+
+  it('reads the version off an older job that did not carry one', () => {
+    const dir = profile()
+    const folder = deferredDir(dir)
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, 'job.json'), JSON.stringify({
+      profileDir: dir,
+      spec: 'dsh-orb@0.2.0',
+      registry: 'x',
+      parentPid: process.pid,
+      approvedBuilds: [],
+    }))
+    assert.deepEqual(pendingDeferredInstall(dir), { spec: 'dsh-orb@0.2.0', version: '0.2.0' })
+  })
+
+  it('drops a queued job once its outcome lands', () => {
+    const dir = profile()
+    const folder = deferredDir(dir)
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, 'job.json'), JSON.stringify({ profileDir: dir, spec: 'dsh-orb@0.2.0', registry: 'x', parentPid: process.pid, approvedBuilds: [] }))
+    writeFileSync(join(folder, 'result.json'), JSON.stringify({ spec: 'dsh-orb@0.2.0', ok: true, detail: '' }))
+    assert.equal(pendingDeferredInstall(dir), undefined)
+  })
+
+  it('drops a job whose script stopped touching it before pnpm started', () => {
+    const dir = profile()
+    const folder = deferredDir(dir)
+    mkdirSync(folder, { recursive: true })
+    const jobFile = join(folder, 'job.json')
+    writeFileSync(jobFile, JSON.stringify({ profileDir: dir, spec: 'dsh-orb@0.2.0', registry: 'x', parentPid: deadPid(), approvedBuilds: [] }))
+    const past = new Date(Date.now() - DEFERRED_INSTALL_PENDING_MS - 1000)
+    utimesSync(jobFile, past, past)
+    assert.equal(pendingDeferredInstall(dir), undefined)
+  })
+
+  it('does not call a running script deferred: that state is installing', () => {
+    const dir = profile()
+    statusFile(dir, 'dsh-orb@0.2.0', process.pid, Date.now())
+    assert.equal(pendingDeferredInstall(dir), undefined)
+    assert.equal(deferredInstallInProgress(dir), true)
   })
 
   it('reports a finished install as finished even when its job file lingers', () => {

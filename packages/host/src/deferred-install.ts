@@ -17,10 +17,19 @@ import { join } from 'node:path'
 export interface DeferredInstall {
   readonly profileDir: string
   readonly spec: string
+  /** Version the spec installs, for the page that shows the queued update after a reload. */
+  readonly version?: string
   readonly registry: string
   readonly parentPid: number
   /** Approvals the settings page granted; the script merges them into the profile before pnpm runs. */
   readonly approvedBuilds: readonly string[]
+}
+
+/** A queued after-exit install, read back by a plugin instance that did not schedule it. */
+export interface PendingDeferredInstall {
+  readonly spec: string
+  /** Version the job installs; absent on a job written before this field existed. */
+  readonly version: string | undefined
 }
 
 /** How the last deferred install ended. */
@@ -34,6 +43,7 @@ export interface DeferredOutcome {
 interface DeferredStatus {
   readonly phase: 'installing'
   readonly spec?: unknown
+  readonly version?: unknown
   readonly pid?: unknown
   readonly startedAt?: unknown
 }
@@ -201,6 +211,76 @@ function installPendingAfterExit(dir: string): boolean {
   }
 }
 
+/**
+ * The after-exit install queued for this profile, when it is still going to run.
+ * The job file outlives the plugin instance that wrote it, so a page reloaded by
+ * a bundle toggle can still say "installs once the app quits" instead of offering
+ * the same update again. A finished install (result on disk) and a job whose
+ * script never started (stale heartbeat) are not pending.
+ * @param profileDir - profile that scheduled the install.
+ * @returns the queued spec and version, or undefined when nothing is waiting.
+ */
+export function pendingDeferredInstall(profileDir: string): PendingDeferredInstall | undefined {
+  const dir = deferredDir(profileDir)
+  if (outcomeWritten(dir)) return undefined
+  // A live status means the script is installing, which `deferredInstallInProgress`
+  // reports as `installing`; only the wait before that is the deferred state.
+  const status = readDeferredStatus(dir)
+  if (status !== undefined && statusIsLive(status)) return undefined
+  const job = readDeferredJob(dir)
+  if (job === undefined) return undefined
+  const pid = Number(job.parentPid)
+  if (Number.isInteger(pid) && pid > 0 && scriptAlive(pid)) {
+    return { spec: job.spec, version: textField(job.version) ?? versionFromSpec(job.spec) }
+  }
+  // The owner is gone. Only a job its script still touches is about to run.
+  try {
+    if (Date.now() - statSync(join(dir, 'job.json')).mtimeMs > DEFERRED_INSTALL_PENDING_MS) return undefined
+  } catch {
+    return undefined
+  }
+  return { spec: job.spec, version: textField(job.version) ?? versionFromSpec(job.spec) }
+}
+
+/** The job a {@link scheduleInstallAfterExit} call wrote, when it is readable. */
+function readDeferredJob(dir: string): DeferredInstall | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, 'job.json'), 'utf8')) as Partial<DeferredInstall>
+    if (typeof parsed.spec !== 'string' || parsed.spec === '') return undefined
+    return parsed as DeferredInstall
+  } catch {
+    return undefined
+  }
+}
+
+/** The status file of a running script, when it is readable. */
+function readDeferredStatus(dir: string): DeferredStatus | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(join(dir, 'status.json'), 'utf8')) as DeferredStatus | null
+    return parsed !== null && typeof parsed === 'object' ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** A status whose script is alive, or whose start is inside the script's own ceiling. */
+function statusIsLive(status: DeferredStatus): boolean {
+  if (scriptAlive(Number(status.pid))) return true
+  const started = Number(status.startedAt)
+  return Number.isFinite(started) && Date.now() - started <= DEFERRED_INSTALL_CEILING_MS
+}
+
+/** A non-empty string field, or undefined for anything else. */
+function textField(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/** The version a `name@version` spec ends with; undefined for a URL or an unscoped path. */
+function versionFromSpec(spec: string): string | undefined {
+  const at = spec.lastIndexOf('@')
+  return at > 0 && at < spec.length - 1 ? spec.slice(at + 1) : undefined
+}
+
 /** Message of an unknown error, for the log lines that must never throw. */
 function errorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -365,7 +445,7 @@ await sleep(1500)
 // The status file marks this install as running before pnpm touches the profile, so a start
 // during the install knows not to load the package being replaced. It goes away with the
 // outcome: the pair is the whole state, and neither half is ever read alone.
-writeFileSync(join(dir, 'status.json'), JSON.stringify({ phase: 'installing', spec: job.spec, pid: process.pid, startedAt: Date.now() }) + '\\n')
+writeFileSync(join(dir, 'status.json'), JSON.stringify({ phase: 'installing', spec: job.spec, version: job.version, pid: process.pid, startedAt: Date.now() }) + '\\n')
 try {
   const approved = job.approvedBuilds ?? []
   if (approved.length > 0) {

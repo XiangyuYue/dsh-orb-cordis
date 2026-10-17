@@ -33,6 +33,10 @@ function manager(
     remove?: Record<string, unknown>
     /** Present when this manager can select a bundle again. */
     reenable?: Record<string, unknown>
+    /** Index of the `installBundle` call that rejects instead of returning a result. */
+    installThrowsAt?: number
+    /** Index of the `removeBundle` call that rejects instead of returning a result. */
+    removeThrows?: boolean
   } = {},
 ) {
   const specs: string[] = []
@@ -54,14 +58,16 @@ function manager(
         specs.push(spec)
         registries.push(options?.registry)
         enabled.push(options?.enabled)
-        const scripted = script.installs?.[cursor]
+        const index = cursor
         cursor += 1
-        return scripted ?? result
+        if (index === script.installThrowsAt) throw new Error('install request rejected')
+        return script.installs?.[index] ?? result
       },
       ...script.remove === undefined ? {} : {
         async removeBundle(name: string) {
           trace.push('remove')
           removed.push(name)
+          if (script.removeThrows === true) throw new Error('removal request rejected')
           return script.remove
         },
       },
@@ -91,6 +97,8 @@ function checker(options: {
     installs: options.installs,
     remove: options.remove,
     reenable: options.reenable,
+    installThrowsAt: options.installThrowsAt,
+    removeThrows: options.removeThrows,
   })
   const announced: string[] = []
   const deferred: DeferredInstall[] = []
@@ -101,7 +109,13 @@ function checker(options: {
     fetchLatest: async () => options.latest,
     own: 'own' in options ? options.own : { name: 'dsh-orb', version: '0.1.0' },
     mappedImages: () => options.mapped ?? [],
-    deferInstall: (job) => { fake.trace.push('defer'); deferred.push(job) },
+    deferInstall: (job) => {
+      fake.trace.push('defer')
+      deferred.push(job)
+      // The real scheduler writes this file; a reloaded instance reads it back.
+      mkdirSync(deferredDir(options.store.dir), { recursive: true })
+      writeFileSync(join(deferredDir(options.store.dir), 'job.json'), JSON.stringify(job))
+    },
   })
   return {
     update,
@@ -731,11 +745,86 @@ describe('update checker', () => {
     await update.check()
     await update.install()
     assert.deepEqual(specs, ['dsh-orb@0.2.0'], 'the locked package is not installed again in this process')
-    assert.deepEqual(trace, ['remove', 'enable', 'defer'])
+    assert.deepEqual(trace, ['remove', 'defer', 'enable'], 'the job exists before the reload starts the next instance')
     assert.equal(deferred.length, 1)
     assert.equal(deferred[0]?.spec, 'dsh-orb@0.2.0')
     assert.equal(update.state().error, null)
     assert.equal(update.state().deferred, true)
+
+    // Reenabling the bundle reloads it: the page that starts then must read the job back.
+    const restored = checker({ store: profile, latest: '0.2.0' })
+    assert.equal(restored.update.state().deferred, true, 'the reloaded page still sees the queued install')
+    assert.equal(restored.update.state().available, false, 'the update button stays hidden while the job waits')
+    rmSync(join(deferredDir(profile.dir), 'job.json'), { force: true })
+    assert.equal(restored.update.state().available, true, 'a job that vanished no longer hides the update')
+  })
+
+  it('turns the bundle back on when the removal request rejects', async () => {
+    const profile = store()
+    const { update, removed, reenabled, trace } = checker({
+      store: profile,
+      latest: '0.2.0',
+      installs: [{ application: 'failed', error: { code: 'already-installed' } }],
+      remove: { application: 'applied' },
+      reenable: { application: 'applied' },
+      removeThrows: true,
+    })
+    await update.check()
+    await update.install()
+    assert.deepEqual(removed, ['dsh-orb'])
+    assert.deepEqual(reenabled, ['dsh-orb'], 'a rejected removal may have deselected the bundle')
+    assert.deepEqual(trace, ['remove', 'enable'])
+    assert.equal(update.state().error, 'removal request rejected')
+    assert.equal(profile.updateRecord().lastError, 'removal request rejected', 'the reloaded page can read it')
+    const restored = checker({ store: profile, latest: '0.2.0' })
+    assert.equal(restored.update.state().error, 'removal request rejected')
+    assert.equal(restored.update.state().installedVersion, '0.1.0')
+  })
+
+  it('restores the running version when the install after removal rejects', async () => {
+    const profile = store()
+    const { update, specs, removed } = checker({
+      store: profile,
+      latest: '0.2.0',
+      installs: [{ application: 'failed', error: { code: 'already-installed' } }],
+      remove: { application: 'applied' },
+      installThrowsAt: 1,
+    })
+    await update.check()
+    await update.install()
+    assert.deepEqual(removed, ['dsh-orb'])
+    assert.deepEqual(specs, ['dsh-orb@0.2.0', 'dsh-orb@0.2.0', 'dsh-orb@0.1.0'], 'the rollback installs the running version')
+    assert.equal(update.state().error, 'install request rejected')
+    assert.equal(update.state().installedVersion, '0.1.0')
+    assert.equal(profile.updateRecord().lastError, 'install request rejected')
+  })
+
+  it('reports a cancelled install instead of counting it as applied', async () => {
+    const profile = store()
+    const { update } = checker({ store: profile, latest: '0.2.0', result: { application: 'cancelled' } })
+    await update.check()
+    await update.install()
+    assert.equal(update.state().error, 'cancelled')
+    assert.equal(update.state().installedVersion, '0.1.0')
+    assert.equal(update.state().restartRequired, false)
+  })
+
+  it('does not resurrect a remembered failure whose version is already installed', () => {
+    const profile = store()
+    profile.setUpdateRecord({ lastError: 'incompatible-version', latestVersion: '0.1.0' })
+    const { update } = checker({ store: profile, latest: '0.1.0' })
+    assert.equal(update.state().error, null, 'the remembered failure is already history')
+    assert.equal(profile.updateRecord().lastError, '')
+  })
+
+  it('clears a remembered failure when a check finds no newer version', async () => {
+    const profile = store()
+    profile.setUpdateRecord({ lastError: 'incompatible-version' })
+    const { update } = checker({ store: profile, latest: '0.1.0' })
+    assert.equal(update.state().error, 'incompatible-version')
+    await update.check()
+    assert.equal(update.state().error, null, 'no newer version means the old failure no longer applies')
+    assert.equal(profile.updateRecord().lastError, '')
   })
 
   it('installs the running version again when the replacement install fails', async () => {
@@ -847,6 +936,7 @@ describe('update checker', () => {
     assert.deepEqual(deferred, [{
       profileDir: profile.dir,
       spec: 'dsh-orb@0.2.0',
+      version: '0.2.0',
       registry: 'https://registry.npmmirror.com',
       parentPid: process.pid,
       approvedBuilds: ['koffi'],

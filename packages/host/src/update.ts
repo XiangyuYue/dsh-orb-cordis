@@ -11,7 +11,7 @@
 import { spawn } from 'node:child_process'
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { deferredInstallInProgress, scheduleInstallAfterExit, takeDeferredOutcome, type DeferredInstall } from './deferred-install.ts'
+import { deferredInstallInProgress, pendingDeferredInstall, scheduleInstallAfterExit, takeDeferredOutcome, type DeferredInstall } from './deferred-install.ts'
 import { mappedImages, ownPackageRoot } from './native-images.ts'
 import type { ProfileStore } from './preferences.ts'
 
@@ -199,7 +199,12 @@ export class UpdateChecker {
     this.installed = this.own?.version ?? ''
     this.latest = this.store.updateRecord().latestVersion || null
     const remembered = this.store.updateRecord().lastError
-    if (remembered !== '') this.error = remembered
+    // A remembered failure whose version is no longer newer than the installed one is
+    // history (a manual reinstall, a newer build): do not resurrect it on every start.
+    if (remembered !== '') {
+      if (this.latest !== null && compareVersions(this.latest, this.installed) <= 0) this.store.setUpdateRecord({ lastError: '' })
+      else this.error = remembered
+    }
     this.installing = deferredInstallInProgress(this.store.dir)
     this.adoptDeferredOutcome()
   }
@@ -211,7 +216,16 @@ export class UpdateChecker {
   adoptDeferredOutcome(): void {
     const outcome = takeDeferredOutcome(this.store.dir)
     this.installing = deferredInstallInProgress(this.store.dir)
-    if (outcome !== undefined && !outcome.ok) this.error = outcome.detail === '' ? 'deferred-install-failed' : outcome.detail
+    if (outcome === undefined) return
+    if (outcome.ok) {
+      // The deferred install is what the remembered failure was about; a later
+      // check must not keep showing it.
+      this.error = null
+      this.pendingBuilds = []
+      this.store.setUpdateRecord({ lastError: '' })
+      return
+    }
+    this.error = outcome.detail === '' ? 'deferred-install-failed' : outcome.detail
   }
 
   /**
@@ -240,7 +254,7 @@ export class UpdateChecker {
       autoCheck: this.store.updateRecord().autoCheck,
       checkedAt: this.store.updateRecord().checkedAt || null,
       restartRequired: this.restartRequired,
-      deferred: this.deferred !== null,
+      deferred: this.deferredPending(),
       installing,
       error: this.error,
       pendingBuilds: [...this.pendingBuilds],
@@ -294,11 +308,17 @@ export class UpdateChecker {
         return
       }
       this.latest = latest
-      this.error = this.rememberedError()
-      const announce = compareVersions(latest, this.installed) > 0 && record.notifiedVersion !== latest
+      // A remembered failure only describes an upgrade that is still available. Once
+      // the installed version caught up (a manual reinstall, a deferred install that
+      // finally landed), keeping it would show a failure for work already done.
+      const updateAvailable = compareVersions(latest, this.installed) > 0
+      this.error = updateAvailable ? this.rememberedError() : null
+      if (!updateAvailable) this.pendingBuilds = []
+      const announce = updateAvailable && record.notifiedVersion !== latest
       this.store.setUpdateRecord({
         checkedAt: Date.now(),
         latestVersion: latest,
+        ...updateAvailable ? {} : { lastError: '' },
         ...announce ? { notifiedVersion: latest } : {},
       })
       if (announce) this.deps.notify(latest)
@@ -360,6 +380,10 @@ export class UpdateChecker {
         this.noteFailure(result)
         return
       }
+      if (result.application === 'cancelled') {
+        this.error = 'cancelled'
+        return
+      }
       this.accept(version)
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error)
@@ -395,42 +419,82 @@ export class UpdateChecker {
     // pnpm remove rewrites the workspace file. Put the exemption back first so the
     // install that follows cannot settle for a release that is already a day old.
     exemptReleaseAge(this.store.dir, name)
-    const removed = await removeBundle.call(manager, name)
-    if (removed.application === 'failed') {
+    let removed: InstallResult
+    try {
+      removed = await removeBundle.call(manager, name)
+    } catch (error) {
+      // A rejected removal may have deselected the bundle before it threw; turn it
+      // back on or the ball stays off with nobody left to show the message.
+      this.error = error instanceof Error ? error.message : String(error)
+      this.rememberFailure()
+      await this.reenable(manager, name)
+      return
+    }
+    if (removed.application === 'failed' || removed.application === 'cancelled') {
       if (isLockedFileFailure(removed.error)) {
         // The package is still the running one, and pnpm could not delete it.
-        // Turn it back on if the removal got as far as deselecting it, then let
-        // the after-exit script add the new version once this process is gone.
-        if (!removalStoppedBeforeDisable(removed.error)) await this.reenable(manager, name)
+        // Queue the after-exit install first: reenabling reloads this bundle, and the
+        // instance that starts then reads the job file, not this instance's fields.
         this.deferUntilExit(version, spec, registry, approvedBuilds ?? [])
+        if (this.error !== null) this.rememberFailure()
+        if (!removalStoppedBeforeDisable(removed.error)) await this.reenable(manager, name)
         return
       }
-      this.noteFailure(removed)
+      if (removed.application === 'cancelled') this.error = 'cancelled'
+      else this.noteFailure(removed)
       if (!removalStoppedBeforeDisable(removed.error)) {
         this.rememberFailure()
         await this.reenable(manager, name)
       }
       return
     }
-    const again = await this.requestInstall(manager, spec, registry, approvedBuilds)
+    let again: InstallResult
+    try {
+      again = await this.requestInstall(manager, spec, registry, approvedBuilds)
+    } catch (error) {
+      // The previous version was removed and this call never produced a result:
+      // put the running version back rather than leave the bundle absent.
+      this.error = error instanceof Error ? error.message : String(error)
+      this.rememberFailure()
+      await this.restorePrevious(manager, name, previous, registry, approvedBuilds)
+      return
+    }
     if (again.application === 'failed' && isLockedFileFailure(again.error)) {
       // The new files are already half-written. Installing the previous version
       // over that tree fails the same way, so the repair waits for this process to exit.
       this.deferUntilExit(version, spec, registry, approvedBuilds ?? [])
       return
     }
-    if (again.application === 'failed') {
-      this.noteFailure(again)
+    if (again.application === 'failed' || again.application === 'cancelled') {
+      if (again.application === 'cancelled') this.error = 'cancelled'
+      else this.noteFailure(again)
       this.rememberFailure()
-      const rolled = await this.requestInstall(manager, installSpec(previous, name), registry, approvedBuilds)
-      // `already-installed` here means the previous package is still on disk, which is the
-      // outcome the rollback wanted. Any other failure leaves the bundle missing.
-      if (rolled.application === 'failed' && rolled.error?.code !== 'already-installed') {
-        console.error(`dsh-orb: restoring ${name}@${previous} failed: ${reportedInstallError(rolled.error)}`)
-      }
+      await this.restorePrevious(manager, name, previous, registry, approvedBuilds)
       return
     }
     this.accept(version)
+  }
+
+  /**
+   * Install the version that was running before a failed replacement.
+   * `already-installed` means that package is still on disk, which is the outcome
+   * the rollback wanted; any other failure leaves the bundle missing and is logged.
+   */
+  private async restorePrevious(
+    manager: PluginManager,
+    name: string,
+    previous: string,
+    registry: string,
+    approvedBuilds: string[] | undefined,
+  ): Promise<void> {
+    try {
+      const rolled = await this.requestInstall(manager, exactSpec(previous, name), registry, approvedBuilds)
+      if (rolled.application === 'failed' && rolled.error?.code !== 'already-installed') {
+        console.error(`dsh-orb: restoring ${name}@${previous} failed: ${reportedInstallError(rolled.error)}`)
+      }
+    } catch (error) {
+      console.error(`dsh-orb: restoring ${name}@${previous} failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   /** Install one spec with the bundle left enabled. */
@@ -495,9 +559,20 @@ export class UpdateChecker {
   }
 
   private available(): boolean {
-    return this.own !== undefined && this.latest !== null && this.latest !== this.deferred
+    return this.own !== undefined && this.latest !== null && !this.deferredPending()
       && !this.installInProgress()
       && compareVersions(this.latest, this.installed) > 0
+  }
+
+  /**
+   * Whether an after-exit install is queued. The job file outlives this instance,
+   * so the plugin a bundle toggle reloads still hides the update button and keeps
+   * showing the deferred banner instead of offering the same install again.
+   * @returns true while the upgrade waits for the app to quit.
+   */
+  private deferredPending(): boolean {
+    if (this.deferred !== null) return true
+    return pendingDeferredInstall(this.store.dir) !== undefined
   }
 
   private lockedImages(): string[] {
@@ -513,7 +588,7 @@ export class UpdateChecker {
   }
 
   private deferUntilExit(version: string, spec: string, registry: string, approvedBuilds: readonly string[]): void {
-    const job: DeferredInstall = { profileDir: this.store.dir, spec, registry, parentPid: process.pid, approvedBuilds }
+    const job: DeferredInstall = { profileDir: this.store.dir, spec, version, registry, parentPid: process.pid, approvedBuilds }
     try {
       (this.deps.deferInstall ?? scheduleInstallAfterExit)(job)
     } catch (error) {
@@ -613,8 +688,15 @@ export function registryTarballUrl(base: string, name: string, version: string):
 export function installSpec(version: string, name: string): string {
   const overridden = process.env.DSH_ORB_UPDATE_URL?.trim()
   if (overridden !== undefined && overridden !== '') return overridden
-  const clean = version.trim().replace(/^v/, '')
-  return `${name}@${clean}`
+  return exactSpec(version, name)
+}
+
+/**
+ * `name@version`, ignoring the staged-update override. A rollback must restore the
+ * version that was running, not whatever `DSH_ORB_UPDATE_URL` points at.
+ */
+function exactSpec(version: string, name: string): string {
+  return `${name}@${version.trim().replace(/^v/, '')}`
 }
 
 /**
