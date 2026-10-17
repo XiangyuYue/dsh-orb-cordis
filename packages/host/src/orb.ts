@@ -63,6 +63,13 @@ export interface OrbContext {
       readonly sessionId?: string
       readonly agentPreset?: string
     }): Promise<{ readonly sessionId: string }>
+    /**
+     * Resolve or resume one existing Session: the live Agent when it is already attached, otherwise
+     * the resumed one. This — not `create` — is how a stored conversation is opened. Since dsh
+     * 0.2.1 `create` reuses a named Session only while it is still blank and otherwise mints a
+     * different one, the same contract both versions already carry for `resolveAgent`.
+     */
+    resolveAgent(sessionId: string): Promise<{ readonly agent: unknown } | { readonly error: unknown }>
     prompt(request: {
       readonly requestId: string
       readonly sessionId: string
@@ -727,22 +734,39 @@ export class OrbRuntime {
   private async createSession(): Promise<string> {
     const workspaceId = await this.workspaceId()
     const saved = await readSavedSession(this.sessionFile)
-    try {
-      const session = await this.ctx.sessionController.create({
-        workspaceId,
-        agentPreset: 'computer-use',
-        ...saved ? { sessionId: saved } : {},
-      })
-      return this.adopt(session.sessionId)
-    } catch (error) {
-      if (!saved) throw error
+    if (saved !== undefined) {
+      if (await this.openConversation(saved)) return this.adopt(saved)
       console.error('dsh-orb: saved session cannot be opened; creating a new one')
       await rm(this.sessionFile, { force: true })
-      const session = await this.ctx.sessionController.create({
-        workspaceId,
-        agentPreset: 'computer-use',
-      })
-      return this.adopt(session.sessionId)
+    }
+    const session = await this.ctx.sessionController.create({
+      workspaceId,
+      agentPreset: 'computer-use',
+    })
+    return this.adopt(session.sessionId)
+  }
+
+  /**
+   * Make one stored or already-live conversation current, keeping its identity.
+   *
+   * `sessionController.create` cannot open a conversation that has any history. Since dsh 0.2.1 a
+   * named Session is reused only while it is still blank; one that has started a turn "stays
+   * unchanged, and a new Session is created instead" — which is how clicking a history row used to
+   * land the ball in an empty untitled chat. `resolveAgent` is the documented resolve-or-resume
+   * entry: it keeps a live Agent, resumes a cold one, and re-mounts the preset the Session recorded.
+   */
+  private async openConversation(sessionId: string): Promise<boolean> {
+    try {
+      const resolved = await this.ctx.sessionController.resolveAgent(sessionId)
+      if ('error' in resolved) {
+        const reason = resolved.error instanceof Error ? resolved.error.message : JSON.stringify(resolved.error)
+        console.error(`dsh-orb: session ${sessionId} cannot be opened: ${reason}`)
+        return false
+      }
+      return true
+    } catch (error) {
+      console.error(`dsh-orb: session ${sessionId} cannot be opened: ${error instanceof Error ? error.message : String(error)}`)
+      return false
     }
   }
 
@@ -1683,12 +1707,8 @@ export class OrbRuntime {
     const row = rows.find((item) => item.sessionId === sessionId)
     if (!row) return
     this.failQuestion('ask_user_question was aborted before the user answered', 'ASK_ABORTED')
-    const session = await this.ctx.sessionController.create({
-      workspaceId: await this.workspaceId(),
-      agentPreset: 'computer-use',
-      sessionId,
-    })
-    await this.adopt(session.sessionId)
+    if (!(await this.openConversation(sessionId))) return
+    await this.adopt(sessionId)
     this.resetTranscript()
     this.replaying = true
     this.drain()

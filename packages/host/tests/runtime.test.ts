@@ -42,6 +42,7 @@ interface Harness {
   profile: string
   calls: {
     create: { workspaceId?: string; sessionId?: string; agentPreset?: string }[]
+    resolve: string[]
     prompt: { sessionId?: string; content?: { text?: string }[] }[]
     cancel: { sessionId?: string }[]
     selectModel: { sessionId?: string; model?: string; reasoningEffort?: string; saveAsDefault?: boolean }[]
@@ -77,7 +78,7 @@ function boot(extra: {
     writeFileSync(join(profile, 'millifraction-coordinates.json'), JSON.stringify({ enabled: extra.millifraction }))
   }
   const store = new ProfileStore(profile)
-  const calls: Harness['calls'] = { create: [], prompt: [], cancel: [], selectModel: [] }
+  const calls: Harness['calls'] = { create: [], resolve: [], prompt: [], cancel: [], selectModel: [] }
   const savedDefaults: Harness['savedDefaults'] = []
   const previousDefault = { provider: 'deepseek-official', model: 'deepseek-v4', reasoningEffort: 'high' }
   const sessions = new Map<string, { events: EventRow[]; header: { cwd: string; agentPreset: string } }>()
@@ -111,6 +112,14 @@ function boot(extra: {
       },
     },
   ]
+  /** The stored body of one Session: seeded on first create or resolve, as persistence would. */
+  const seedSession = (sessionId: string): void => {
+    if (sessions.has(sessionId)) return
+    sessions.set(sessionId, {
+      events: sessionId === 'session-keep' ? replay : [],
+      header: { cwd: orb, agentPreset: 'computer-use' },
+    })
+  }
   const ctx = {
     webServer: { port: 9, register: () => () => {} },
     connection: {
@@ -126,14 +135,25 @@ function boot(extra: {
     sessionController: {
       async create(request: { workspaceId?: string; sessionId?: string; agentPreset?: string }) {
         calls.create.push(request)
-        const sessionId = request.sessionId ?? `session-new-${calls.create.length}`
-        if (!sessions.has(sessionId)) {
-          sessions.set(sessionId, {
-            events: request.sessionId === 'session-keep' ? replay : [],
-            header: { cwd: orb, agentPreset: 'computer-use' },
-          })
+        // dsh 0.2.1 `create`: a named Session is reused only while it is still blank. One that has
+        // stored history "stays unchanged, and a new Session is created instead" — the exact
+        // behaviour that used to land the ball in an empty untitled chat.
+        const named = request.sessionId
+        if (named !== undefined && (sessions.get(named)?.events.length ?? 0) === 0) {
+          seedSession(named)
+          return { sessionId: named }
         }
+        const sessionId = `session-new-${calls.create.length}`
+        seedSession(sessionId)
         return { sessionId }
+      },
+      // Resolve or resume one existing Session: the live Agent, or the resumed one.
+      async resolveAgent(sessionId: string) {
+        calls.resolve.push(sessionId)
+        const stored = sessions.has(sessionId) || listItems.some((item) => item.sessionId === sessionId)
+        if (!stored) return { error: { code: 'session/not-found', sessionId } }
+        seedSession(sessionId)
+        return { agent: { session: { id: sessionId } } }
       },
       async prompt(request: { sessionId?: string; content?: { text?: string }[] }) {
         calls.prompt.push(request)
@@ -341,19 +361,72 @@ describe('ball control socket', { concurrency: 1 }, () => {
       assert.equal(history.items.some((item) => item.title === '子目录'), false)
       harness.listItems.splice(0, harness.listItems.length, harness.listItems.find((item) => item.sessionId === 'session-keep') as Row)
       const mark = client.messages.length
+      const creates = harness.calls.create.length
       client.send({ type: 'open', sessionId: 'session-keep' })
       await waitFor(() => client.messages.slice(mark).some((message) => message.type === 'block' && message.text === 'click'))
       const blocks = client.messages.slice(mark).filter((message) => message.type === 'block')
       assert.deepEqual(blocks.map((message) => message.text), ['你好', '好', 'click', 'click'])
       // The generic plugin notice stays invisible; only code_agent reports get a card.
       assert.equal(blocks.some((message) => message.text === '跳过'), false)
-      assert.equal(harness.calls.create.at(-1)?.sessionId, 'session-keep')
-      assert.equal(harness.calls.create.at(-1)?.agentPreset, 'computer-use')
-      const creates = harness.calls.create.length
+      // Opening resumes the stored conversation by identity; it must not mint a fresh Session.
+      assert.equal(harness.calls.resolve.at(-1), 'session-keep')
+      assert.equal(harness.calls.create.length, creates)
+      const adopted = client.messages.slice(mark).find((message) => message.type === 'session') as { sessionId: string }
+      assert.equal(adopted.sessionId, 'session-keep')
+      assert.equal(JSON.parse(readFileSync(join(home, 'dsh-orb', 'floating-session.json'), 'utf8')).sessionId, 'session-keep')
       client.send({ type: 'open', sessionId: 'session-missing' })
       client.send({ type: 'open', sessionId: 'not-a-session' })
       await new Promise((resolve) => setTimeout(resolve, 40))
       assert.equal(harness.calls.create.length, creates)
+      assert.equal(harness.calls.resolve.at(-1), 'session-keep')
+    } finally {
+      client.socket.end()
+      harness.runtime.halt()
+    }
+  })
+
+  it('restores the saved conversation on startup instead of minting an empty one', async () => {
+    const harness = boot()
+    mkdirSync(join(home, 'dsh-orb'), { recursive: true })
+    writeFileSync(join(home, 'dsh-orb', 'floating-session.json'), `${JSON.stringify({ sessionId: 'session-restored' })}\n`)
+    harness.listItems.push({
+      sessionId: 'session-restored',
+      cwd: orb,
+      origin: 'user',
+      projections: { values: { agentPreset: 'computer-use', title: '上次那段' } },
+    })
+    const client = await connect(harness.runtime)
+    try {
+      client.send({ type: 'prompt', text: '继续' })
+      await waitFor(() => harness.calls.prompt.length > 0)
+      assert.equal(harness.calls.resolve.at(-1), 'session-restored')
+      assert.equal(harness.calls.prompt.at(-1)?.sessionId, 'session-restored')
+      assert.equal(harness.calls.create.length, 0)
+      await waitFor(() => client.messages.some((message) => message.type === 'session'))
+      const session = client.messages.find((message) => message.type === 'session') as { sessionId: string }
+      assert.equal(session.sessionId, 'session-restored')
+      assert.equal(JSON.parse(readFileSync(join(home, 'dsh-orb', 'floating-session.json'), 'utf8')).sessionId, 'session-restored')
+    } finally {
+      client.socket.end()
+      harness.runtime.halt()
+    }
+  })
+
+  it('starts a fresh conversation when the saved one is gone', async () => {
+    const harness = boot()
+    mkdirSync(join(home, 'dsh-orb'), { recursive: true })
+    writeFileSync(join(home, 'dsh-orb', 'floating-session.json'), `${JSON.stringify({ sessionId: 'session-deleted' })}\n`)
+    const client = await connect(harness.runtime)
+    try {
+      client.send({ type: 'prompt', text: '你好' })
+      await waitFor(() => harness.calls.prompt.length > 0)
+      assert.equal(harness.calls.resolve.at(-1), 'session-deleted')
+      assert.equal(harness.calls.create.length, 1)
+      assert.equal(harness.calls.prompt.at(-1)?.sessionId, 'session-new-1')
+      await waitFor(() => client.messages.some((message) => message.type === 'session'))
+      const session = client.messages.find((message) => message.type === 'session') as { sessionId: string }
+      assert.equal(session.sessionId, 'session-new-1')
+      assert.equal(JSON.parse(readFileSync(join(home, 'dsh-orb', 'floating-session.json'), 'utf8')).sessionId, 'session-new-1')
     } finally {
       client.socket.end()
       harness.runtime.halt()
