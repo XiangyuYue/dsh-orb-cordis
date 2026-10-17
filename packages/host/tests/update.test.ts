@@ -24,17 +24,53 @@ function store(): ProfileStore {
 }
 
 /** A manager that records the spec it was handed and answers with a scripted result. */
-function manager(result: Record<string, unknown> = { application: 'restart-required' }) {
+function manager(
+  result: Record<string, unknown> = { application: 'restart-required' },
+  script: {
+    /** Results for successive `installBundle` calls. Later calls use `result`. */
+    installs?: Record<string, unknown>[]
+    /** Present when this manager can remove a bundle. The value is what the call returns. */
+    remove?: Record<string, unknown>
+    /** Present when this manager can select a bundle again. */
+    reenable?: Record<string, unknown>
+  } = {},
+) {
   const specs: string[] = []
   const registries: Array<string | undefined> = []
+  const enabled: Array<boolean | undefined> = []
+  const removed: string[] = []
+  const reenabled: string[] = []
+  const trace: string[] = []
+  let cursor = 0
   return {
     specs,
     registries,
+    enabled,
+    removed,
+    reenabled,
+    trace,
     service: {
-      async installBundle(spec: string, options?: { registry?: string }) {
+      async installBundle(spec: string, options?: { registry?: string; enabled?: boolean }) {
         specs.push(spec)
         registries.push(options?.registry)
-        return result
+        enabled.push(options?.enabled)
+        const scripted = script.installs?.[cursor]
+        cursor += 1
+        return scripted ?? result
+      },
+      ...script.remove === undefined ? {} : {
+        async removeBundle(name: string) {
+          trace.push('remove')
+          removed.push(name)
+          return script.remove
+        },
+      },
+      ...script.reenable === undefined ? {} : {
+        async setBundleEnabled(name: string) {
+          trace.push('enable')
+          reenabled.push(name)
+          return script.reenable
+        },
       },
     },
   }
@@ -45,10 +81,17 @@ function checker(options: {
   own?: { name: string; version: string } | undefined
   latest?: string | undefined
   result?: Record<string, unknown>
+  installs?: Record<string, unknown>[]
+  remove?: Record<string, unknown>
+  reenable?: Record<string, unknown>
   notify?: (version: string) => void
   mapped?: string[]
 }) {
-  const fake = manager(options.result)
+  const fake = manager(options.result, {
+    installs: options.installs,
+    remove: options.remove,
+    reenable: options.reenable,
+  })
   const announced: string[] = []
   const deferred: DeferredInstall[] = []
   const update = new UpdateChecker({
@@ -58,9 +101,19 @@ function checker(options: {
     fetchLatest: async () => options.latest,
     own: 'own' in options ? options.own : { name: 'dsh-orb', version: '0.1.0' },
     mappedImages: () => options.mapped ?? [],
-    deferInstall: (job) => { deferred.push(job) },
+    deferInstall: (job) => { fake.trace.push('defer'); deferred.push(job) },
   })
-  return { update, announced, specs: fake.specs, registries: fake.registries, deferred }
+  return {
+    update,
+    announced,
+    specs: fake.specs,
+    registries: fake.registries,
+    enabled: fake.enabled,
+    removed: fake.removed,
+    reenabled: fake.reenabled,
+    trace: fake.trace,
+    deferred,
+  }
 }
 
 /** A local http mock answering `routes[path]` with `[status, body]`; other paths hang up. */
@@ -381,6 +434,7 @@ describe('update checker', () => {
       latestVersion: '0.2.0',
       notifiedVersion: '0.2.0',
       autoCheck: true,
+      lastError: '',
     })
     // A second check on the same version stays quiet, and a restart does too.
     await update.check()
@@ -582,6 +636,145 @@ describe('update checker', () => {
     assert.equal(state.available, false, 'nothing is left to install')
     assert.equal(state.restartRequired, true, 'the running process still holds the old code')
     assert.equal(update.availableVersion(), null)
+  })
+
+  it('leaves an installed bundle in place when the manager still replaces it', async () => {
+    const profile = store()
+    const { update, specs, removed } = checker({
+      store: profile,
+      latest: '0.2.0',
+      remove: { application: 'applied' },
+    })
+    await update.check()
+    await update.install()
+    assert.deepEqual(removed, [], 'a manager that installs over the package is not asked to remove it')
+    assert.deepEqual(specs, ['dsh-orb@0.2.0'])
+    assert.equal(update.state().installedVersion, '0.2.0')
+  })
+
+  it('removes an already-installed bundle and installs the same spec again', async () => {
+    const profile = store()
+    profile.setUpdateRecord({ lastError: 'stale' })
+    const { update, specs, enabled, removed } = checker({
+      store: profile,
+      latest: '0.2.0',
+      installs: [
+        { application: 'failed', error: { code: 'already-installed' } },
+        { application: 'applied' },
+      ],
+      remove: { application: 'applied' },
+    })
+    assert.equal(update.state().error, 'stale', 'a reload shows the failure the previous attempt stored')
+    await update.check()
+    assert.equal(update.state().error, 'stale', 'checking again does not clear a stored upgrade failure')
+    await update.install()
+    assert.deepEqual(removed, ['dsh-orb'])
+    assert.deepEqual(specs, ['dsh-orb@0.2.0', 'dsh-orb@0.2.0'])
+    assert.deepEqual(enabled, [true, true], 'both installs leave the bundle selected')
+    const state = update.state()
+    assert.equal(state.error, null)
+    assert.equal(state.installedVersion, '0.2.0')
+    assert.equal(state.available, false)
+    assert.equal(profile.updateRecord().lastError, '')
+  })
+
+  it('keeps the installed bundle when removal is refused before it is turned off', async () => {
+    const profile = store()
+    const { update, specs, removed, reenabled } = checker({
+      store: profile,
+      latest: '0.2.0',
+      installs: [{ application: 'failed', error: { code: 'already-installed' } }],
+      remove: { application: 'failed', error: { code: 'not-removable' } },
+      reenable: { application: 'applied' },
+    })
+    await update.check()
+    await update.install()
+    assert.deepEqual(removed, ['dsh-orb'])
+    assert.deepEqual(specs, ['dsh-orb@0.2.0'], 'a refused removal does not install again')
+    assert.deepEqual(reenabled, [], 'the bundle was never deselected')
+    assert.equal(update.state().error, 'not-removable')
+    assert.equal(update.state().installedVersion, '0.1.0')
+    assert.equal(profile.updateRecord().lastError, '')
+  })
+
+  it('turns the bundle back on when removal fails after deselecting it', async () => {
+    const profile = store()
+    const { update, specs, reenabled } = checker({
+      store: profile,
+      latest: '0.2.0',
+      installs: [{ application: 'failed', error: { code: 'already-installed' } }],
+      remove: { application: 'failed', error: { code: 'bundle-in-use' } },
+      reenable: { application: 'applied' },
+    })
+    await update.check()
+    await update.install()
+    assert.deepEqual(specs, ['dsh-orb@0.2.0'])
+    assert.deepEqual(reenabled, ['dsh-orb'])
+    assert.equal(update.state().error, 'bundle-in-use')
+    assert.equal(profile.updateRecord().lastError, 'bundle-in-use')
+    const restored = checker({ store: profile, latest: '0.2.0' })
+    assert.equal(restored.update.state().error, 'bundle-in-use', 'the reloaded page can still say why')
+  })
+
+  it('installs after the app quits when removal cannot delete a locked package', async () => {
+    const profile = store()
+    const { update, specs, trace, deferred } = checker({
+      store: profile,
+      latest: '0.2.0',
+      installs: [{ application: 'failed', error: { code: 'already-installed' } }],
+      remove: {
+        application: 'failed',
+        error: { code: 'operation-error', diagnostic: 'ERR_PNPM_EPERM: EPERM, unlink' },
+      },
+      reenable: { application: 'applied' },
+    })
+    await update.check()
+    await update.install()
+    assert.deepEqual(specs, ['dsh-orb@0.2.0'], 'the locked package is not installed again in this process')
+    assert.deepEqual(trace, ['remove', 'enable', 'defer'])
+    assert.equal(deferred.length, 1)
+    assert.equal(deferred[0]?.spec, 'dsh-orb@0.2.0')
+    assert.equal(update.state().error, null)
+    assert.equal(update.state().deferred, true)
+  })
+
+  it('installs the running version again when the replacement install fails', async () => {
+    const profile = store()
+    const { update, specs, removed } = checker({
+      store: profile,
+      latest: '0.2.0',
+      installs: [
+        { application: 'failed', error: { code: 'already-installed' } },
+        { application: 'failed', error: { code: 'incompatible-version' } },
+        { application: 'applied' },
+      ],
+      remove: { application: 'applied' },
+    })
+    await update.check()
+    await update.install()
+    assert.deepEqual(removed, ['dsh-orb'])
+    assert.deepEqual(specs, ['dsh-orb@0.2.0', 'dsh-orb@0.2.0', 'dsh-orb@0.1.0'])
+    assert.equal(update.state().error, 'incompatible-version')
+    assert.equal(update.state().installedVersion, '0.1.0', 'the failed upgrade does not count as installed')
+    assert.equal(update.availableVersion(), '0.2.0')
+    assert.equal(profile.updateRecord().lastError, 'incompatible-version')
+    const restored = checker({ store: profile, latest: '0.2.0' })
+    assert.equal(restored.update.state().error, 'incompatible-version')
+  })
+
+  it('reports already-installed when the manager cannot remove a bundle', async () => {
+    const profile = store()
+    const { update, specs, removed } = checker({
+      store: profile,
+      latest: '0.2.0',
+      result: { application: 'failed', error: { code: 'already-installed' } },
+    })
+    await update.check()
+    await update.install()
+    assert.deepEqual(removed, [])
+    assert.deepEqual(specs, ['dsh-orb@0.2.0'])
+    assert.equal(update.state().error, 'already-installed')
+    assert.equal(update.state().installedVersion, '0.1.0')
   })
 
   it('reports how an install failed instead of throwing', async () => {

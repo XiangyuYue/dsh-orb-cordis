@@ -48,9 +48,15 @@ export interface UpdateRecord {
   /** Version the ball already announced, so a restart does not repeat itself. */
   readonly notifiedVersion: string
   readonly autoCheck: boolean
+  /**
+   * Why the last upgrade failed, when the failure happened after this plugin was
+   * unloaded. Empty once the next install starts. A reload reads it back, because
+   * the instance that saw the failure is already gone.
+   */
+  readonly lastError: string
 }
 
-const DEFAULT_UPDATE: UpdateRecord = { checkedAt: 0, latestVersion: '', notifiedVersion: '', autoCheck: true }
+const DEFAULT_UPDATE: UpdateRecord = { checkedAt: 0, latestVersion: '', notifiedVersion: '', autoCheck: true, lastError: '' }
 
 const DEFAULT_MODEL: AgentModelSelection = {
   provider: 'deepseek-official',
@@ -360,6 +366,7 @@ function readUpdate(dir: string): UpdateRecord {
     latestVersion: typeof stored.latestVersion === 'string' ? stored.latestVersion : '',
     notifiedVersion: typeof stored.notifiedVersion === 'string' ? stored.notifiedVersion : '',
     autoCheck: typeof stored.autoCheck === 'boolean' ? stored.autoCheck : true,
+    lastError: typeof stored.lastError === 'string' ? stored.lastError : '',
   }
 }
 

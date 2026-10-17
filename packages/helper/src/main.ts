@@ -650,6 +650,11 @@ function updateFailureText(reason: unknown, zh: boolean): string {
   if (reason === 'incompatible-version') {
     return zh ? '当前 Harness 版本与新版不兼容' : 'the new version is incompatible with this Harness build'
   }
+  if (reason === 'already-installed') {
+    return zh
+      ? '当前 Harness 不允许覆盖已安装的插件，请在插件页移除后再安装新版本'
+      : 'this Harness build refuses to install over a plugin that is already installed — remove it on the Plugins page, then install the new version'
+  }
   if (typeof reason === 'string' && reason !== '') return reason
   return zh ? '未知错误' : 'unknown error'
 }

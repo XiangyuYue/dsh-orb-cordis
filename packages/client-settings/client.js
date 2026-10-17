@@ -78,6 +78,7 @@ window.__ModuleLoader__.load({
       updateFailed: '更新失败：',
       updateOffline: '无法连接镜像或 npm，请检查网络后重试。',
       updateBuildBlocked: '新版本依赖的安装脚本未获授权，安装已停止。',
+      updateAlreadyInstalled: '当前 Harness 不允许覆盖已安装的插件，请在插件页移除后再安装新版本。',
       updateAllowBuilds: '允许安装脚本并重试',
       updateCheck: '检查更新',
       updateChecking: '正在检查…',
@@ -157,6 +158,7 @@ window.__ModuleLoader__.load({
       updateFailed: 'Update failed: ',
       updateOffline: 'no registry could be reached. Check the network and try again.',
       updateBuildBlocked: 'A dependency of the new version needs install-script approval, so the install stopped.',
+      updateAlreadyInstalled: 'This Harness build refuses to install over a plugin that is already installed. Remove it on the Plugins page, then install the new version.',
       updateAllowBuilds: 'Allow these scripts and retry',
       updateCheck: 'Check for updates',
       updateChecking: 'Checking…',
@@ -645,7 +647,9 @@ window.__ModuleLoader__.load({
           ? text.updateOffline
           : update.error === 'build-blocked'
             ? text.updateBuildBlocked
-            : update.error
+            : update.error === 'already-installed'
+              ? text.updateAlreadyInstalled
+              : update.error
         return h('p', { className: 'dsh-orb-set-error', role: 'alert' }, `${text.updateFailed}${detail}`)
       }
       if (update.installing) {

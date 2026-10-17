@@ -37,7 +37,7 @@ describe('profile preferences', () => {
     assert.equal(store.avatarVersion(), 0)
     assert.equal(store.readAvatar(), undefined)
     // Nothing has been checked yet: no remembered version, and the automatic check is on.
-    assert.deepEqual(store.updateRecord(), { checkedAt: 0, latestVersion: '', notifiedVersion: '', autoCheck: true })
+    assert.deepEqual(store.updateRecord(), { checkedAt: 0, latestVersion: '', notifiedVersion: '', autoCheck: true, lastError: '' })
   })
 
   it('remembers the last update check and survives a half-written file', () => {
@@ -51,7 +51,10 @@ describe('profile preferences', () => {
       latestVersion: '0.2.0',
       notifiedVersion: '0.2.0',
       autoCheck: true,
+      lastError: '',
     })
+    store.setUpdateRecord({ lastError: 'incompatible-version' })
+    assert.equal(new ProfileStore(path).updateRecord().lastError, 'incompatible-version')
     store.setUpdateRecord({ autoCheck: false })
     assert.equal(new ProfileStore(path).updateRecord().autoCheck, false)
     writeFileSync(join(path, 'orb-update.json'), '{')

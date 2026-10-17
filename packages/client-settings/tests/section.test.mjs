@@ -611,6 +611,14 @@ describe('settings section', () => {
     await settle()
     assert.deepEqual(JSON.parse(page.calls.at(-1).options.body), { approvedBuilds: ['koffi'] })
 
+    // A manager that still reports already-installed has no removal step. Say so in words.
+    page.setUpdate({ updating: false, available: true, error: 'already-installed', pendingBuilds: [] })
+    page.reset()
+    view = page.render()
+    await page.flush()
+    view = page.render()
+    assert.match(texts(), /更新失败：当前 Harness 不允许覆盖已安装的插件，请在插件页移除后再安装新版本。/)
+
     // Once installed, the card asks for the restart instead of offering the same version again.
     page.setUpdate({ updating: false, available: false, error: null, restartRequired: true, installedVersion: '0.2.0', latestVersion: '0.2.0' })
     page.reset()
