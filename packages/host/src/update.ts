@@ -83,6 +83,19 @@ export interface PluginManager {
     /** Registry asked first. The manager keeps its own fallbacks when this one is among them. */
     registry?: string
   }): Promise<InstallResult>
+  /**
+   * Remove an installed bundle by package name.
+   * With HMR, `installBundle` of a package that is already installed fails with
+   * `already-installed` before pnpm runs; the upgrade removes the bundle first.
+   * Absent on a manager that still installs over the current package itself.
+   */
+  removeBundle?(name: string): Promise<InstallResult>
+  /**
+   * Turn a bundle back on without installing it.
+   * `removeBundle` disables the bundle before pnpm runs, so a removal that fails
+   * after that point has to select it again or the ball stays off.
+   */
+  setBundleEnabled?(name: string, enabled: boolean): Promise<InstallResult>
 }
 
 export interface InstallResult {
@@ -176,6 +189,8 @@ export class UpdateChecker {
   private interval: ReturnType<typeof setInterval> | undefined
   /** The registry base that answered the last check; GitHub is the fallback when none did. */
   private source: string | undefined
+  /** Distinguishes install requests issued in the same millisecond. */
+  private requestSerial = 0
 
   constructor(deps: UpdateDeps) {
     this.deps = deps
@@ -183,6 +198,8 @@ export class UpdateChecker {
     this.own = 'own' in deps ? deps.own : ownPackage()
     this.installed = this.own?.version ?? ''
     this.latest = this.store.updateRecord().latestVersion || null
+    const remembered = this.store.updateRecord().lastError
+    if (remembered !== '') this.error = remembered
     this.installing = deferredInstallInProgress(this.store.dir)
     this.adoptDeferredOutcome()
   }
@@ -266,7 +283,9 @@ export class UpdateChecker {
       const latest = await this.fetch()
       if (latest === null) {
         // The repository answered but publishes no release yet: a clean, quiet nothing.
-        this.error = null
+        // A failure remembered from an upgrade that unloaded this plugin stays up; a check
+        // does not retry the install, so it must not look like the failure went away.
+        this.error = this.rememberedError()
         this.store.setUpdateRecord({ checkedAt: Date.now() })
         return
       }
@@ -275,7 +294,7 @@ export class UpdateChecker {
         return
       }
       this.latest = latest
-      this.error = null
+      this.error = this.rememberedError()
       const announce = compareVersions(latest, this.installed) > 0 && record.notifiedVersion !== latest
       this.store.setUpdateRecord({
         checkedAt: Date.now(),
@@ -293,13 +312,19 @@ export class UpdateChecker {
    * The spec is `name@version` and the registry is the one that answered the
    * check, so pnpm resolves registry metadata — including `dist.integrity` —
    * instead of a bare tarball URL. The manager owns the profile lock, the
-   * download and the manifest restore; an already-installed bundle is replaced
-   * and the result says the restart carries the new code.
+   * download and the manifest restore.
+   *
+   * A manager without HMR still installs over the package that is already there.
+   * With HMR (every shipped desktop profile), that call fails before pnpm with
+   * `already-installed`. The upgrade then follows the manager's own rule: remove
+   * the bundle, then install the same spec. The removal stops this plugin; the
+   * promise that called it keeps running and issues the install.
    *
    * On Windows a package whose native addon is loaded cannot be replaced: pnpm
    * fails with EPERM after it has already deleted part of the live package.
    * When the probe finds such an addon, or pnpm fails that way anyway, the
    * install waits for the app to quit instead (see `deferred-install.ts`).
+   * That path runs pnpm directly, so the HMR refusal never applies to it.
    */
   async install(approvedBuilds?: string[]): Promise<void> {
     const version = this.availableVersion()
@@ -308,38 +333,161 @@ export class UpdateChecker {
     this.updating = true
     this.error = null
     this.pendingBuilds = []
+    const name = this.own.name
+    const previous = this.own.version
     try {
-      exemptReleaseAge(this.store.dir, this.own.name)
-      const spec = installSpec(version, this.own.name)
+      // Drop a failure the previous attempt left. The next page is either this
+      // process or the build the install is about to load, and neither should
+      // keep describing an attempt that has already been retried.
+      this.store.setUpdateRecord({ lastError: '' })
+      exemptReleaseAge(this.store.dir, name)
+      const spec = installSpec(version, name)
       const registry = installRegistry(this.source)
       if (this.lockedImages().length > 0) {
         this.deferUntilExit(version, spec, registry, approvedBuilds ?? [])
         return
       }
-      const result = await manager.installBundle(spec, {
-        requestId: `dsh-orb-update-${Date.now()}`,
-        registry,
-        ...approvedBuilds === undefined ? {} : { approvedBuilds },
-      })
+      const result = await this.requestInstall(manager, spec, registry, approvedBuilds)
       if (result.application === 'failed' && isLockedFileFailure(result.error)) {
         this.deferUntilExit(version, spec, registry, approvedBuilds ?? [])
         return
       }
-      if (result.application === 'failed') {
-        this.error = reportedInstallError(result.error)
-        this.pendingBuilds = result.pendingBuilds === undefined ? [] : [...result.pendingBuilds]
-        if (this.pendingBuilds.length > 0) this.error = 'build-blocked'
+      if (result.application === 'failed' && result.error?.code === 'already-installed' && typeof manager.removeBundle === 'function') {
+        await this.replaceInstalled(manager, name, previous, version, spec, registry, approvedBuilds)
         return
       }
-      this.installed = version
-      this.latest = version
-      this.restartRequired = compareVersions(version, this.own.version) !== 0
-      this.store.setUpdateRecord({ latestVersion: version, notifiedVersion: version, checkedAt: Date.now() })
+      if (result.application === 'failed') {
+        this.noteFailure(result)
+        return
+      }
+      this.accept(version)
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error)
     } finally {
       this.updating = false
     }
+  }
+
+  /**
+   * Remove the installed bundle and install `spec` in its place.
+   * Called only after `installBundle` refused with `already-installed`, which
+   * changes nothing. The removal is what unloads this plugin; `requestInstall`
+   * then runs on the manager reference captured before that unload.
+   * @param manager - the manager captured before the removal.
+   * @param name - package name, which is the bundle name `removeBundle` takes.
+   * @param previous - version running now, installed again if the new one fails.
+   * @param version - version being installed.
+   * @param spec - `name@version` for {@link version}.
+   * @param registry - registry the check answered from.
+   * @param approvedBuilds - install scripts the settings page approved.
+   */
+  private async replaceInstalled(
+    manager: PluginManager,
+    name: string,
+    previous: string,
+    version: string,
+    spec: string,
+    registry: string,
+    approvedBuilds: string[] | undefined,
+  ): Promise<void> {
+    const removeBundle = manager.removeBundle
+    if (removeBundle === undefined) return
+    // pnpm remove rewrites the workspace file. Put the exemption back first so the
+    // install that follows cannot settle for a release that is already a day old.
+    exemptReleaseAge(this.store.dir, name)
+    const removed = await removeBundle.call(manager, name)
+    if (removed.application === 'failed') {
+      if (isLockedFileFailure(removed.error)) {
+        // The package is still the running one, and pnpm could not delete it.
+        // Turn it back on if the removal got as far as deselecting it, then let
+        // the after-exit script add the new version once this process is gone.
+        if (!removalStoppedBeforeDisable(removed.error)) await this.reenable(manager, name)
+        this.deferUntilExit(version, spec, registry, approvedBuilds ?? [])
+        return
+      }
+      this.noteFailure(removed)
+      if (!removalStoppedBeforeDisable(removed.error)) {
+        this.rememberFailure()
+        await this.reenable(manager, name)
+      }
+      return
+    }
+    const again = await this.requestInstall(manager, spec, registry, approvedBuilds)
+    if (again.application === 'failed' && isLockedFileFailure(again.error)) {
+      // The new files are already half-written. Installing the previous version
+      // over that tree fails the same way, so the repair waits for this process to exit.
+      this.deferUntilExit(version, spec, registry, approvedBuilds ?? [])
+      return
+    }
+    if (again.application === 'failed') {
+      this.noteFailure(again)
+      this.rememberFailure()
+      const rolled = await this.requestInstall(manager, installSpec(previous, name), registry, approvedBuilds)
+      // `already-installed` here means the previous package is still on disk, which is the
+      // outcome the rollback wanted. Any other failure leaves the bundle missing.
+      if (rolled.application === 'failed' && rolled.error?.code !== 'already-installed') {
+        console.error(`dsh-orb: restoring ${name}@${previous} failed: ${reportedInstallError(rolled.error)}`)
+      }
+      return
+    }
+    this.accept(version)
+  }
+
+  /** Install one spec with the bundle left enabled. */
+  private requestInstall(
+    manager: PluginManager,
+    spec: string,
+    registry: string,
+    approvedBuilds: string[] | undefined,
+  ): Promise<InstallResult> {
+    this.requestSerial += 1
+    return manager.installBundle(spec, {
+      enabled: true,
+      requestId: `dsh-orb-update-${Date.now()}-${this.requestSerial}`,
+      registry,
+      ...approvedBuilds === undefined ? {} : { approvedBuilds },
+    })
+  }
+
+  /** Record a failed install on this instance. A script approval stays a distinct code. */
+  private noteFailure(result: InstallResult): void {
+    this.error = reportedInstallError(result.error)
+    this.pendingBuilds = result.pendingBuilds === undefined ? [] : [...result.pendingBuilds]
+    if (this.pendingBuilds.length > 0) this.error = 'build-blocked'
+  }
+
+  /**
+   * Keep {@link noteFailure}'s message where a plugin started by the next call can read it.
+   * The call that follows reloads this bundle, and the reloaded page never sees `this.error`.
+   */
+  private rememberFailure(): void {
+    if (this.error !== null && this.error !== '') this.store.setUpdateRecord({ lastError: this.error })
+  }
+
+  /** The remembered upgrade failure, or nothing when the last attempt did not leave one. */
+  private rememberedError(): string | null {
+    const remembered = this.store.updateRecord().lastError
+    return remembered === '' ? null : remembered
+  }
+
+  /** Select the bundle again after a removal disabled it and then failed. */
+  private async reenable(manager: PluginManager, name: string): Promise<void> {
+    if (typeof manager.setBundleEnabled !== 'function') return
+    try {
+      await manager.setBundleEnabled(name, true)
+    } catch (error) {
+      console.error(`dsh-orb: could not turn the bundle back on after a failed removal: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /** The install landed. The running code is still the previous build until a restart or reload. */
+  private accept(version: string): void {
+    const own = this.own
+    if (own === undefined) return
+    this.installed = version
+    this.latest = version
+    this.restartRequired = compareVersions(version, own.version) !== 0
+    this.store.setUpdateRecord({ latestVersion: version, notifiedVersion: version, checkedAt: Date.now(), lastError: '' })
   }
 
   setAutoCheck(enabled: boolean): void {
@@ -497,6 +645,18 @@ export function reportedInstallError(error: InstallResult['error']): string {
 export function isLockedFileFailure(error: InstallResult['error']): boolean {
   const text = `${error?.code ?? ''}\n${error?.diagnostic ?? ''}`
   return /ERR_PNPM_EPERM|ERR_PNPM_EBUSY|\bEPERM\b|\bEBUSY\b/.test(text)
+}
+
+/**
+ * A removal that failed before it deselected the bundle.
+ * `not-removable` and `stop-profile` are decided before `selectBundle(false)`.
+ * Anything later has already turned the bundle off, and leaving it that way
+ * hides the ball until something selects it again.
+ * @param error - the removal's error.
+ * @returns true when the bundle is still selected.
+ */
+function removalStoppedBeforeDisable(error: InstallResult['error']): boolean {
+  return error?.code === 'not-removable' || error?.code === 'stop-profile'
 }
 
 /**
