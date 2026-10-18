@@ -85,6 +85,31 @@ window.__ModuleLoader__.load({
       updateAuto: '自动检查更新',
       updateAutoDescription: '每天一次向 npmmirror（失败回退 npm）查询新版本，不发送任何标识信息。',
       updateManual: '当前 Harness 没有提供插件管理服务，请在插件页手动更新。',
+      workspaceTitle: 'Agent 工作区',
+      workspaceDescription: '悬浮球 Agent 的新会话会创建在这里。自定义目录必须是空目录；修改后旧目录内容保持不变。',
+      workspaceCurrent: '当前工作区：',
+      workspaceDefault: '默认',
+      workspaceCustom: '自定义',
+      workspacePlaceholder: '输入一个空的绝对路径',
+      workspaceChange: '修改',
+      workspaceUseDefault: '使用默认工作区',
+      workspaceChanged: '工作区已切换。',
+      workspaceRequired: '请输入一个目录路径。',
+      workspaceSame: '这已经是当前工作区。',
+      workspaceInvalidPath: '请输入绝对路径。',
+      workspaceNotFound: '目录不存在，请先创建一个空目录。',
+      workspaceNotDirectory: '这个路径不是目录。',
+      workspaceNotEmpty: '目录不是空的，请选择一个空目录。',
+      workspaceNotReadable: '无法读取这个目录，请检查权限。',
+      workspaceRunning: '悬浮球当前会话正在运行，请等它结束后再修改。',
+      workspaceCreateFailed: '切换工作区失败，请重试。',
+      workspaceUnavailable: '当前 Harness 不支持修改工作区。',
+      workspaceChanging: '正在切换…',
+      workspaceDialogTitle: '切换 Agent 工作区',
+      workspaceDialogBody: '工作区将从 {old} 改为 {new}。',
+      workspaceDialogKeep: '旧工作区中的会话和文件会保持不变，不会被移动或删除。',
+      workspaceDialogCancel: '取消',
+      workspaceDialogConfirm: '确定',
       historyTitle: '旧会话清理',
       historyDescription: '超过保留期限的会话会自动清理到系统回收站，只处理悬浮球工作区。',
       historyRetention: '保留期限',
@@ -190,6 +215,31 @@ window.__ModuleLoader__.load({
       updateAuto: 'Check for updates automatically',
       updateAutoDescription: 'Asks npmmirror once a day (falling back to npm) for the newest version. Nothing identifying is sent.',
       updateManual: 'This Harness build ships no plugin manager — update from the Plugins page instead.',
+      workspaceTitle: 'Agent workspace',
+      workspaceDescription: 'New floating-ball Agent conversations are created here. A custom directory must be empty; the old directory is left untouched.',
+      workspaceCurrent: 'Current workspace: ',
+      workspaceDefault: 'default',
+      workspaceCustom: 'custom',
+      workspacePlaceholder: 'Enter an empty absolute path',
+      workspaceChange: 'Change',
+      workspaceUseDefault: 'Use default workspace',
+      workspaceChanged: 'Workspace changed.',
+      workspaceRequired: 'Enter a directory path.',
+      workspaceSame: 'That is already the current workspace.',
+      workspaceInvalidPath: 'Enter an absolute path.',
+      workspaceNotFound: 'The directory does not exist. Create an empty directory first.',
+      workspaceNotDirectory: 'That path is not a directory.',
+      workspaceNotEmpty: 'The directory is not empty. Choose an empty directory.',
+      workspaceNotReadable: 'The directory cannot be read. Check its permissions.',
+      workspaceRunning: 'The floating-ball conversation is running. Wait for it to finish before changing the workspace.',
+      workspaceCreateFailed: 'Could not change the workspace. Try again.',
+      workspaceUnavailable: 'This Harness build cannot change the workspace.',
+      workspaceChanging: 'Switching…',
+      workspaceDialogTitle: 'Change Agent workspace',
+      workspaceDialogBody: 'The workspace will change from {old} to {new}.',
+      workspaceDialogKeep: 'Conversations and files in the old workspace stay unchanged; nothing is moved or deleted.',
+      workspaceDialogCancel: 'Cancel',
+      workspaceDialogConfirm: 'Confirm',
       historyTitle: 'Old conversations',
       historyDescription: 'Conversations past the retention period are moved to the system trash. Only the floating-ball workspace is cleaned.',
       historyRetention: 'Keep for',
@@ -623,6 +673,7 @@ window.__ModuleLoader__.load({
             },
           })),
           snap.tcc && snap.tcc.applicable ? tccCard(text, snap, disabled, mutate) : null),
+        h(WorkspaceCard, { text, snap, refreshSettings }),
         h(HistoryCard, { text, snap, mutate, refreshHistory }))
     }
 
@@ -735,6 +786,149 @@ window.__ModuleLoader__.load({
           .replaceAll('{version}', update.latestVersion))
       }
       return null
+    }
+
+    /**
+     * The Agent workspace is the cwd new floating-ball sessions are created in. Switching
+     * never moves the old directory: only the pointer in this profile changes.
+     */
+    function WorkspaceCard({ text, snap, refreshSettings }) {
+      const workspace = snap.workspace
+      const [draft, setDraft] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+      const [error, setError] = React.useState('')
+      const [notice, setNotice] = React.useState('')
+      const [dialog, setDialog] = React.useState(null)
+      if (!workspace || !workspace.path) return null
+
+      function workspaceError(code) {
+        if (code === 'workspace-running') return text.workspaceRunning
+        if (code === 'workspace-not-empty') return text.workspaceNotEmpty
+        if (code === 'workspace-not-found') return text.workspaceNotFound
+        if (code === 'workspace-not-directory') return text.workspaceNotDirectory
+        if (code === 'workspace-not-readable') return text.workspaceNotReadable
+        if (code === 'workspace-create-failed') return text.workspaceCreateFailed
+        if (code === 'workspace-invalid-path' || code === 'workspace-not-absolute') return text.workspaceInvalidPath
+        if (code === 'workspace-unavailable') return text.workspaceUnavailable
+        return code || text.workspaceCreateFailed
+      }
+
+      function beginChange() {
+        const path = draft.trim()
+        if (path === '') {
+          setError(text.workspaceRequired)
+          return
+        }
+        if (path === workspace.path) {
+          setError(text.workspaceSame)
+          return
+        }
+        setError('')
+        setNotice('')
+        setDialog({ path, restore: false })
+      }
+
+      function beginDefault() {
+        setError('')
+        setNotice('')
+        setDialog({ path: workspace.defaultPath, restore: true })
+      }
+
+      function cancelDialog() {
+        if (busy) return
+        setDialog(null)
+        setError('')
+        setDraft('')
+      }
+
+      async function applyDialog() {
+        if (!dialog || busy) return
+        setBusy(true)
+        setError('')
+        try {
+          await request('/.dsh-orb/workspace', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ path: dialog.path }),
+          })
+          setDialog(null)
+          setDraft('')
+          setNotice(text.workspaceChanged)
+          await refreshSettings()
+        } catch (cause) {
+          const code = cause instanceof Error ? cause.message : String(cause)
+          setDialog((prev) => prev ? { ...prev, error: workspaceError(code) } : prev)
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      function workspaceDialog() {
+        if (!dialog) return null
+        return h('div', {
+          className: 'dsh-orb-set-dialog-backdrop',
+          onClick: (event) => { if (event.target === event.currentTarget && !busy) cancelDialog() },
+        },
+          h('div', {
+            className: 'dsh-orb-set-dialog',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': text.workspaceDialogTitle,
+          },
+            h('h3', null, text.workspaceDialogTitle),
+            h('p', null, text.workspaceDialogBody
+              .replaceAll('{old}', workspace.path)
+              .replaceAll('{new}', dialog.path)),
+            h('p', { className: 'dsh-orb-set-muted' }, text.workspaceDialogKeep),
+            dialog.error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, dialog.error) : null,
+            h('div', { className: 'dsh-orb-set-dialog-actions' },
+              h('button', {
+                type: 'button',
+                className: 'dsh-orb-set-button dsh-orb-set-ghost',
+                autoFocus: true,
+                disabled: busy,
+                onClick: cancelDialog,
+              }, text.workspaceDialogCancel),
+              h('button', {
+                type: 'button',
+                className: 'dsh-orb-set-button dsh-orb-set-primary',
+                disabled: busy,
+                onClick: () => { void applyDialog() },
+              }, busy ? text.workspaceChanging : text.workspaceDialogConfirm))))
+      }
+
+      return h('section', { className: 'dsh-orb-set-card' },
+        h('h3', null, text.workspaceTitle),
+        h('p', null, text.workspaceDescription),
+        h('p', { className: 'dsh-orb-set-muted dsh-orb-set-workspace-path' },
+          `${text.workspaceCurrent}${workspace.path}${workspace.custom ? `（${text.workspaceCustom}）` : `（${text.workspaceDefault}）`}`),
+        h('div', { className: 'dsh-orb-set-row' },
+          h('input', {
+            type: 'text',
+            className: 'dsh-orb-set-input dsh-orb-set-input-wide',
+            placeholder: text.workspacePlaceholder,
+            value: draft,
+            disabled: busy,
+            onChange: (event) => { setDraft(event.target.value) },
+          }),
+          h('div', { className: 'dsh-orb-set-actions' },
+            h('button', {
+              type: 'button',
+              className: 'dsh-orb-set-button',
+              disabled: busy || draft.trim() === '',
+              onClick: beginChange,
+            }, text.workspaceChange),
+            workspace.custom
+              ? h('button', {
+                type: 'button',
+                className: 'dsh-orb-set-button dsh-orb-set-ghost',
+                disabled: busy,
+                onClick: beginDefault,
+              }, text.workspaceUseDefault)
+              : null)),
+        error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
+        notice ? h('p', { className: 'dsh-orb-set-muted', role: 'status' }, notice) : null,
+        workspaceDialog())
     }
 
     /** Retention choices shared with the Host's accepted values. */
@@ -1086,10 +1280,12 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-input { width: 72px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 8px; padding: 6px 8px; font: inherit; }
 .dsh-orb-set-label { display: flex; align-items: center; gap: 12px; font-weight: 600; }
 .dsh-orb-set-select { min-width: 190px; }
+.dsh-orb-set-input-wide { width: auto; min-width: 0; flex: 1; }
+.dsh-orb-set-workspace-path { overflow-wrap: anywhere; }
 .dsh-orb-set-dialog-backdrop { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.32)); }
 .dsh-orb-set-dialog { width: min(460px, 100%); max-height: min(70vh, 560px); overflow: auto; padding: 20px; border-radius: 12px; background: var(--dsw-alias-bg-overlay, var(--dsw-alias-bg-layer-3, #fff)); box-shadow: 0 18px 60px var(--dsw-alias-bg-mask-3, rgba(0, 0, 0, 0.28)); }
 .dsh-orb-set-dialog h3 { margin: 0 0 10px; }
-.dsh-orb-set-dialog p { margin: 8px 0; }
+.dsh-orb-set-dialog p { margin: 8px 0; overflow-wrap: anywhere; }
 .dsh-orb-set-dialog-list { margin: 12px 0 0; padding-left: 20px; max-height: 200px; overflow: auto; }
 .dsh-orb-set-dialog-list li { margin: 4px 0; overflow-wrap: anywhere; }
 .dsh-orb-set-dialog-progress { height: 4px; margin: 16px 0 4px; border-radius: 999px; background: color-mix(in srgb, currentColor 12%, transparent); overflow: hidden; }

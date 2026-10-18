@@ -99,6 +99,13 @@ const DEFAULT_HISTORY: HistoryRecord = {
   restoredSessionIds: [],
 }
 
+/** Current workspace plus the shipped default, for the settings card. */
+export interface WorkspaceState {
+  readonly path: string
+  readonly defaultPath: string
+  readonly custom: boolean
+}
+
 /** The floating-ball workspace when the profile names no other one. */
 export function defaultWorkspaceDirectory(): string {
   return resolve(dshHomePath('dsh_orb'))
@@ -280,6 +287,15 @@ export class ProfileStore {
     const stored = record(readJson(join(this.dir, WORKSPACE_FILE)))?.path
     if (typeof stored === 'string' && isAbsolute(stored)) return resolve(stored)
     return defaultWorkspaceDirectory()
+  }
+
+  /** `null` restores the shipped default; any other absolute path is stored as-is. */
+  setWorkspaceDirectory(path: string | null): void {
+    if (path === null || resolve(path) === defaultWorkspaceDirectory()) {
+      removeIfPresent(join(this.dir, WORKSPACE_FILE))
+      return
+    }
+    writeJson(join(this.dir, WORKSPACE_FILE), { path: resolve(path) })
   }
 
   /** Bumped by every avatar change: the ball refetches on it, the settings preview re-renders on it. */

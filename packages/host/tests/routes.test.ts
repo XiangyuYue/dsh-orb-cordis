@@ -372,12 +372,13 @@ describe('settings routes', () => {
     dispose()
   })
 
-  it('exposes history retention, preview, and cleanup', async () => {
+  it('exposes history retention, preview, cleanup, and the Agent workspace', async () => {
     const profile = join(root, 'profile-history')
     mkdirSync(profile, { recursive: true })
     const store = new ProfileStore(profile)
     const calls: unknown[] = []
     let retention = 0
+    let workspace = { path: '/tmp/orb-default', defaultPath: '/tmp/orb-default', custom: false }
     const historyState = (): import('../src/history.ts').HistoryState => ({
       available: true,
       workspacePath: '/tmp/orb-workspace',
@@ -413,6 +414,13 @@ describe('settings routes', () => {
         return { days, cutoff: 0, roots: 2, members: 3, images: 4, bytes: 5, oldest: null, newest: null, skipped: { active: 0, pinned: 0, archived: 0, current: 0, unchanged: 0, unreadable: 0, restored: 0 }, sessions: [{ id: 'session-a', title: 'A', updatedAt: 1 }] }
       },
       cleanHistory() { calls.push('clean') },
+      workspaceState: () => workspace,
+      async setWorkspaceDirectory(path) {
+        calls.push(['workspace', path])
+        if (path === '/not-empty') throw new Error('workspace-not-empty')
+        if (path === '/running') throw new Error('workspace-running')
+        workspace = { path, defaultPath: '/tmp/orb-default', custom: path !== '/tmp/orb-default' }
+      },
     }
     let handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | undefined
     const dispose = registerOrbRoutes({
@@ -454,6 +462,19 @@ describe('settings routes', () => {
     assert.equal((await answer('POST', '/.dsh-orb/history/retention', JSON.stringify({ days: 2 }))).status, 400)
     assert.equal((await answer('POST', '/.dsh-orb/history/retention', JSON.stringify({ days: 1.5 }))).status, 400)
     assert.equal((await answer('POST', '/.dsh-orb/history/retention', JSON.stringify({ days: '30' }))).status, 400)
+
+    const settings = await answer('GET', '/.dsh-orb/settings')
+    assert.equal(settings.json.workspace.path, '/tmp/orb-default')
+    assert.equal((await answer('POST', '/.dsh-orb/workspace', JSON.stringify({ path: '/tmp/empty-workspace' }))).status, 200)
+    assert.deepEqual(calls.at(-1), ['workspace', '/tmp/empty-workspace'])
+    assert.equal(workspace.path, '/tmp/empty-workspace')
+    const invalid = await answer('POST', '/.dsh-orb/workspace', JSON.stringify({ path: '/not-empty' }))
+    assert.equal(invalid.status, 400)
+    assert.equal(invalid.json.error, 'workspace-not-empty')
+    const running = await answer('POST', '/.dsh-orb/workspace', JSON.stringify({ path: '/running' }))
+    assert.equal(running.status, 409)
+    assert.equal(running.json.error, 'workspace-running')
+    assert.equal((await answer('POST', '/.dsh-orb/workspace', JSON.stringify({ path: '' }))).status, 400)
     dispose()
   })
 

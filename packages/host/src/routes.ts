@@ -17,6 +17,7 @@ import {
   sniffAvatarMime,
   type AgentModelSelection,
   type ProfileStore,
+  type WorkspaceState,
 } from './preferences.ts'
 import { selectionRuntimeAvailable } from '@dsh-orb/native-selection'
 import { defaultAvatarPath } from './helper-path.ts'
@@ -74,6 +75,9 @@ export interface OrbControl {
   previewHistory?(days: number): Promise<HistoryPreview>
   /** Starts the cleanup and returns at once; the page polls `historyState`. */
   cleanHistory?(): void
+  workspaceState?(): WorkspaceState
+  /** Changes the ball Agent's workspace and returns after the switch is applied. */
+  setWorkspaceDirectory?(path: string): Promise<void>
 }
 
 interface RouteDeps {
@@ -123,6 +127,14 @@ function historyAvailable(deps: RouteDeps): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message !== '' ? error.message : 'request-failed'
+}
+
+function workspaceErrorStatus(error: unknown): number {
+  const code = errorMessage(error)
+  if (code === 'workspace-running' || code === 'workspace-unavailable') return 409
+  if (code === 'workspace-create-failed') return 500
+  if (code.startsWith('workspace-')) return 400
+  return 500
 }
 
 export function orbSupported(platform: NodeJS.Platform = process.platform): boolean {
@@ -209,6 +221,25 @@ async function handle(deps: RouteDeps, req: IncomingMessage, res: ServerResponse
       return
     }
     deps.control.cleanHistory?.()
+    sendJson(res, 200, await snapshot(deps))
+    return
+  }
+  if (method === 'POST' && path === `${PREFIX}/workspace`) {
+    if (typeof deps.control.setWorkspaceDirectory !== 'function' || typeof deps.control.workspaceState !== 'function') {
+      sendJson(res, 409, { error: 'workspace-unavailable' })
+      return
+    }
+    const next = asRecord(await readJson(req))?.path
+    if (typeof next !== 'string' || next.trim() === '' || next.length > 4096) {
+      sendJson(res, 400, { error: 'workspace-invalid-path' })
+      return
+    }
+    try {
+      await deps.control.setWorkspaceDirectory(next)
+    } catch (error) {
+      sendJson(res, workspaceErrorStatus(error), { error: errorMessage(error) })
+      return
+    }
     sendJson(res, 200, await snapshot(deps))
     return
   }
@@ -391,6 +422,7 @@ async function snapshot(deps: RouteDeps): Promise<{
   permissionFallback: boolean
   update: UpdateState
   history: HistoryState
+  workspace: WorkspaceState
 }> {
   const models = deps.store.models()
   const version = Math.trunc(deps.store.avatarVersion())
@@ -415,6 +447,7 @@ async function snapshot(deps: RouteDeps): Promise<{
     permissionFallback: deps.store.permissionFallback(),
     update: deps.control.updateState(),
     history: deps.control.historyState?.() ?? EMPTY_HISTORY_STATE,
+    workspace: deps.control.workspaceState?.() ?? { path: '', defaultPath: '', custom: false },
   }
 }
 

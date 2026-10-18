@@ -26,11 +26,13 @@ import { moveToOsTrash, osTrashAvailable } from './os-trash.ts'
 import { openMainWindow } from './open-main.ts'
 import { isDesktopHost, isTccRight, TccMonitor, type TccRight, type TccStatus } from './tcc.ts'
 import {
+  defaultWorkspaceDirectory,
   isAgentModelSelection,
   isPermissionPreset,
   type AgentModelSelection,
   type PermissionPreset,
   type ProfileStore,
+  type WorkspaceState,
 } from './preferences.ts'
 import { tokensMatch } from './routes.ts'
 import { OVERLAY_GUARD_ACK_TIMEOUT_MS, createOverlayGuard } from './overlay-guard.ts'
@@ -41,6 +43,7 @@ import {
   type SelectionStarter,
 } from './selection.ts'
 import { pinSessionId } from './services.ts'
+import { validateWorkspaceSelection } from './workspace.ts'
 import { publishScreenOwner } from './screen-owner.ts'
 import { selectModelKeepDefault } from './select-model.ts'
 import { createForegroundMemory } from './windows-foreground.ts'
@@ -1599,6 +1602,44 @@ export class OrbRuntime {
 
   setAutoCheck(enabled: boolean): void {
     this.updater?.setAutoCheck(enabled)
+  }
+
+  /** Current Agent workspace and whether it is the shipped default. */
+  workspaceState(): WorkspaceState {
+    const path = this.store.workspaceDirectory()
+    const defaultPath = defaultWorkspaceDirectory()
+    return { path, defaultPath, custom: resolve(path) !== resolve(defaultPath) }
+  }
+
+  /**
+   * Move the floating-ball Agent to an empty custom directory (or back to the default).
+   * The old directory is never touched. A running turn is refused; an idle current
+   * session is replaced by a fresh one in the new workspace.
+   */
+  async setWorkspaceDirectory(value: string): Promise<void> {
+    if (this.turnRunning) throw new Error('workspace-running')
+    const previous = this.store.workspaceDirectory()
+    const previousPath = resolve(previous)
+    const defaultPath = resolve(defaultWorkspaceDirectory())
+    const selection = await validateWorkspaceSelection(value, defaultPath, previousPath)
+    if (selection.unchanged) return
+    const next = selection.path
+    const previousIsDefault = previousPath === defaultPath
+    this.store.setWorkspaceDirectory(selection.custom ? next : null)
+    this.workspaceTask = undefined
+    try {
+      if (this.sessionId !== undefined) {
+        await this.newSession()
+      } else {
+        // The saved pointer would otherwise resume the old session on the next launch.
+        await rm(this.sessionFile, { force: true })
+      }
+    } catch {
+      this.store.setWorkspaceDirectory(previousIsDefault ? null : previous)
+      this.workspaceTask = undefined
+      throw new Error('workspace-create-failed')
+    }
+    void this.sendHistory()
   }
 
   /** Start the daily retention check; the plugin effect owns the disposer. */

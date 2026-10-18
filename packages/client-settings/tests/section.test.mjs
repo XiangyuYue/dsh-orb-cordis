@@ -41,6 +41,11 @@ function loadSection(hooks = {}) {
     millifractionEnabled: false,
     observationFrameEnabled: true,
     tcc: { applicable: true, appName: 'DeepSeek Harness', screen: 'missing', accessibility: 'granted' },
+    workspace: {
+      path: '/Users/test/.dsh/dsh_orb',
+      defaultPath: '/Users/test/.dsh/dsh_orb',
+      custom: false,
+    },
     history: {
       available: true,
       workspacePath: '/Users/test/.dsh/dsh_orb',
@@ -167,6 +172,13 @@ function loadSection(hooks = {}) {
       }
       if (options.method === 'POST' && path === '/.dsh-orb/history/retention') {
         snapshot.history = { ...snapshot.history, retentionDays: JSON.parse(options.body).days }
+      }
+      if (options.method === 'POST' && path === '/.dsh-orb/workspace') {
+        const next = JSON.parse(options.body).path
+        if (next === '/not-empty') return { ok: false, status: 400, async text() { return JSON.stringify({ error: 'workspace-not-empty' }) } }
+        if (next === '/running') return { ok: false, status: 409, async text() { return JSON.stringify({ error: 'workspace-running' }) } }
+        snapshot.workspace = { ...snapshot.workspace, path: next, custom: next !== snapshot.workspace.defaultPath }
+        return json(snapshot)
       }
       if (options.method === 'POST' && path === '/.dsh-orb/history/clean') {
         snapshot.history = { ...snapshot.history, cleaning: false, lastCleanupAt: 1700000000000 }
@@ -591,6 +603,62 @@ describe('settings section', () => {
     assert.deepEqual(opened, ['orb', 'orb'])
     assert.equal(posts().length, 3)
     page.setSettingsOpen(null)
+  })
+
+  it('changes the Agent workspace only after an explicit confirmation', async () => {
+    const page = loadSection()
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    assert.equal(find(view, (node) => node.type === 'h3' && node.children?.[0] === 'Agent 工作区').length, 1)
+    assert.equal(find(view, (node) => node.children?.includes('当前工作区：/Users/test/.dsh/dsh_orb（默认）')).length, 1)
+
+    let input = find(view, (node) => node.type === 'input' && node.props?.placeholder === '输入一个空的绝对路径')[0]
+    input.props.onChange({ target: { value: '/tmp/empty-workspace' } })
+    view = page.render()
+    let change = find(view, (node) => node.type === 'button' && node.children?.includes('修改'))[0]
+    change.props.onClick()
+    view = page.render()
+    let dialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.ok(dialog)
+    assert.equal(find(dialog, (node) => node.children?.includes('工作区将从 /Users/test/.dsh/dsh_orb 改为 /tmp/empty-workspace。')).length, 1)
+    assert.equal(find(dialog, (node) => node.children?.includes('旧工作区中的会话和文件会保持不变，不会被移动或删除。')).length, 1)
+    const cancel = find(dialog, (node) => node.type === 'button' && node.children?.includes('取消'))[0]
+    cancel.props.onClick()
+    await settle()
+    assert.ok(!page.calls.some((call) => call.path === '/.dsh-orb/workspace'))
+    assert.equal(page.snapshot.workspace.path, '/Users/test/.dsh/dsh_orb')
+
+    input = find(page.render(), (node) => node.type === 'input' && node.props?.placeholder === '输入一个空的绝对路径')[0]
+    input.props.onChange({ target: { value: '/tmp/empty-workspace' } })
+    view = page.render()
+    change = find(view, (node) => node.type === 'button' && node.children?.includes('修改'))[0]
+    change.props.onClick()
+    view = page.render()
+    dialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    const confirm = find(dialog, (node) => node.type === 'button' && node.children?.includes('确定'))[0]
+    confirm.props.onClick()
+    await settle()
+    assert.equal(page.snapshot.workspace.path, '/tmp/empty-workspace')
+    view = page.render()
+    assert.equal(find(view, (node) => node.children?.includes('当前工作区：/tmp/empty-workspace（自定义）')).length, 1)
+    assert.equal(find(view, (node) => node.children?.includes('工作区已切换。')).length, 1)
+
+    input = find(view, (node) => node.type === 'input' && node.props?.placeholder === '输入一个空的绝对路径')[0]
+    input.props.onChange({ target: { value: '/not-empty' } })
+    view = page.render()
+    change = find(view, (node) => node.type === 'button' && node.children?.includes('修改'))[0]
+    change.props.onClick()
+    view = page.render()
+    dialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    const retry = find(dialog, (node) => node.type === 'button' && node.children?.includes('确定'))[0]
+    retry.props.onClick()
+    await settle()
+    view = page.render()
+    dialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.ok(dialog)
+    assert.equal(find(dialog, (node) => node.children?.includes('目录不是空的，请选择一个空目录。')).length, 1)
+    assert.equal(page.snapshot.workspace.path, '/tmp/empty-workspace')
   })
 
   it('confirms a retention change before saving, and reverts on cancel', async () => {
