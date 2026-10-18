@@ -93,6 +93,8 @@ window.__ModuleLoader__.load({
       historyWorkspace: '工作区：{path}',
       historyRestoreHint: '在系统废纸篓/回收站放回会话文件夹即可恢复；恢复后的会话不会再被自动清理。',
       historyDialogTitle: '修改保留期限',
+      historyDialogScanning: '正在扫描超过 {days} 天的会话…',
+      historyDialogRetry: '重试',
       historyDialogDelete: '确认后，将把 {count} 个会话清理到系统回收站。',
       historyDialogNoDelete: '当前没有超过 {days} 天的会话需要立即清理。',
       historyDialogKeep: '以后只保留最近 {days} 天的会话。',
@@ -195,6 +197,8 @@ window.__ModuleLoader__.load({
       historyWorkspace: 'Workspace: {path}',
       historyRestoreHint: 'Put a conversation folder back from the system trash to restore it; a restored conversation will not be cleaned automatically again.',
       historyDialogTitle: 'Change retention',
+      historyDialogScanning: 'Scanning conversations older than {days} days…',
+      historyDialogRetry: 'Retry',
       historyDialogDelete: 'This will move {count} conversations to the system trash.',
       historyDialogNoDelete: 'No conversations are older than {days} days right now.',
       historyDialogKeep: 'Afterwards only conversations from the last {days} days are kept.',
@@ -748,11 +752,17 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState('')
       const [dialog, setDialog] = React.useState(null)
+      const scanRef = React.useRef(0)
+      const abortRef = React.useRef(null)
       React.useEffect(() => {
         if (!history || history.cleaning !== true) return undefined
         const timer = setInterval(() => { void refreshHistory() }, 2000)
         return () => { clearInterval(timer) }
       }, [history && history.cleaning])
+      React.useEffect(() => () => {
+        scanRef.current += 1
+        abortRef.current?.abort()
+      }, [])
       React.useEffect(() => {
         if (!dialog) return undefined
         const onKey = (event) => {
@@ -782,7 +792,34 @@ window.__ModuleLoader__.load({
         })
       }
 
-      async function choose(next) {
+      async function scan(next) {
+        scanRef.current += 1
+        const token = scanRef.current
+        abortRef.current?.abort()
+        const controller = new AbortController()
+        abortRef.current = controller
+        setDialog((prev) => prev && prev.next === next ? { ...prev, scanning: true, error: '', preview: null } : prev)
+        try {
+          const response = await request('/.dsh-orb/history/preview', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ days: next }),
+            signal: controller.signal,
+          })
+          if (scanRef.current !== token) return
+          if (!response || !response.preview) throw new Error(text.historyPreviewFailed)
+          setDialog((prev) => prev && prev.next === next ? { ...prev, scanning: false, preview: response.preview } : prev)
+        } catch (cause) {
+          if (controller.signal.aborted || scanRef.current !== token) return
+          setDialog((prev) => prev && prev.next === next
+            ? { ...prev, scanning: false, error: cause instanceof Error ? cause.message : String(cause) }
+            : prev)
+        } finally {
+          if (abortRef.current === controller) abortRef.current = null
+        }
+      }
+
+      function choose(next) {
         if (pending) return
         if (next === history.retentionDays) {
           setChoice(current)
@@ -790,35 +827,33 @@ window.__ModuleLoader__.load({
         }
         setError('')
         setChoice(String(next))
-        setBusy(true)
-        try {
-          if (next === 0) {
-            setDialog({ next: 0, preview: null })
-            return
-          }
-          const response = await request('/.dsh-orb/history/preview', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ days: next }),
-          })
-          if (!response || !response.preview) throw new Error(text.historyPreviewFailed)
-          setDialog({ next, preview: response.preview })
-        } catch (cause) {
-          setError(cause instanceof Error ? cause.message : String(cause))
-          setChoice(current)
-        } finally {
-          setBusy(false)
+        if (next === 0) {
+          setDialog({ next: 0, preview: null, scanning: false, error: '' })
+          return
         }
+        setDialog({ next, preview: null, scanning: true, error: '' })
+        void scan(next)
       }
 
       function cancelDialog() {
+        scanRef.current += 1
+        abortRef.current?.abort()
+        abortRef.current = null
         setDialog(null)
         setChoice(current)
       }
 
+      function retryScan() {
+        if (!dialog || dialog.next === 0) return
+        void scan(dialog.next)
+      }
+
       async function applyDialog() {
-        if (!dialog) return
+        if (!dialog || dialog.scanning || dialog.error) return
         const next = dialog.next
+        scanRef.current += 1
+        abortRef.current?.abort()
+        abortRef.current = null
         setDialog(null)
         setError('')
         setBusy(true)
@@ -852,6 +887,41 @@ window.__ModuleLoader__.load({
         if (!dialog) return null
         const next = dialog.next
         const preview = dialog.preview
+        const cancel = h('button', {
+          type: 'button',
+          className: 'dsh-orb-set-button dsh-orb-set-ghost',
+          autoFocus: true,
+          onClick: cancelDialog,
+        }, text.historyDialogCancel)
+        const confirm = h('button', {
+          type: 'button',
+          className: 'dsh-orb-set-button dsh-orb-set-primary',
+          disabled: dialog.scanning || dialog.error !== '',
+          onClick: () => { void applyDialog() },
+        }, text.historyDialogConfirm)
+        const retry = h('button', {
+          type: 'button',
+          className: 'dsh-orb-set-button dsh-orb-set-primary',
+          onClick: retryScan,
+        }, text.historyDialogRetry)
+        let body
+        if (dialog.scanning) {
+          body = h('div', null,
+            h('p', null, text.historyDialogScanning.replaceAll('{days}', String(next))),
+            h('div', { className: 'dsh-orb-set-dialog-progress', role: 'progressbar', 'aria-label': text.historyDialogScanning.replaceAll('{days}', String(next)) },
+              h('div', { className: 'dsh-orb-set-dialog-progress-fill' })))
+        } else if (dialog.error) {
+          body = h('p', { className: 'dsh-orb-set-error', role: 'alert' }, `${text.historyFailed}${dialog.error}`)
+        } else if (next === 0) {
+          body = h('p', null, text.historyDialogForever)
+        } else {
+          body = h('div', null,
+            h('p', null, preview && preview.roots > 0
+              ? text.historyDialogDelete.replaceAll('{count}', String(preview.roots))
+              : text.historyDialogNoDelete.replaceAll('{days}', String(next))),
+            h('p', { className: 'dsh-orb-set-muted' }, text.historyDialogKeep.replaceAll('{days}', String(next))),
+            dialogList())
+        }
         return h('div', {
           className: 'dsh-orb-set-dialog-backdrop',
           onClick: (event) => { if (event.target === event.currentTarget) cancelDialog() },
@@ -863,26 +933,10 @@ window.__ModuleLoader__.load({
             'aria-label': text.historyDialogTitle,
           },
             h('h3', null, text.historyDialogTitle),
-            next === 0
-              ? h('p', null, text.historyDialogForever)
-              : h('div', null,
-                h('p', null, preview && preview.roots > 0
-                  ? text.historyDialogDelete.replaceAll('{count}', String(preview.roots))
-                  : text.historyDialogNoDelete.replaceAll('{days}', String(next))),
-                h('p', { className: 'dsh-orb-set-muted' }, text.historyDialogKeep.replaceAll('{days}', String(next))),
-                dialogList()),
+            body,
             h('div', { className: 'dsh-orb-set-dialog-actions' },
-              h('button', {
-                type: 'button',
-                className: 'dsh-orb-set-button dsh-orb-set-ghost',
-                autoFocus: true,
-                onClick: cancelDialog,
-              }, text.historyDialogCancel),
-              h('button', {
-                type: 'button',
-                className: 'dsh-orb-set-button dsh-orb-set-primary',
-                onClick: () => { void applyDialog() },
-              }, text.historyDialogConfirm))))
+              cancel,
+              dialog.error ? retry : confirm)))
       }
 
       return h('section', { className: 'dsh-orb-set-card' },
@@ -1033,6 +1087,9 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-dialog p { margin: 8px 0; }
 .dsh-orb-set-dialog-list { margin: 12px 0 0; padding-left: 20px; max-height: 200px; overflow: auto; }
 .dsh-orb-set-dialog-list li { margin: 4px 0; overflow-wrap: anywhere; }
+.dsh-orb-set-dialog-progress { height: 4px; margin: 16px 0 4px; border-radius: 999px; background: color-mix(in srgb, currentColor 12%, transparent); overflow: hidden; }
+.dsh-orb-set-dialog-progress-fill { width: 34%; height: 100%; border-radius: inherit; background: var(--dsw-alias-button-info-fill, #2f6fed); animation: dsh-orb-set-progress 1.1s ease-in-out infinite; }
+@keyframes dsh-orb-set-progress { from { transform: translateX(-110%); } to { transform: translateX(320%); } }
 .dsh-orb-set-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .dsh-orb-set-primary { background: var(--dsw-alias-button-info-fill, #2f6fed); color: var(--dsw-static-neutral-bluish-00, white); border-color: transparent; }
 .dsh-orb-set-muted { color: color-mix(in srgb, currentColor 58%, transparent); }

@@ -115,6 +115,7 @@ function loadSection(hooks = {}) {
   let plugin
   let file = { size: 10, async arrayBuffer() { return new Uint8Array([1, 2, 3]).buffer } }
   const sandbox = {
+    AbortController,
     window: { confirm: () => confirm },
     document: {
       documentElement: { lang: '' },
@@ -611,16 +612,14 @@ describe('settings section', () => {
     assert.deepEqual(options.map((option) => option.children?.[0]), ['永久保留', '1 天', '7 天', '14 天', '30 天', '60 天'])
 
     select.props.onChange({ target: { value: '30' } })
-    await settle()
+    // The dialog opens immediately; the scan result arrives later.
     view = page.render()
     let dialog = find(view, (node) => node.props?.role === 'dialog')[0]
     assert.ok(dialog)
-    assert.equal(find(dialog, (node) => node.children?.includes('确认后，将把 2 个会话清理到系统回收站。')).length, 1)
-    assert.equal(find(dialog, (node) => node.children?.includes('以后只保留最近 30 天的会话。')).length, 1)
-    assert.equal(find(dialog, (node) => node.children?.includes('会话 A')).length, 1)
-    assert.equal(find(dialog, (node) => node.children?.includes('会话 B')).length, 1)
-    assert.ok(!page.calls.some((call) => call.path === '/.dsh-orb/history/retention'))
-    assert.ok(!page.calls.some((call) => call.path === '/.dsh-orb/history/clean'))
+    assert.equal(find(dialog, (node) => node.children?.includes('正在扫描超过 30 天的会话…')).length, 1)
+    assert.ok(find(dialog, (node) => node.props?.role === 'progressbar').length > 0)
+    const scanningConfirm = find(dialog, (node) => node.type === 'button' && node.children?.includes('确定'))[0]
+    assert.equal(scanningConfirm.props.disabled, true)
     const cancel = find(dialog, (node) => node.type === 'button' && node.children?.includes('取消'))[0]
     cancel.props.onClick()
     await settle()
@@ -635,6 +634,12 @@ describe('settings section', () => {
     view = page.render()
     dialog = find(view, (node) => node.props?.role === 'dialog')[0]
     assert.ok(dialog)
+    assert.equal(find(dialog, (node) => node.children?.includes('确认后，将把 2 个会话清理到系统回收站。')).length, 1)
+    assert.equal(find(dialog, (node) => node.children?.includes('以后只保留最近 30 天的会话。')).length, 1)
+    assert.equal(find(dialog, (node) => node.children?.includes('会话 A')).length, 1)
+    assert.equal(find(dialog, (node) => node.children?.includes('会话 B')).length, 1)
+    assert.ok(!page.calls.some((call) => call.path === '/.dsh-orb/history/retention'))
+    assert.ok(!page.calls.some((call) => call.path === '/.dsh-orb/history/clean'))
     const confirmButton = find(dialog, (node) => node.type === 'button' && node.children?.includes('确定'))[0]
     confirmButton.props.onClick()
     await settle()
