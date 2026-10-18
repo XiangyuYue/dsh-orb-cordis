@@ -612,6 +612,8 @@ describe('settings section', () => {
     view = page.render()
     assert.equal(find(view, (node) => node.type === 'h3' && node.children?.[0] === 'Agent 工作区').length, 1)
     assert.equal(find(view, (node) => node.children?.includes('当前工作区：/Users/test/.dsh/dsh_orb（默认）')).length, 1)
+    const defaultButton = find(view, (node) => node.type === 'button' && node.children?.includes('恢复默认工作区'))[0]
+    assert.equal(defaultButton.props.disabled, true)
 
     let input = find(view, (node) => node.type === 'input' && node.props?.placeholder === '输入一个空的绝对路径')[0]
     input.props.onChange({ target: { value: '/tmp/empty-workspace' } })
@@ -643,6 +645,8 @@ describe('settings section', () => {
     view = page.render()
     assert.equal(find(view, (node) => node.children?.includes('当前工作区：/tmp/empty-workspace（自定义）')).length, 1)
     assert.equal(find(view, (node) => node.children?.includes('工作区已切换。')).length, 1)
+    let restore = find(view, (node) => node.type === 'button' && node.children?.includes('恢复默认工作区'))[0]
+    assert.equal(restore.props.disabled, false)
 
     input = find(view, (node) => node.type === 'input' && node.props?.placeholder === '输入一个空的绝对路径')[0]
     input.props.onChange({ target: { value: '/not-empty' } })
@@ -659,6 +663,25 @@ describe('settings section', () => {
     assert.ok(dialog)
     assert.equal(find(dialog, (node) => node.children?.includes('目录不是空的，请选择一个空目录。')).length, 1)
     assert.equal(page.snapshot.workspace.path, '/tmp/empty-workspace')
+    const cancelInvalid = find(dialog, (node) => node.type === 'button' && node.children?.includes('取消'))[0]
+    cancelInvalid.props.onClick()
+    await settle()
+
+    view = page.render()
+    restore = find(view, (node) => node.type === 'button' && node.children?.includes('恢复默认工作区'))[0]
+    restore.props.onClick()
+    view = page.render()
+    dialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.ok(dialog)
+    assert.equal(find(dialog, (node) => node.children?.includes('工作区将从 /tmp/empty-workspace 改为 /Users/test/.dsh/dsh_orb。')).length, 1)
+    const confirmRestore = find(dialog, (node) => node.type === 'button' && node.children?.includes('确定'))[0]
+    confirmRestore.props.onClick()
+    await settle()
+    view = page.render()
+    assert.equal(page.snapshot.workspace.path, '/Users/test/.dsh/dsh_orb')
+    assert.equal(find(view, (node) => node.children?.includes('当前工作区：/Users/test/.dsh/dsh_orb（默认）')).length, 1)
+    const restored = find(view, (node) => node.type === 'button' && node.children?.includes('恢复默认工作区'))[0]
+    assert.equal(restored.props.disabled, true)
   })
 
   it('confirms a retention change before saving, and reverts on cancel', async () => {

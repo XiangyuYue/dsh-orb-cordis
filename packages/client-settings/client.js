@@ -86,13 +86,13 @@ window.__ModuleLoader__.load({
       updateAutoDescription: '每天一次向 npmmirror（失败回退 npm）查询新版本，不发送任何标识信息。',
       updateManual: '当前 Harness 没有提供插件管理服务，请在插件页手动更新。',
       workspaceTitle: 'Agent 工作区',
-      workspaceDescription: '悬浮球 Agent 的新会话会创建在这里。自定义目录必须是空目录；修改后旧目录内容保持不变。',
+      workspaceDescription: '悬浮球 Agent 的新会话会创建在这里。自定义目录必须是空目录；修改后旧目录内容保持不变，也可以随时恢复默认工作区。',
       workspaceCurrent: '当前工作区：',
       workspaceDefault: '默认',
       workspaceCustom: '自定义',
       workspacePlaceholder: '输入一个空的绝对路径',
       workspaceChange: '修改',
-      workspaceUseDefault: '使用默认工作区',
+      workspaceUseDefault: '恢复默认工作区',
       workspaceChanged: '工作区已切换。',
       workspaceRequired: '请输入一个目录路径。',
       workspaceSame: '这已经是当前工作区。',
@@ -216,13 +216,13 @@ window.__ModuleLoader__.load({
       updateAutoDescription: 'Asks npmmirror once a day (falling back to npm) for the newest version. Nothing identifying is sent.',
       updateManual: 'This Harness build ships no plugin manager — update from the Plugins page instead.',
       workspaceTitle: 'Agent workspace',
-      workspaceDescription: 'New floating-ball Agent conversations are created here. A custom directory must be empty; the old directory is left untouched.',
+      workspaceDescription: 'New floating-ball Agent conversations are created here. A custom directory must be empty; the old directory is left untouched, and you can restore the default workspace at any time.',
       workspaceCurrent: 'Current workspace: ',
       workspaceDefault: 'default',
       workspaceCustom: 'custom',
       workspacePlaceholder: 'Enter an empty absolute path',
       workspaceChange: 'Change',
-      workspaceUseDefault: 'Use default workspace',
+      workspaceUseDefault: 'Restore default workspace',
       workspaceChanged: 'Workspace changed.',
       workspaceRequired: 'Enter a directory path.',
       workspaceSame: 'That is already the current workspace.',
@@ -900,8 +900,15 @@ window.__ModuleLoader__.load({
       return h('section', { className: 'dsh-orb-set-card' },
         h('h3', null, text.workspaceTitle),
         h('p', null, text.workspaceDescription),
-        h('p', { className: 'dsh-orb-set-muted dsh-orb-set-workspace-path' },
-          `${text.workspaceCurrent}${workspace.path}${workspace.custom ? `（${text.workspaceCustom}）` : `（${text.workspaceDefault}）`}`),
+        h('div', { className: 'dsh-orb-set-row' },
+          h('p', { className: 'dsh-orb-set-muted dsh-orb-set-workspace-path' },
+            `${text.workspaceCurrent}${workspace.path}${workspace.custom ? `（${text.workspaceCustom}）` : `（${text.workspaceDefault}）`}`),
+          h('button', {
+            type: 'button',
+            className: 'dsh-orb-set-button dsh-orb-set-ghost',
+            disabled: busy || !workspace.custom,
+            onClick: beginDefault,
+          }, text.workspaceUseDefault)),
         h('div', { className: 'dsh-orb-set-row' },
           h('input', {
             type: 'text',
@@ -917,15 +924,7 @@ window.__ModuleLoader__.load({
               className: 'dsh-orb-set-button',
               disabled: busy || draft.trim() === '',
               onClick: beginChange,
-            }, text.workspaceChange),
-            workspace.custom
-              ? h('button', {
-                type: 'button',
-                className: 'dsh-orb-set-button dsh-orb-set-ghost',
-                disabled: busy,
-                onClick: beginDefault,
-              }, text.workspaceUseDefault)
-              : null)),
+            }, text.workspaceChange))),
         error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
         notice ? h('p', { className: 'dsh-orb-set-muted', role: 'status' }, notice) : null,
         workspaceDialog())
@@ -1281,7 +1280,7 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-label { display: flex; align-items: center; gap: 12px; font-weight: 600; }
 .dsh-orb-set-select { min-width: 190px; }
 .dsh-orb-set-input-wide { width: auto; min-width: 0; flex: 1; }
-.dsh-orb-set-workspace-path { overflow-wrap: anywhere; }
+.dsh-orb-set-workspace-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .dsh-orb-set-dialog-backdrop { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.32)); }
 .dsh-orb-set-dialog { width: min(460px, 100%); max-height: min(70vh, 560px); overflow: auto; padding: 20px; border-radius: 12px; background: var(--dsw-alias-bg-overlay, var(--dsw-alias-bg-layer-3, #fff)); box-shadow: 0 18px 60px var(--dsw-alias-bg-mask-3, rgba(0, 0, 0, 0.28)); }
 .dsh-orb-set-dialog h3 { margin: 0 0 10px; }
