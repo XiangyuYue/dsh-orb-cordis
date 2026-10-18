@@ -51,6 +51,8 @@ function loadSection(hooks = {}) {
       lastCleanupAt: null,
       lastDeletedSessions: 0,
       lastMovedBytes: 0,
+      warning: '',
+      warningSessions: 0,
     },
     update: {
       currentVersion: '0.1.0',

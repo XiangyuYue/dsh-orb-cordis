@@ -62,6 +62,7 @@ function fixture(): {
   pinned: Set<string>
   attached: Set<string>
   archiveFails: Set<string>
+  unreadable: Set<string>
   unarchived: string[]
   trashed: string[]
   add: (session: Partial<FakeSession> & { id: string; updatedAt: number; cwd?: string; events?: readonly unknown[]; bytes?: number }) => FakeSession
@@ -88,6 +89,7 @@ function fixture(): {
   const pinned = new Set<string>()
   const attached = new Set<string>()
   const archiveFails = new Set<string>()
+  const unreadable = new Set<string>()
   const unarchived: string[] = []
   const trashed: string[] = []
 
@@ -134,6 +136,7 @@ function fixture(): {
       return found === undefined ? undefined : snapshot(found)
     },
     async open(id) {
+      if (unreadable.has(id)) throw new Error('subagent/descriptor 5 uses unsupported descriptor version 2')
       const found = sessions.find((session) => session.id === id)
       if (found === undefined) throw new Error(`missing session ${id}`)
       return {
@@ -213,6 +216,7 @@ function fixture(): {
     pinned,
     attached,
     archiveFails,
+    unreadable,
     unarchived,
     trashed,
     add,
@@ -470,6 +474,41 @@ describe('history retention', () => {
     assert.equal(existsSync(join(case_.sessionsRoot, 'proj-1', rootSession.id, MARKER)), false)
     assert.equal(case_.archived.size, 0)
     assert.ok(failing.state().error)
+  })
+
+  it('ignores an unreadable legacy session outside the orb workspace', async () => {
+    const case_ = fixture()
+    const shot = imageId(1)
+    case_.object(shot, 222)
+    const rootSession = case_.add({ id: 'session-orb-old', updatedAt: NOW - 40 * DAY, events: [imageEvent(shot, 222)] })
+    const legacy = case_.add({
+      id: 'session-legacy',
+      cwd: join(case_.workspace, '..', 'legacy-project'),
+      updatedAt: NOW - DAY,
+    })
+    case_.unreadable.add(legacy.id)
+    case_.store.setHistoryRecord({ retentionDays: 30 })
+    await case_.run()
+    assert.equal(existsSync(join(case_.sessionsRoot, 'proj-1', rootSession.id)), false)
+    assert.equal(existsSync(join(case_.objectsRoot, shot.slice(7, 9), shot.slice(7))), false)
+    assert.equal(case_.cleaner.state().warning, '')
+    assert.equal(case_.trashed.length, 1)
+  })
+
+  it('cleans session folders but keeps images when an orb session cannot be read', async () => {
+    const case_ = fixture()
+    const shot = imageId(1)
+    case_.object(shot, 222)
+    const rootSession = case_.add({ id: 'session-orb-old', updatedAt: NOW - 40 * DAY, events: [imageEvent(shot, 222)] })
+    const unreadable = case_.add({ id: 'session-orb-unreadable', updatedAt: NOW - DAY })
+    case_.unreadable.add(unreadable.id)
+    case_.store.setHistoryRecord({ retentionDays: 30 })
+    await case_.run()
+    assert.equal(existsSync(join(case_.sessionsRoot, 'proj-1', rootSession.id)), false)
+    assert.equal(existsSync(join(case_.objectsRoot, shot.slice(7, 9), shot.slice(7))), true)
+    assert.equal(case_.cleaner.state().warning, 'images-kept')
+    assert.equal(case_.cleaner.state().warningSessions, 1)
+    assert.equal(case_.trashed.length, 1)
   })
 
   it('leaves a session directory untouched when cleanup is off', async () => {

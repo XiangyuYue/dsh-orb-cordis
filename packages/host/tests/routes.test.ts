@@ -388,6 +388,8 @@ describe('settings routes', () => {
       lastCleanupAt: null,
       lastDeletedSessions: 0,
       lastMovedBytes: 0,
+      warning: '',
+      warningSessions: 0,
     })
     const control: OrbControl = {
       helperAuthorized: () => false,

@@ -78,6 +78,9 @@ export interface HistoryState {
   readonly lastCleanupAt: number | null
   readonly lastDeletedSessions: number
   readonly lastMovedBytes: number
+  /** Set when an unreadable orb-workspace session forced a partial cleanup. */
+  readonly warning: '' | 'images-kept'
+  readonly warningSessions: number
 }
 
 export interface HistoryPreviewSession {
@@ -156,6 +159,8 @@ export const EMPTY_HISTORY_STATE: HistoryState = {
   lastCleanupAt: null,
   lastDeletedSessions: 0,
   lastMovedBytes: 0,
+  warning: '',
+  warningSessions: 0,
 }
 
 /** First automatic check after startup; long enough for the app to settle. */
@@ -213,6 +218,8 @@ export class HistoryCleaner {
   private cleaning = false
   private phase = ''
   private error: string | null = null
+  private warning: '' | 'images-kept' = ''
+  private warningSessions = 0
   private timer: ReturnType<typeof setTimeout> | undefined
   private interval: ReturnType<typeof setInterval> | undefined
   private restoreTimer: ReturnType<typeof setInterval> | undefined
@@ -234,6 +241,8 @@ export class HistoryCleaner {
       lastCleanupAt: history.lastCleanupAt === 0 ? null : history.lastCleanupAt,
       lastDeletedSessions: history.lastDeletedSessions,
       lastMovedBytes: history.lastMovedBytes,
+      warning: this.warning,
+      warningSessions: this.warningSessions,
     }
   }
 
@@ -242,6 +251,8 @@ export class HistoryCleaner {
     if (!isHistoryRetentionDays(days)) throw new Error('invalid-retention')
     this.deps.store.setHistoryRecord({ retentionDays: days })
     this.error = null
+    this.warning = ''
+    this.warningSessions = 0
   }
 
   /** Read-only count of what the current policy would move. */
@@ -289,6 +300,8 @@ export class HistoryCleaner {
     this.cleaning = true
     this.phase = 'scanning'
     this.error = null
+    this.warning = ''
+    this.warningSessions = 0
     void this.clean().catch((error: unknown) => {
       this.error = messageOf(error)
       this.log(`history cleanup failed: ${this.error}`)
@@ -516,7 +529,12 @@ export class HistoryCleaner {
     if (plan.trees.length === 0) return
     const persistence = this.persistenceOrThrow()
     const deleting = new Set(plan.trees.flatMap((tree) => tree.members.map((member) => member.sessionId)))
-    const live = await this.liveReferences(persistence, deleting)
+    const workspace = resolve(this.deps.workspacePath())
+    const live = await this.liveReferences(persistence, deleting, workspace)
+    if (live.incomplete) {
+      this.warning = 'images-kept'
+      this.warningSessions = live.unreadable
+    }
     const owners = new Map<string, Set<string>>()
     for (const tree of plan.trees) {
       for (const id of tree.images.keys()) {
@@ -531,10 +549,12 @@ export class HistoryCleaner {
     const failures: string[] = []
     for (const tree of plan.trees) {
       const images = new Map<string, number>()
-      for (const [id, size] of tree.images) {
-        if (live.has(id)) continue
-        if ((owners.get(id)?.size ?? 0) !== 1) continue
-        images.set(id, size)
+      if (!live.incomplete) {
+        for (const [id, size] of tree.images) {
+          if (live.refs.has(id)) continue
+          if ((owners.get(id)?.size ?? 0) !== 1) continue
+          images.set(id, size)
+        }
       }
       const outcome = await this.trashTree(tree, images)
       if (outcome.ok) {
@@ -700,9 +720,20 @@ export class HistoryCleaner {
     this.deps.store.setHistoryRecord({ restoredSessionIds: merged })
   }
 
-  /** Collect every image id still referenced by a session that stays. */
-  private async liveReferences(persistence: HistoryPersistence, deleting: ReadonlySet<string>): Promise<Set<string>> {
+  /**
+   * Collect every image id still referenced by a session that stays.
+   * An unreadable session outside the orb workspace (a legacy v0 log, for example)
+   * cannot own an orb screenshot in practice; ignoring it lets the cleanup proceed.
+   * An unreadable orb session is unknown, so no image object is moved in that run.
+   */
+  private async liveReferences(
+    persistence: HistoryPersistence,
+    deleting: ReadonlySet<string>,
+    workspace: string,
+  ): Promise<{ refs: Set<string>; incomplete: boolean; unreadable: number }> {
     const refs = new Set<string>()
+    let incomplete = false
+    let unreadable = 0
     for (const snapshot of await persistence.list({ signal: AbortSignal.timeout(30_000) })) {
       if (deleting.has(snapshot.header.id)) continue
       try {
@@ -714,10 +745,20 @@ export class HistoryCleaner {
           await handle.close().catch(() => undefined)
         }
       } catch (error) {
-        throw new Error(`could not read remaining session ${snapshot.header.id}: ${messageOf(error)}`)
+        const cwd = snapshot.header.cwd
+        const inWorkspace = cwd === undefined
+          || resolve(cwd) === workspace
+          || isUnder(workspace, cwd)
+        if (inWorkspace) {
+          incomplete = true
+          unreadable += 1
+          this.log(`history cleanup could not read orb session ${snapshot.header.id}: ${messageOf(error)}`)
+        } else {
+          this.log(`history cleanup ignored unreadable session ${snapshot.header.id} outside the orb workspace: ${messageOf(error)}`)
+        }
       }
     }
-    return refs
+    return { refs, incomplete, unreadable }
   }
 
   private async archiveTree(tree: CandidateTree): Promise<boolean> {

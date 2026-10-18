@@ -92,6 +92,7 @@ window.__ModuleLoader__.load({
       historyDaysOption: '{days} 天',
       historyWorkspace: '工作区：{path}',
       historyRestoreHint: '在系统废纸篓/回收站放回会话文件夹即可恢复；恢复后的会话不会再被自动清理。',
+      historyWarning: '有 {count} 个悬浮球会话无法读取，本次只清理了会话目录，截图暂时保留。',
       historyDialogTitle: '修改保留期限',
       historyDialogScanning: '正在扫描超过 {days} 天的会话…',
       historyDialogRetry: '重试',
@@ -196,6 +197,7 @@ window.__ModuleLoader__.load({
       historyDaysOption: '{days} days',
       historyWorkspace: 'Workspace: {path}',
       historyRestoreHint: 'Put a conversation folder back from the system trash to restore it; a restored conversation will not be cleaned automatically again.',
+      historyWarning: '{count} floating-ball conversations could not be read. Their session folders were cleaned, but screenshots were kept for now.',
       historyDialogTitle: 'Change retention',
       historyDialogScanning: 'Scanning conversations older than {days} days…',
       historyDialogRetry: 'Retry',
@@ -959,6 +961,9 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
         cleaning ? h('p', { className: 'dsh-orb-set-banner', role: 'status' }, history.phase === 'restoring' ? text.historyRestoring : text.historyCleaning) : null,
         history.error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, `${text.historyFailed}${history.error}`) : null,
+        history.warning === 'images-kept'
+          ? h('p', { className: 'dsh-orb-set-muted' }, text.historyWarning.replaceAll('{count}', String(history.warningSessions || 0)))
+          : null,
         history.lastCleanupAt ? h('p', { className: 'dsh-orb-set-muted' }, text.historyLast.replaceAll('{sessions}', String(history.lastDeletedSessions))) : null,
         retentionDialog())
     }
