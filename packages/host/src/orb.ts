@@ -16,13 +16,13 @@ import { resolveElectronBinary } from './electron-runtime.ts'
 import { helperMain } from './helper-path.ts'
 import {
   HistoryCleaner,
-  historyTrashRoot,
   type HistoryPersistence,
   type HistoryPreview,
   type HistorySessionRow,
   type HistoryState,
   type WorkspaceSafety,
 } from './history.ts'
+import { moveToOsTrash, osTrashAvailable } from './os-trash.ts'
 import { openMainWindow } from './open-main.ts'
 import { isDesktopHost, isTccRight, TccMonitor, type TccRight, type TccStatus } from './tcc.ts'
 import {
@@ -405,7 +405,7 @@ export class OrbRuntime {
       available: () => historyAvailable(this.ctx),
       sessionsRoot: dshHomePath('sessions'),
       objectsRoot: dshHomePath('attachments', 'v1', 'objects'),
-      trashRoot: historyTrashRoot(),
+      trash: (path) => moveToOsTrash(path),
       log: (message) => console.error(`dsh-orb: ${message}`),
     })
     ctx.provide('computerUseOverlayGuard', this.overlay)
@@ -1622,14 +1622,6 @@ export class OrbRuntime {
     this.history.startClean()
   }
 
-  emptyHistoryTrash(): Promise<void> {
-    return this.history.emptyTrash()
-  }
-
-  restoreHistoryTrash(batchId?: string): Promise<void> {
-    return this.history.restore(batchId)
-  }
-
   private onControl(message: unknown, socket: Socket): void {
     const record = asRecord(message)
     if (!record || typeof record.type !== 'string') return
@@ -2229,6 +2221,7 @@ function historyPersistence(ctx: OrbContext): HistoryPersistence | undefined {
 
 /** All services retention needs, checked before the card offers the action. */
 function historyAvailable(ctx: OrbContext): boolean {
+  if (!osTrashAvailable()) return false
   if (historyPersistence(ctx) === undefined) return false
   const controller = ctx.workspaceController
   if (typeof controller.archiveSession !== 'function' || typeof controller.unarchiveSession !== 'function') return false

@@ -74,8 +74,6 @@ export interface OrbControl {
   previewHistory?(days: number): Promise<HistoryPreview>
   /** Starts the cleanup and returns at once; the page polls `historyState`. */
   cleanHistory?(): void
-  emptyHistoryTrash?(): Promise<void>
-  restoreHistoryTrash?(batchId?: string): Promise<void>
 }
 
 interface RouteDeps {
@@ -118,8 +116,6 @@ function historyAvailable(deps: RouteDeps): boolean {
       && typeof deps.control.setHistoryRetention === 'function'
       && typeof deps.control.previewHistory === 'function'
       && typeof deps.control.cleanHistory === 'function'
-      && typeof deps.control.emptyHistoryTrash === 'function'
-      && typeof deps.control.restoreHistoryTrash === 'function'
   } catch {
     return false
   }
@@ -213,29 +209,6 @@ async function handle(deps: RouteDeps, req: IncomingMessage, res: ServerResponse
       return
     }
     deps.control.cleanHistory?.()
-    sendJson(res, 200, await snapshot(deps))
-    return
-  }
-  if (method === 'POST' && path === `${PREFIX}/history/trash/empty`) {
-    if (!historyAvailable(deps)) {
-      sendJson(res, 409, { error: 'history-unavailable' })
-      return
-    }
-    await deps.control.emptyHistoryTrash?.()
-    sendJson(res, 200, await snapshot(deps))
-    return
-  }
-  if (method === 'POST' && path === `${PREFIX}/history/trash/restore`) {
-    if (!historyAvailable(deps)) {
-      sendJson(res, 409, { error: 'history-unavailable' })
-      return
-    }
-    const batch = asRecord(await readJson(req))?.batchId
-    if (batch !== undefined && (typeof batch !== 'string' || batch === '')) {
-      sendJson(res, 400, { error: 'invalid-batch' })
-      return
-    }
-    await deps.control.restoreHistoryTrash?.(typeof batch === 'string' ? batch : undefined)
     sendJson(res, 200, await snapshot(deps))
     return
   }

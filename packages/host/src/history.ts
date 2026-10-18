@@ -1,19 +1,18 @@
 /**
  * Retention for the floating-ball workspace history.
  *
- * A cleanup moves whole sessions — their logs and the image attachments they alone
- * reference — into a local trash directory. DSH has no session-deletion API, so the
- * session is first archived through the official Workspace controller (which hides it
- * and refuses to wake it), then its directory is moved out of the persistence root.
- * The trash manifest is written before anything moves, so a crash or quit mid-cleanup
- * can be put back on the next start.
+ * A cleanup archives a conversation, packs its subagent directories and the images
+ * only it references into a hidden folder inside the root session directory, then
+ * hands that directory to the operating system's trash (macOS Trash / Windows
+ * Recycle Bin). Restoring the folder from the system trash puts it back in the
+ * sessions root; the restore scan below then moves the packed pieces back and
+ * unarchives the conversation. There is no plugin-owned trash and no copy: the
+ * files the user restores are the only copy.
  */
 
-import { randomBytes } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { cp, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { existsSync, statSync } from 'node:fs'
+import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { ProfileStore } from './preferences.ts'
 
 /** One row from the official Session list. Only the fields retention reads are named. */
@@ -69,43 +68,6 @@ export interface WorkspaceSafety {
   readonly archived: readonly string[]
 }
 
-/** One cleanup batch kept under the trash root. */
-export interface HistoryTrashBatch {
-  readonly version: 1
-  readonly batchId: string
-  readonly createdAt: number
-  readonly status: 'planned' | 'moving' | 'complete'
-  readonly workspace: string
-  readonly retentionDays: number
-  readonly sessions: readonly HistoryTrashSession[]
-  readonly images: readonly HistoryTrashImage[]
-  readonly archived: readonly string[]
-}
-
-export interface HistoryTrashSession {
-  readonly id: string
-  readonly parentSessionId?: string
-  readonly origin?: string
-  /** Absolute original session directory. Restore validates it stays under the sessions root. */
-  readonly dir: string
-  readonly bytes: number
-}
-
-export interface HistoryTrashImage {
-  readonly id: string
-  readonly bytes: number
-}
-
-/** A batch summary for the settings card. */
-export interface HistoryTrashSummary {
-  readonly id: string
-  readonly createdAt: number
-  readonly status: HistoryTrashBatch['status']
-  readonly sessions: number
-  readonly images: number
-  readonly bytes: number
-}
-
 export interface HistoryState {
   readonly available: boolean
   readonly workspacePath: string
@@ -116,23 +78,6 @@ export interface HistoryState {
   readonly lastCleanupAt: number | null
   readonly lastDeletedSessions: number
   readonly lastMovedBytes: number
-  readonly trashBytes: number
-  readonly trashBatches: readonly HistoryTrashSummary[]
-}
-
-/** State shown when a Host has no persistence/archive services to clean with. */
-export const EMPTY_HISTORY_STATE: HistoryState = {
-  available: false,
-  workspacePath: '',
-  retentionDays: 0,
-  cleaning: false,
-  phase: '',
-  error: null,
-  lastCleanupAt: null,
-  lastDeletedSessions: 0,
-  lastMovedBytes: 0,
-  trashBytes: 0,
-  trashBatches: [],
 }
 
 export interface HistoryPreview {
@@ -154,6 +99,7 @@ export interface HistorySkipCounts {
   current: number
   unchanged: number
   unreadable: number
+  restored: number
 }
 
 export interface HistoryDeps {
@@ -168,16 +114,41 @@ export interface HistoryDeps {
   readonly unarchive: (id: string) => Promise<void>
   /** Resolved lazily so a late-mounted service is still usable. */
   readonly persistence: () => HistoryPersistence | undefined
+  /** Whether the services and the operating-system trash are usable here. */
   readonly available: () => boolean
+  /** Move one path to the operating system's trash. Never keeps a copy. */
+  readonly trash: (path: string) => Promise<void>
   readonly sessionsRoot: string
   readonly objectsRoot: string
-  readonly trashRoot: string
   readonly now?: () => number
   readonly log?: (message: string) => void
 }
 
-/** How long a completed trash batch stays recoverable before it is permanently deleted. */
-export const TRASH_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+/** What a trashed conversation folder carries so it can be unpacked on restore. */
+export interface OsTrashManifest {
+  readonly version: 1
+  readonly rootId: string
+  readonly createdAt: number
+  readonly workspace: string
+  readonly sessions: readonly { readonly id: string; readonly dir: string }[]
+  readonly images: readonly { readonly id: string }[]
+  readonly archived: readonly string[]
+  /** True once the folder has actually been handed to the system trash. */
+  readonly trashed?: boolean
+}
+
+/** State shown when a Host has no persistence or no usable system trash. */
+export const EMPTY_HISTORY_STATE: HistoryState = {
+  available: false,
+  workspacePath: '',
+  retentionDays: 0,
+  cleaning: false,
+  phase: '',
+  error: null,
+  lastCleanupAt: null,
+  lastDeletedSessions: 0,
+  lastMovedBytes: 0,
+}
 
 /** First automatic check after startup; long enough for the app to settle. */
 export const HISTORY_FIRST_CHECK_MS = 60 * 1000
@@ -185,10 +156,16 @@ export const HISTORY_FIRST_CHECK_MS = 60 * 1000
 /** How often a finite retention is checked while the app stays open. */
 export const HISTORY_INTERVAL_MS = 24 * 60 * 60 * 1000
 
+/** How often the sessions root is checked for folders restored from system trash. */
+export const HISTORY_RESTORE_INTERVAL_MS = 10 * 1000
+
 const DAY_MS = 24 * 60 * 60 * 1000
 const MOVE_ATTEMPTS = 5
 const MOVE_BACKOFF_MS = 50
 const SHA256_REF = /sha256:[0-9a-f]{64}/g
+/** Hidden folder inside a trashed root Session directory. */
+const MARKER = '.dsh-orb-os-trash'
+const MARKER_MANIFEST = 'manifest.json'
 
 /** A candidate session plus everything a run needs to move it. */
 interface CandidateTree {
@@ -208,13 +185,18 @@ interface HistoryPlan {
   readonly images: ReadonlyMap<string, number>
   readonly logBytes: number
   readonly skipped: HistorySkipCounts
-  readonly unreadable: number
+}
+
+interface TrashOutcome {
+  readonly ok: boolean
+  readonly sessions: number
+  readonly bytes: number
 }
 
 class HistoryUnavailableError extends Error {}
 
 /**
- * Retention, preview, cleanup, and the local trash.
+ * Retention, preview, cleanup, and restoration from the operating system's trash.
  * The class never decides whether a service exists; {@link HistoryDeps.available}
  * and the injected functions keep every composition explicit.
  */
@@ -225,6 +207,7 @@ export class HistoryCleaner {
   private error: string | null = null
   private timer: ReturnType<typeof setTimeout> | undefined
   private interval: ReturnType<typeof setInterval> | undefined
+  private restoreTimer: ReturnType<typeof setInterval> | undefined
 
   constructor(deps: HistoryDeps) {
     this.deps = deps
@@ -233,7 +216,6 @@ export class HistoryCleaner {
   /** State rendered by the settings card; never scans session logs. */
   state(): HistoryState {
     const history = this.deps.store.history()
-    const batches = this.readBatches()
     return {
       available: this.available(),
       workspacePath: this.deps.workspacePath(),
@@ -244,8 +226,6 @@ export class HistoryCleaner {
       lastCleanupAt: history.lastCleanupAt === 0 ? null : history.lastCleanupAt,
       lastDeletedSessions: history.lastDeletedSessions,
       lastMovedBytes: history.lastMovedBytes,
-      trashBytes: batches.reduce((sum, batch) => sum + batch.bytes, 0),
-      trashBatches: batches,
     }
   }
 
@@ -304,70 +284,66 @@ export class HistoryCleaner {
     })
   }
 
-  /** Serialize the daily repair with a cleanup; a restore must not overlap a move. */
-  private async recoverThenClean(): Promise<void> {
-    await this.recoverAndPurge()
-    this.startClean()
+  /**
+   * Unpack every conversation folder that came back from the system trash.
+   * Runs at startup and on a timer so Finder's Put Back takes effect without a restart.
+   */
+  async restoreStaged(): Promise<void> {
+    if (this.cleaning) return
+    this.cleaning = true
+    this.phase = 'restoring'
+    try {
+      let projects
+      try {
+        projects = await readdir(this.deps.sessionsRoot, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const project of projects) {
+        if (!project.isDirectory()) continue
+        let sessions
+        try {
+          sessions = await readdir(join(this.deps.sessionsRoot, project.name), { withFileTypes: true })
+        } catch {
+          continue
+        }
+        for (const session of sessions) {
+          if (!session.isDirectory()) continue
+          const dir = join(this.deps.sessionsRoot, project.name, session.name)
+          const marker = join(dir, MARKER)
+          if (!existsSync(join(marker, MARKER_MANIFEST))) continue
+          try {
+            await this.recoverMarker(dir, marker)
+          } catch (error) {
+            this.log(`could not restore a conversation from ${dir}: ${messageOf(error)}`)
+          }
+        }
+      }
+    } finally {
+      this.cleaning = false
+      this.phase = ''
+    }
   }
 
-  /** Recover interrupted batches, drop expired trash, and schedule daily checks. */
+  /** Schedule the restore scan and the daily retention check. */
   start(): () => void {
-    void this.recover()
+    void this.restoreStaged()
+    this.restoreTimer = setInterval(() => { void this.restoreStaged() }, HISTORY_RESTORE_INTERVAL_MS)
+    this.restoreTimer.unref()
     this.timer = setTimeout(() => {
       this.timer = undefined
-      void this.recoverThenClean()
+      this.startClean()
     }, HISTORY_FIRST_CHECK_MS)
     this.timer.unref()
-    this.interval = setInterval(() => { void this.recoverThenClean() }, HISTORY_INTERVAL_MS)
+    this.interval = setInterval(() => { this.startClean() }, HISTORY_INTERVAL_MS)
     this.interval.unref()
     return () => {
       if (this.timer !== undefined) clearTimeout(this.timer)
       if (this.interval !== undefined) clearInterval(this.interval)
+      if (this.restoreTimer !== undefined) clearInterval(this.restoreTimer)
       this.timer = undefined
       this.interval = undefined
-    }
-  }
-
-  /** Startup repair and expiry; public so a test (or a manual retry) can drive it. */
-  async recover(): Promise<void> {
-    await this.recoverAndPurge()
-  }
-
-  /** Delete every trash batch now; archived session ids remain hidden by the Workspace. */
-  async emptyTrash(): Promise<void> {
-    if (this.cleaning) throw new Error('history-busy')
-    this.cleaning = true
-    try {
-      for (const dir of this.readBatchDirs()) await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
-    } finally {
-      this.cleaning = false
-    }
-  }
-
-  /** Restore one batch (newest by default): move files back and unarchive its sessions. */
-  async restore(batchId?: string): Promise<void> {
-    if (this.cleaning) throw new Error('history-busy')
-    if (batchId !== undefined && !isBatchId(batchId)) throw new Error('invalid-batch')
-    this.cleaning = true
-    try {
-      if (batchId !== undefined) {
-        const dir = this.readBatchDirs().find((candidate) => basename(candidate) === batchId)
-        if (dir === undefined) throw new Error('trash-empty')
-        const manifest = this.readManifest(dir)
-        if (manifest === undefined) throw new Error('trash-corrupt')
-        await this.restoreBatch(dir, manifest)
-        return
-      }
-      let chosen: { dir: string; manifest: HistoryTrashBatch } | undefined
-      for (const dir of this.readBatchDirs()) {
-        const manifest = this.readManifest(dir)
-        if (manifest === undefined) continue
-        if (chosen === undefined || manifest.createdAt > chosen.manifest.createdAt) chosen = { dir, manifest }
-      }
-      if (chosen === undefined) throw new Error('trash-empty')
-      await this.restoreBatch(chosen.dir, chosen.manifest)
-    } finally {
-      this.cleaning = false
+      this.restoreTimer = undefined
     }
   }
 
@@ -398,6 +374,7 @@ export class HistoryCleaner {
     const snapshotById = new Map(snapshots.map((snapshot) => [snapshot.header.id, snapshot]))
     const pinned = new Set(safety.pinned)
     const archived = new Set(safety.archived)
+    const restored = new Set(this.deps.store.history().restoredSessionIds)
     const children = new Map<string, Set<string>>()
     const addChild = (parent: string | undefined, id: string, origin: string | undefined): void => {
       if (parent === undefined || origin !== 'subagent') return
@@ -420,11 +397,9 @@ export class HistoryCleaner {
         skipped.unchanged += 1
         continue
       }
-      const tree = await this.candidateTree(row, children, rowById, snapshotById, pinned, archived, cutoff, skipped)
+      const tree = await this.candidateTree(row, children, rowById, snapshotById, pinned, archived, restored, cutoff, skipped)
       if (tree !== undefined) trees.push(tree)
     }
-    // Read candidate events here so preview can report image counts and cleanup has
-    // the per-tree attachment ids without a second pass over the same logs.
     const readable: CandidateTree[] = []
     for (const tree of trees) {
       try {
@@ -440,7 +415,7 @@ export class HistoryCleaner {
       logBytes += tree.logBytes
       for (const [id, bytes] of tree.images) images.set(id, bytes)
     }
-    return { cutoff, trees: readable, images, logBytes, skipped, unreadable: skipped.unreadable }
+    return { cutoff, trees: readable, images, logBytes, skipped }
   }
 
   /** Resolve one root plus its subagent descendants, skipping anything protected. */
@@ -451,6 +426,7 @@ export class HistoryCleaner {
     snapshotById: ReadonlyMap<string, HistorySessionSnapshot>,
     pinned: ReadonlySet<string>,
     archived: ReadonlySet<string>,
+    restored: ReadonlySet<string>,
     cutoff: number,
     skipped: HistorySkipCounts,
   ): Promise<CandidateTree | undefined> {
@@ -465,12 +441,10 @@ export class HistoryCleaner {
       if (id === undefined || seen.has(id)) continue
       seen.add(id)
       const row = rowById.get(id)
-      if (row === undefined) {
-        skipped.unchanged += 1
-        return undefined
-      }
+      if (row === undefined) { skipped.unchanged += 1; return undefined }
       if (pinned.has(id)) { skipped.pinned += 1; return undefined }
       if (archived.has(id)) { skipped.archived += 1; return undefined }
+      if (restored.has(id)) { skipped.restored += 1; return undefined }
       if (this.deps.currentSession() === id) { skipped.current += 1; return undefined }
       if (row.running === true || this.deps.isAttached(id)) { skipped.active += 1; return undefined }
       if (row.updatedAt === undefined || !Number.isFinite(row.updatedAt) || row.updatedAt <= 0) {
@@ -525,95 +499,191 @@ export class HistoryCleaner {
     this.assertAvailable()
     this.phase = 'planning'
     const plan = await this.plan(days)
-    if (plan.trees.length === 0) {
-      this.phase = ''
-      return
-    }
+    if (plan.trees.length === 0) return
     const persistence = this.persistenceOrThrow()
-    // A live-reference read failure must stop the run before anything is archived or moved.
-    const live = await this.liveReferences(persistence, new Set(plan.trees.flatMap((tree) => tree.members.map((member) => member.sessionId))))
-    const allSessions = plan.trees.flatMap((tree) => tree.members.map((member) => {
-      const snapshot = tree.sessions.get(member.sessionId) as HistorySessionSnapshot
-      return {
-        id: member.sessionId,
-        ...member.parentSessionId === undefined ? {} : { parentSessionId: member.parentSessionId },
-        ...member.origin === undefined ? {} : { origin: member.origin },
-        dir: tree.dirs.get(member.sessionId) as string,
-        bytes: snapshot.sizeBytes ?? 0,
-      }
-    }))
-    const batchId = batchName(this.now())
-    const batchDir = join(this.deps.trashRoot, batchId)
-    // Written before the first archive: a crash between archive and move leaves a
-    // manifest that lets the next start put the session back.
-    const planned: HistoryTrashBatch = {
-      version: 1,
-      batchId,
-      createdAt: this.now(),
-      status: 'planned',
-      workspace: resolve(this.deps.workspacePath()),
-      retentionDays: days,
-      sessions: allSessions,
-      images: [...plan.images].map(([id, bytes]) => ({ id, bytes })),
-      archived: allSessions.map((session) => session.id),
-    }
-    await this.writeManifest(batchDir, planned)
-    const failedTrees = new Set<string>()
-    this.phase = 'archiving'
+    const deleting = new Set(plan.trees.flatMap((tree) => tree.members.map((member) => member.sessionId)))
+    const live = await this.liveReferences(persistence, deleting)
+    const owners = new Map<string, Set<string>>()
     for (const tree of plan.trees) {
-      if (!await this.archiveTree(tree)) failedTrees.add(tree.root.sessionId)
+      for (const id of tree.images.keys()) {
+        const set = owners.get(id)
+        if (set === undefined) owners.set(id, new Set([tree.root.sessionId]))
+        else set.add(tree.root.sessionId)
+      }
     }
-    const trees = plan.trees.filter((tree) => !failedTrees.has(tree.root.sessionId))
-    if (trees.length === 0) {
-      await rm(batchDir, { recursive: true, force: true }).catch(() => undefined)
-      this.phase = ''
+    this.phase = 'archiving'
+    let deleted = 0
+    let bytes = 0
+    const failures: string[] = []
+    for (const tree of plan.trees) {
+      const images = new Map<string, number>()
+      for (const [id, size] of tree.images) {
+        if (live.has(id)) continue
+        if ((owners.get(id)?.size ?? 0) !== 1) continue
+        images.set(id, size)
+      }
+      const outcome = await this.trashTree(tree, images)
+      if (outcome.ok) {
+        deleted += outcome.sessions
+        bytes += outcome.bytes
+      } else {
+        failures.push(tree.root.sessionId)
+      }
+    }
+    if (deleted > 0) {
+      this.deps.store.setHistoryRecord({
+        lastCleanupAt: this.now(),
+        lastDeletedSessions: deleted,
+        lastMovedBytes: bytes,
+      })
+    }
+    if (failures.length > 0) throw new Error(`os-trash-failed:${String(failures.length)}`)
+    this.error = null
+  }
+
+  /** Pack one conversation tree into its root directory and hand that directory to the OS trash. */
+  private async trashTree(tree: CandidateTree, images: ReadonlyMap<string, number>): Promise<TrashOutcome> {
+    const rootDir = tree.dirs.get(tree.root.sessionId)
+    if (rootDir === undefined) return { ok: false, sessions: 0, bytes: 0 }
+    const marker = join(rootDir, MARKER)
+    if (existsSync(marker)) {
+      this.log(`history cleanup skipped ${tree.root.sessionId}: it already has a pending restore marker`)
+      return { ok: false, sessions: 0, bytes: 0 }
+    }
+    const movedImages = [...images.keys()].filter((id) => existsSync(this.objectPath(id)))
+    let manifest: OsTrashManifest = {
+      version: 1,
+      rootId: tree.root.sessionId,
+      createdAt: this.now(),
+      workspace: resolve(this.deps.workspacePath()),
+      sessions: tree.members.map((member) => ({ id: member.sessionId, dir: tree.dirs.get(member.sessionId) as string })),
+      images: movedImages.map((id) => ({ id })),
+      archived: tree.members.map((member) => member.sessionId),
+    }
+    try {
+      await this.writeMarker(marker, manifest)
+    } catch (error) {
+      this.log(`history cleanup could not stage ${tree.root.sessionId}: ${messageOf(error)}`)
+      return { ok: false, sessions: 0, bytes: 0 }
+    }
+    if (!await this.archiveTree(tree)) {
+      await rm(marker, { recursive: true, force: true }).catch(() => undefined)
+      return { ok: false, sessions: 0, bytes: 0 }
+    }
+    try {
+      for (const member of tree.members) {
+        if (member.sessionId === tree.root.sessionId) continue
+        const from = tree.dirs.get(member.sessionId) as string
+        if (!existsSync(from)) throw new Error(`session directory ${member.sessionId} disappeared`)
+        await movePath(from, join(marker, 'sessions', member.sessionId))
+      }
+      for (const id of movedImages) {
+        await movePath(this.objectPath(id), join(marker, 'objects', objectRelative(id)))
+      }
+    } catch (error) {
+      this.log(`history cleanup could not pack ${tree.root.sessionId}: ${messageOf(error)}`)
+      await this.unpackMarker(rootDir, marker, manifest)
+      return { ok: false, sessions: 0, bytes: 0 }
+    }
+    // Mark the folder as actually trashed before handing it over; a marker recovered
+    // later then means the user restored it, while a pre-trash crash does not.
+    try {
+      manifest = { ...manifest, trashed: true }
+      await this.writeMarker(marker, manifest)
+    } catch (error) {
+      this.log(`history cleanup could not mark ${tree.root.sessionId}: ${messageOf(error)}`)
+      await this.unpackMarker(rootDir, marker, manifest)
+      return { ok: false, sessions: 0, bytes: 0 }
+    }
+    this.phase = 'trashing'
+    try {
+      await this.deps.trash(rootDir)
+    } catch (error) {
+      this.log(`history cleanup could not move ${tree.root.sessionId} to the system trash: ${messageOf(error)}`)
+      await this.unpackMarker(rootDir, marker, manifest)
+      return { ok: false, sessions: 0, bytes: 0 }
+    }
+    const bytes = tree.logBytes + movedImages.reduce((sum, id) => sum + (images.get(id) ?? 0), 0)
+    return { ok: true, sessions: tree.members.length, bytes }
+  }
+
+  /** Move packed children/images back into their original paths and unarchive the tree. */
+  private async unpackMarker(rootDir: string, marker: string, manifest: OsTrashManifest): Promise<boolean> {
+    let complete = true
+    for (const session of manifest.sessions) {
+      if (session.id === manifest.rootId) continue
+      if (!isSessionId(session.id) || !isUnder(this.deps.sessionsRoot, session.dir)) {
+        this.log(`history restore skipped an unsafe session entry ${String(session.id)}`)
+        complete = false
+        continue
+      }
+      const from = join(marker, 'sessions', session.id)
+      if (!existsSync(from)) {
+        if (!existsSync(session.dir)) complete = false
+        continue
+      }
+      if (existsSync(session.dir)) continue
+      try {
+        await mkdir(dirname(session.dir), { recursive: true })
+        await movePath(from, session.dir)
+      } catch (error) {
+        this.log(`history restore could not move ${session.id}: ${messageOf(error)}`)
+        complete = false
+      }
+    }
+    for (const image of manifest.images) {
+      if (!isImageId(image.id)) {
+        this.log(`history restore skipped an unsafe image entry ${String(image.id)}`)
+        complete = false
+        continue
+      }
+      const from = join(marker, 'objects', objectRelative(image.id))
+      if (!existsSync(from)) {
+        if (!existsSync(this.objectPath(image.id))) complete = false
+        continue
+      }
+      const target = this.objectPath(image.id)
+      if (existsSync(target)) continue
+      try {
+        await mkdir(dirname(target), { recursive: true })
+        await movePath(from, target)
+      } catch (error) {
+        this.log(`history restore could not move ${image.id}: ${messageOf(error)}`)
+        complete = false
+      }
+    }
+    if (!complete) {
+      this.log(`history restore for ${rootDir} is incomplete; its marker stays for the next scan`)
+      return false
+    }
+    for (const id of manifest.archived) await this.deps.unarchive(id).catch((error: unknown) => this.log(`history restore could not unarchive ${id}: ${messageOf(error)}`))
+    await rm(marker, { recursive: true, force: true })
+    return true
+  }
+
+  private async recoverMarker(rootDir: string, marker: string): Promise<void> {
+    const manifest = await this.readMarker(marker)
+    if (manifest === undefined) {
+      this.log(`history restore skipped ${marker}: unreadable manifest`)
       return
     }
-    // A failed tree still owns its images: protect them before the shared-image filter.
-    for (const tree of plan.trees) {
-      if (!failedTrees.has(tree.root.sessionId)) continue
-      for (const id of tree.images.keys()) live.add(id)
+    if (manifest.rootId !== basename(rootDir)) {
+      this.log(`history restore skipped ${marker}: marker does not belong to its directory`)
+      return
     }
-    const sessions = trees.flatMap((tree) => tree.members.map((member) => {
-      const snapshot = tree.sessions.get(member.sessionId) as HistorySessionSnapshot
-      return {
-        id: member.sessionId,
-        ...member.parentSessionId === undefined ? {} : { parentSessionId: member.parentSessionId },
-        ...member.origin === undefined ? {} : { origin: member.origin },
-        dir: tree.dirs.get(member.sessionId) as string,
-        bytes: snapshot.sizeBytes ?? 0,
-      }
-    }))
-    const images = new Map<string, number>()
-    for (const tree of trees) {
-      for (const [id, bytes] of tree.images) {
-        if (!live.has(id)) images.set(id, bytes)
-      }
+    if (!isUnder(this.deps.sessionsRoot, rootDir)) {
+      this.log(`history restore skipped ${rootDir}: outside the sessions root`)
+      return
     }
-    const moving: HistoryTrashBatch = {
-      ...planned,
-      status: 'moving',
-      sessions,
-      images: [...images].map(([id, bytes]) => ({ id, bytes })),
-      archived: sessions.map((session) => session.id),
-    }
-    this.phase = 'moving'
-    try {
-      await this.writeManifest(batchDir, moving)
-      await this.executeBatch(batchDir, moving, sessions, images)
-    } catch (error) {
-      await this.rollbackBatch(batchDir, moving)
-      throw error
-    }
-    const movedBytes = sessions.reduce((sum, session) => sum + session.bytes, 0)
-      + [...images.values()].reduce((sum, bytes) => sum + bytes, 0)
-    this.deps.store.setHistoryRecord({
-      lastCleanupAt: this.now(),
-      lastDeletedSessions: sessions.length,
-      lastMovedBytes: movedBytes,
-    })
-    this.error = null
-    this.phase = ''
+    const restored = await this.unpackMarker(rootDir, marker, manifest)
+    if (restored && manifest.trashed === true) this.protect(manifest.archived)
+  }
+
+  /** A manual system-trash restore is a keep decision; skip these in future runs. */
+  private protect(ids: readonly string[]): void {
+    const history = this.deps.store.history()
+    const merged = [...new Set([...history.restoredSessionIds, ...ids])].slice(-1000)
+    this.deps.store.setHistoryRecord({ restoredSessionIds: merged })
   }
 
   /** Collect every image id still referenced by a session that stays. */
@@ -651,122 +721,6 @@ export class HistoryCleaner {
     }
   }
 
-  /** Move one manifest's sessions and images, then mark it complete. */
-  private async executeBatch(
-    batchDir: string,
-    manifest: HistoryTrashBatch,
-    sessions: readonly HistoryTrashSession[],
-    images: ReadonlyMap<string, number>,
-  ): Promise<void> {
-    await mkdir(join(batchDir, 'sessions'), { recursive: true })
-    await mkdir(join(batchDir, 'objects'), { recursive: true })
-    const moving = { ...manifest, status: 'moving' as const }
-    await this.writeManifest(batchDir, moving)
-    for (const session of sessions) {
-      await movePath(session.dir, join(batchDir, 'sessions', session.id))
-    }
-    for (const id of images.keys()) {
-      const source = this.objectPath(id)
-      if (!existsSync(source)) continue
-      await movePath(source, join(batchDir, 'objects', objectRelative(id)))
-    }
-    await this.writeManifest(batchDir, { ...moving, status: 'complete' })
-  }
-
-  /** Put everything a failed batch moved back and unarchive its sessions. */
-  private async rollbackBatch(batchDir: string, manifest: HistoryTrashBatch): Promise<void> {
-    for (const session of manifest.sessions) {
-      const from = join(batchDir, 'sessions', session.id)
-      if (!existsSync(from)) continue
-      await movePath(from, session.dir).catch((error: unknown) => this.log(`history rollback could not restore ${session.id}: ${messageOf(error)}`))
-    }
-    for (const image of manifest.images) {
-      const from = join(batchDir, 'objects', objectRelative(image.id))
-      if (!existsSync(from)) continue
-      await movePath(from, this.objectPath(image.id)).catch((error: unknown) => this.log(`history rollback could not restore ${image.id}: ${messageOf(error)}`))
-    }
-    for (const id of manifest.archived) await this.deps.unarchive(id).catch(() => undefined)
-    await rm(batchDir, { recursive: true, force: true }).catch(() => undefined)
-  }
-
-  /** Move one batch back and unarchive its sessions; keep the batch when a session is missing. */
-  private async restoreBatch(batchDir: string, manifest: HistoryTrashBatch): Promise<void> {
-    let complete = true
-    for (const session of manifest.sessions) {
-      if (!isSessionId(session.id) || !isUnder(this.deps.sessionsRoot, session.dir)) {
-        this.log(`history restore skipped an unsafe session entry ${String(session.id)}`)
-        complete = false
-        continue
-      }
-      const from = join(batchDir, 'sessions', session.id)
-      if (!existsSync(from)) {
-        if (!existsSync(session.dir)) complete = false
-        continue
-      }
-      if (existsSync(session.dir)) continue
-      try {
-        await mkdir(dirname(session.dir), { recursive: true })
-        await movePath(from, session.dir)
-      } catch (error) {
-        this.log(`history restore could not move ${session.id}: ${messageOf(error)}`)
-        complete = false
-      }
-    }
-    for (const image of manifest.images) {
-      if (!isImageId(image.id)) {
-        this.log(`history restore skipped an unsafe image entry ${String(image.id)}`)
-        continue
-      }
-      const from = join(batchDir, 'objects', objectRelative(image.id))
-      if (!existsSync(from)) continue
-      const target = this.objectPath(image.id)
-      if (existsSync(target)) continue
-      try {
-        await mkdir(dirname(target), { recursive: true })
-        await movePath(from, target)
-      } catch (error) {
-        this.log(`history restore could not move ${image.id}: ${messageOf(error)}`)
-        complete = false
-      }
-    }
-    if (!complete) {
-      this.log(`history restore for ${manifest.batchId} is incomplete; the batch and archive stay`)
-      throw new Error('trash-incomplete')
-    }
-    for (const id of manifest.archived) await this.deps.unarchive(id).catch((error: unknown) => this.log(`history restore could not unarchive ${id}: ${messageOf(error)}`))
-    await rm(batchDir, { recursive: true, force: true })
-  }
-
-  /** Startup repair plus expiry: incomplete batches are restored, old complete ones freed. */
-  private async recoverAndPurge(): Promise<void> {
-    if (this.cleaning) return
-    this.cleaning = true
-    this.phase = 'recovering'
-    try {
-      for (const dir of this.readBatchDirs()) {
-        const manifest = this.readManifest(dir)
-        if (manifest === undefined) {
-          this.log(`history trash ${dir} has no readable manifest; left untouched`)
-          continue
-        }
-        if (manifest.status !== 'complete') {
-          try {
-            await this.restoreBatch(dir, manifest)
-          } catch (error) {
-            this.log(`history trash ${dir} could not be recovered: ${messageOf(error)}`)
-          }
-          continue
-        }
-        if (this.now() - manifest.createdAt > TRASH_RETENTION_MS) await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
-      }
-    } catch (error) {
-      this.log(`history trash recovery failed: ${messageOf(error)}`)
-    } finally {
-      this.cleaning = false
-      this.phase = ''
-    }
-  }
-
   private async sessionDirectory(id: string, snapshot: HistorySessionSnapshot | undefined): Promise<string | undefined> {
     const persistence = this.persistenceOrThrow()
     const header = snapshot?.header ?? (await persistence.stat(id, { signal: AbortSignal.timeout(15_000) }))?.header
@@ -794,7 +748,7 @@ export class HistoryCleaner {
   }
 
   private objectPath(id: string): string {
-    const hex = id.startsWith('sha256:') ? id.slice('sha256:'.length) : id
+    const hex = id.slice('sha256:'.length)
     return join(this.deps.objectsRoot, hex.slice(0, 2), hex)
   }
 
@@ -812,51 +766,23 @@ export class HistoryCleaner {
     return persistence
   }
 
-  private readBatchDirs(): string[] {
-    try {
-      return readdirSync(this.deps.trashRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => join(this.deps.trashRoot, entry.name))
-    } catch {
-      return []
-    }
-  }
-
-  private readBatches(): HistoryTrashSummary[] {
-    const batches: HistoryTrashSummary[] = []
-    for (const dir of this.readBatchDirs()) {
-      const manifest = this.readManifest(dir)
-      if (manifest === undefined) continue
-      batches.push({
-        id: manifest.batchId,
-        createdAt: manifest.createdAt,
-        status: manifest.status,
-        sessions: manifest.sessions.length,
-        images: manifest.images.length,
-        bytes: manifest.sessions.reduce((sum, session) => sum + session.bytes, 0)
-          + manifest.images.reduce((sum, image) => sum + image.bytes, 0),
-      })
-    }
-    return batches.sort((left, right) => right.createdAt - left.createdAt)
-  }
-
-  private readManifest(batchDir: string): HistoryTrashBatch | undefined {
-    try {
-      const parsed = JSON.parse(readFileSync(join(batchDir, 'manifest.json'), 'utf8')) as Partial<HistoryTrashBatch>
-      if (parsed.version !== 1 || typeof parsed.batchId !== 'string' || !Array.isArray(parsed.sessions) || !Array.isArray(parsed.images)) return undefined
-      if (parsed.status !== 'planned' && parsed.status !== 'moving' && parsed.status !== 'complete') return undefined
-      return parsed as HistoryTrashBatch
-    } catch {
-      return undefined
-    }
-  }
-
-  private async writeManifest(batchDir: string, manifest: HistoryTrashBatch): Promise<void> {
-    await mkdir(batchDir, { recursive: true, mode: 0o700 })
-    const file = join(batchDir, 'manifest.json')
+  private async writeMarker(marker: string, manifest: OsTrashManifest): Promise<void> {
+    await mkdir(join(marker, 'sessions'), { recursive: true, mode: 0o700 })
+    await mkdir(join(marker, 'objects'), { recursive: true, mode: 0o700 })
+    const file = join(marker, MARKER_MANIFEST)
     const staged = `${file}.tmp`
     await writeFile(staged, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })
     await rename(staged, file)
+  }
+
+  private async readMarker(marker: string): Promise<OsTrashManifest | undefined> {
+    try {
+      const parsed = JSON.parse(await readFile(join(marker, MARKER_MANIFEST), 'utf8')) as Partial<OsTrashManifest>
+      if (parsed.version !== 1 || typeof parsed.rootId !== 'string' || !Array.isArray(parsed.sessions) || !Array.isArray(parsed.images)) return undefined
+      return parsed as OsTrashManifest
+    } catch {
+      return undefined
+    }
   }
 
   private now(): number {
@@ -909,11 +835,7 @@ function visit(value: unknown, onRecord: (value: Record<string, unknown>) => voi
 }
 
 function emptySkips(): HistorySkipCounts {
-  return { active: 0, pinned: 0, archived: 0, current: 0, unchanged: 0, unreadable: 0 }
-}
-
-function batchName(now: number): string {
-  return `${new Date(now).toISOString().replaceAll(':', '-').replaceAll('.', '-')}-${randomBytes(3).toString('hex')}`
+  return { active: 0, pinned: 0, archived: 0, current: 0, unchanged: 0, unreadable: 0, restored: 0 }
 }
 
 function isImageId(id: string): boolean {
@@ -924,12 +846,8 @@ function isSessionId(id: string): boolean {
   return /^[A-Za-z0-9._-]+$/.test(id) && !id.includes('..')
 }
 
-function isBatchId(id: string): boolean {
-  return /^[A-Za-z0-9._-]+$/.test(id) && !id.includes('..')
-}
-
 function objectRelative(id: string): string {
-  const hex = id.startsWith('sha256:') ? id.slice('sha256:'.length) : id
+  const hex = id.slice('sha256:'.length)
   return join(hex.slice(0, 2), hex)
 }
 
@@ -963,11 +881,6 @@ async function movePath(from: string, to: string): Promise<void> {
 
 function messageOf(error: unknown): string {
   return error instanceof Error && error.message !== '' ? error.message : String(error)
-}
-
-/** Where the trash lives by default; exported so the host wiring and tests agree. */
-export function historyTrashRoot(): string {
-  return join(dshHomePath('dsh-orb'), 'history-trash')
 }
 
 export { HistoryUnavailableError }

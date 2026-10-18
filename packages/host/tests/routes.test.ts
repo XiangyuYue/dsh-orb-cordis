@@ -372,7 +372,7 @@ describe('settings routes', () => {
     dispose()
   })
 
-  it('exposes history retention, preview, cleanup, and the trash', async () => {
+  it('exposes history retention, preview, and cleanup', async () => {
     const profile = join(root, 'profile-history')
     mkdirSync(profile, { recursive: true })
     const store = new ProfileStore(profile)
@@ -388,8 +388,6 @@ describe('settings routes', () => {
       lastCleanupAt: null,
       lastDeletedSessions: 0,
       lastMovedBytes: 0,
-      trashBytes: 0,
-      trashBatches: [],
     })
     const control: OrbControl = {
       helperAuthorized: () => false,
@@ -410,11 +408,9 @@ describe('settings routes', () => {
       setHistoryRetention(days) { retention = days; calls.push(['retention', days]) },
       async previewHistory(days) {
         calls.push(['preview', days])
-        return { days, cutoff: 0, roots: 2, members: 3, images: 4, bytes: 5, oldest: null, newest: null, skipped: { active: 0, pinned: 0, archived: 0, current: 0, unchanged: 0, unreadable: 0 } }
+        return { days, cutoff: 0, roots: 2, members: 3, images: 4, bytes: 5, oldest: null, newest: null, skipped: { active: 0, pinned: 0, archived: 0, current: 0, unchanged: 0, unreadable: 0, restored: 0 } }
       },
       cleanHistory() { calls.push('clean') },
-      async emptyHistoryTrash() { calls.push('empty') },
-      async restoreHistoryTrash(batchId) { calls.push(['restore', batchId]) },
     }
     let handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | undefined
     const dispose = registerOrbRoutes({
@@ -449,10 +445,8 @@ describe('settings routes', () => {
     assert.equal(preview.json.preview.roots, 2)
     assert.equal((await answer('POST', '/.dsh-orb/history/clean', '{}')).status, 200)
     assert.equal(calls.at(-1), 'clean')
-    assert.equal((await answer('POST', '/.dsh-orb/history/trash/empty', '{}')).status, 200)
-    assert.equal(calls.at(-1), 'empty')
-    assert.equal((await answer('POST', '/.dsh-orb/history/trash/restore', JSON.stringify({ batchId: 'batch-1' }))).status, 200)
-    assert.deepEqual(calls.at(-1), ['restore', 'batch-1'])
+    assert.equal((await answer('POST', '/.dsh-orb/history/trash/empty', '{}')).status, 404)
+    assert.equal((await answer('POST', '/.dsh-orb/history/trash/restore', JSON.stringify({ batchId: 'batch-1' }))).status, 404)
     assert.equal((await answer('POST', '/.dsh-orb/history/retention', JSON.stringify({ days: 3651 }))).status, 400)
     assert.equal((await answer('POST', '/.dsh-orb/history/retention', JSON.stringify({ days: 1.5 }))).status, 400)
     assert.equal((await answer('POST', '/.dsh-orb/history/retention', JSON.stringify({ days: '30' }))).status, 400)

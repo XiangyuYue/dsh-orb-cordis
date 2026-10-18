@@ -191,17 +191,21 @@ describe('profile preferences', () => {
       lastCleanupAt: 0,
       lastDeletedSessions: 0,
       lastMovedBytes: 0,
+      restoredSessionIds: [],
     })
-    store.setHistoryRecord({ retentionDays: 30, lastCleanupAt: 1700000000000, lastDeletedSessions: 2, lastMovedBytes: 4096 })
+    store.setHistoryRecord({ retentionDays: 30, lastCleanupAt: 1700000000000, lastDeletedSessions: 2, lastMovedBytes: 4096, restoredSessionIds: ['session-restored'] })
     assert.deepEqual(new ProfileStore(path).history(), {
       retentionDays: 30,
       lastCleanupAt: 1700000000000,
       lastDeletedSessions: 2,
       lastMovedBytes: 4096,
+      restoredSessionIds: ['session-restored'],
     })
     writeFileSync(join(path, 'orb-history.json'), JSON.stringify({ retentionDays: 99999, lastDeletedSessions: -1 }))
     assert.equal(new ProfileStore(path).history().retentionDays, 0)
     assert.equal(new ProfileStore(path).history().lastDeletedSessions, 0)
+    writeFileSync(join(path, 'orb-history.json'), JSON.stringify({ restoredSessionIds: ['ok-id', '../bad', 4] }))
+    assert.deepEqual(new ProfileStore(path).history().restoredSessionIds, ['ok-id'])
     writeFileSync(join(path, 'orb-history.json'), '{')
     assert.equal(new ProfileStore(path).history().retentionDays, 0)
   })

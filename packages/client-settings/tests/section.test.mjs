@@ -50,8 +50,6 @@ function loadSection(hooks = {}) {
       lastCleanupAt: null,
       lastDeletedSessions: 0,
       lastMovedBytes: 0,
-      trashBytes: 0,
-      trashBatches: [],
     },
     update: {
       currentVersion: '0.1.0',
@@ -167,12 +165,6 @@ function loadSection(hooks = {}) {
       }
       if (options.method === 'POST' && path === '/.dsh-orb/history/clean') {
         snapshot.history = { ...snapshot.history, cleaning: false, lastCleanupAt: 1700000000000 }
-      }
-      if (options.method === 'POST' && path === '/.dsh-orb/history/trash/empty') {
-        snapshot.history = { ...snapshot.history, trashBatches: [], trashBytes: 0 }
-      }
-      if (options.method === 'POST' && path === '/.dsh-orb/history/trash/restore') {
-        snapshot.history = { ...snapshot.history, trashBatches: [], trashBytes: 0 }
       }
       if (options.method === 'POST' && path === '/.dsh-orb/ball') snapshot.ballEnabled = JSON.parse(options.body).enabled
       if (options.method === 'POST' && path === '/.dsh-orb/millifraction') snapshot.millifractionEnabled = JSON.parse(options.body).enabled
@@ -594,13 +586,11 @@ describe('settings section', () => {
     page.setSettingsOpen(null)
   })
 
-  it('saves a finite history retention after previewing it, and exposes the trash', async () => {
+  it('saves a finite history retention after previewing it, without a plugin-owned trash', async () => {
     const page = loadSection()
     page.setHistory({
       ...page.snapshot.history,
       retentionDays: 0,
-      trashBytes: 3 * 1024 * 1024,
-      trashBatches: [{ id: 'batch-1', createdAt: 1700000000000, status: 'complete', sessions: 2, images: 3, bytes: 3 * 1024 * 1024 }],
       lastCleanupAt: 1700000000000,
       lastDeletedSessions: 2,
       lastMovedBytes: 3 * 1024 * 1024,
@@ -628,13 +618,10 @@ describe('settings section', () => {
     assert.equal(page.snapshot.history.retentionDays, 30)
 
     view = page.render()
-    const restore = find(view, (node) => node.type === 'button' && node.children?.includes('恢复'))[0]
-    restore.props.onClick()
-    await settle()
-    assert.ok(page.calls.some((call) => call.path === '/.dsh-orb/history/trash/restore'))
-    view = page.render()
-    const empty = find(view, (node) => node.type === 'button' && node.children?.includes('清空回收站'))[0]
-    assert.equal(empty.props.disabled, true)
+    assert.equal(find(view, (node) => node.type === 'button' && node.children?.includes('恢复')).length, 0)
+    assert.equal(find(view, (node) => node.type === 'button' && node.children?.includes('清空回收站')).length, 0)
+    assert.ok(find(view, (node) => node.children?.some?.((child) => typeof child === 'string' && child.includes('系统废纸篓/回收站'))).length > 0)
+    assert.ok(!page.calls.some((call) => String(call.path).includes('/history/trash/')))
   })
 
   it('does not offer history controls when the host cannot clean conversations', async () => {
@@ -643,7 +630,7 @@ describe('settings section', () => {
     let view = page.render()
     await page.flush()
     view = page.render()
-    assert.equal(find(view, (node) => node.children?.includes('当前 Harness 不支持清理会话。')).length, 1)
+    assert.equal(find(view, (node) => node.children?.includes('当前 Harness 或系统回收站不支持清理会话。')).length, 1)
   })
 
   it('offers the new version and installs it without leaving the page', async () => {

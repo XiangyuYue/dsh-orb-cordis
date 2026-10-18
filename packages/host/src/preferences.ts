@@ -73,8 +73,14 @@ export interface HistoryRecord {
   /** Unix time in milliseconds; 0 until a cleanup has moved something to the trash. */
   readonly lastCleanupAt: number
   readonly lastDeletedSessions: number
-  /** Bytes moved into the trash by the last cleanup, not yet freed. */
+  /** Bytes moved into the system trash by the last cleanup. */
   readonly lastMovedBytes: number
+  /**
+   * Sessions the user put back from the system trash. A manual restore is a keep
+   * decision: automatic retention must not immediately put the same conversation
+   * back into the trash.
+   */
+  readonly restoredSessionIds: readonly string[]
 }
 
 const DEFAULT_HISTORY: HistoryRecord = {
@@ -82,6 +88,7 @@ const DEFAULT_HISTORY: HistoryRecord = {
   lastCleanupAt: 0,
   lastDeletedSessions: 0,
   lastMovedBytes: 0,
+  restoredSessionIds: [],
 }
 
 /** The floating-ball workspace when the profile names no other one. */
@@ -434,6 +441,9 @@ function readHistory(dir: string): HistoryRecord {
     lastCleanupAt: typeof stored.lastCleanupAt === 'number' && Number.isFinite(stored.lastCleanupAt) ? stored.lastCleanupAt : 0,
     lastDeletedSessions: typeof stored.lastDeletedSessions === 'number' && Number.isInteger(stored.lastDeletedSessions) && stored.lastDeletedSessions >= 0 ? stored.lastDeletedSessions : 0,
     lastMovedBytes: typeof stored.lastMovedBytes === 'number' && Number.isFinite(stored.lastMovedBytes) && stored.lastMovedBytes >= 0 ? stored.lastMovedBytes : 0,
+    restoredSessionIds: Array.isArray(stored.restoredSessionIds)
+      ? stored.restoredSessionIds.filter((id): id is string => typeof id === 'string' && /^[A-Za-z0-9._-]+$/.test(id) && !id.includes('..')).slice(-1000)
+      : [],
   }
 }
 
