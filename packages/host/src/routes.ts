@@ -78,6 +78,8 @@ export interface OrbControl {
   workspaceState?(): WorkspaceState
   /** Changes the ball Agent's workspace and returns after the switch is applied. */
   setWorkspaceDirectory?(path: string): Promise<void>
+  /** Opens the Host's native directory picker; null means the operator cancelled. */
+  pickWorkspaceDirectory?(signal?: AbortSignal): Promise<string | null>
 }
 
 interface RouteDeps {
@@ -131,8 +133,8 @@ function errorMessage(error: unknown): string {
 
 function workspaceErrorStatus(error: unknown): number {
   const code = errorMessage(error)
-  if (code === 'workspace-running' || code === 'workspace-unavailable') return 409
-  if (code === 'workspace-create-failed') return 500
+  if (code === 'workspace-running' || code === 'workspace-unavailable' || code === 'workspace-picker-unavailable') return 409
+  if (code === 'workspace-create-failed' || code === 'workspace-picker-failed') return 500
   if (code.startsWith('workspace-')) return 400
   return 500
 }
@@ -222,6 +224,26 @@ async function handle(deps: RouteDeps, req: IncomingMessage, res: ServerResponse
     }
     deps.control.cleanHistory?.()
     sendJson(res, 200, await snapshot(deps))
+    return
+  }
+  if (method === 'POST' && path === `${PREFIX}/workspace/pick`) {
+    if (typeof deps.control.pickWorkspaceDirectory !== 'function') {
+      sendJson(res, 409, { error: 'workspace-picker-unavailable' })
+      return
+    }
+    const controller = new AbortController()
+    const onClose = (): void => {
+      if (!res.writableEnded) controller.abort()
+    }
+    res.on('close', onClose)
+    try {
+      const picked = await deps.control.pickWorkspaceDirectory(controller.signal)
+      if (!res.writableEnded && !res.destroyed) sendJson(res, 200, { path: picked ?? null })
+    } catch (error) {
+      if (!res.writableEnded && !res.destroyed) sendJson(res, workspaceErrorStatus(error), { error: errorMessage(error) })
+    } finally {
+      res.off('close', onClose)
+    }
     return
   }
   if (method === 'POST' && path === `${PREFIX}/workspace`) {

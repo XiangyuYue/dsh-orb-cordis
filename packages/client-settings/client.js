@@ -91,6 +91,10 @@ window.__ModuleLoader__.load({
       workspaceDefault: '默认',
       workspaceCustom: '自定义',
       workspacePlaceholder: '输入一个空的绝对路径',
+      workspacePick: '选择…',
+      workspacePicking: '选择中…',
+      workspacePickFailed: '无法打开系统目录选择器，请手动输入路径。',
+      workspacePickerUnavailable: '当前环境不支持系统目录选择，请手动输入路径。',
       workspaceChange: '修改',
       workspaceUseDefault: '恢复默认工作区',
       workspaceChanged: '工作区已切换。',
@@ -221,6 +225,10 @@ window.__ModuleLoader__.load({
       workspaceDefault: 'default',
       workspaceCustom: 'custom',
       workspacePlaceholder: 'Enter an empty absolute path',
+      workspacePick: 'Choose…',
+      workspacePicking: 'Choosing…',
+      workspacePickFailed: 'Could not open the system directory picker. Enter the path manually.',
+      workspacePickerUnavailable: 'This environment cannot open a system directory picker. Enter the path manually.',
       workspaceChange: 'Change',
       workspaceUseDefault: 'Restore default workspace',
       workspaceChanged: 'Workspace changed.',
@@ -796,6 +804,7 @@ window.__ModuleLoader__.load({
       const workspace = snap.workspace
       const [draft, setDraft] = React.useState('')
       const [busy, setBusy] = React.useState(false)
+      const [picking, setPicking] = React.useState(false)
       const [error, setError] = React.useState('')
       const [notice, setNotice] = React.useState('')
       const [dialog, setDialog] = React.useState(null)
@@ -811,6 +820,26 @@ window.__ModuleLoader__.load({
         if (code === 'workspace-invalid-path' || code === 'workspace-not-absolute') return text.workspaceInvalidPath
         if (code === 'workspace-unavailable') return text.workspaceUnavailable
         return code || text.workspaceCreateFailed
+      }
+
+      async function pickDirectory() {
+        if (busy || picking) return
+        setPicking(true)
+        setError('')
+        setNotice('')
+        try {
+          const response = await request('/.dsh-orb/workspace/pick', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          })
+          if (response && typeof response.path === 'string' && response.path !== '') setDraft(response.path)
+        } catch (cause) {
+          const code = cause instanceof Error ? cause.message : String(cause)
+          setError(code === 'workspace-picker-unavailable' ? text.workspacePickerUnavailable : text.workspacePickFailed)
+        } finally {
+          setPicking(false)
+        }
       }
 
       function beginChange() {
@@ -906,10 +935,18 @@ window.__ModuleLoader__.load({
           h('button', {
             type: 'button',
             className: 'dsh-orb-set-button dsh-orb-set-ghost',
-            disabled: busy || !workspace.custom,
+            disabled: busy || picking || !workspace.custom,
             onClick: beginDefault,
           }, text.workspaceUseDefault)),
         h('div', { className: 'dsh-orb-set-row' },
+          h('button', {
+            type: 'button',
+            className: 'dsh-orb-set-button dsh-orb-set-ghost dsh-orb-set-pick',
+            title: text.workspacePick,
+            'aria-label': text.workspacePick,
+            disabled: busy || picking,
+            onClick: () => { void pickDirectory() },
+          }, picking ? text.workspacePicking : text.workspacePick),
           h('input', {
             type: 'text',
             className: 'dsh-orb-set-input dsh-orb-set-input-wide',
@@ -922,7 +959,7 @@ window.__ModuleLoader__.load({
             h('button', {
               type: 'button',
               className: 'dsh-orb-set-button',
-              disabled: busy || draft.trim() === '',
+              disabled: busy || picking || draft.trim() === '',
               onClick: beginChange,
             }, text.workspaceChange))),
         error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
@@ -1280,6 +1317,7 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-label { display: flex; align-items: center; gap: 12px; font-weight: 600; }
 .dsh-orb-set-select { min-width: 190px; }
 .dsh-orb-set-input-wide { width: auto; min-width: 0; flex: 1; }
+.dsh-orb-set-pick { flex: none; white-space: nowrap; }
 .dsh-orb-set-workspace-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .dsh-orb-set-dialog-backdrop { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.32)); }
 .dsh-orb-set-dialog { width: min(460px, 100%); max-height: min(70vh, 560px); overflow: auto; padding: 20px; border-radius: 12px; background: var(--dsw-alias-bg-overlay, var(--dsw-alias-bg-layer-3, #fff)); box-shadow: 0 18px 60px var(--dsw-alias-bg-mask-3, rgba(0, 0, 0, 0.28)); }

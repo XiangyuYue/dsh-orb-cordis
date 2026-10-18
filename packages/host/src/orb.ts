@@ -1612,6 +1612,24 @@ export class OrbRuntime {
   }
 
   /**
+   * Ask the Host's directory-picker seam for one absolute directory. Native OS
+   * panels are the desktop composition's capability; a remote browse-only Host
+   * rejects this and the page keeps the manual input path.
+   */
+  async pickWorkspaceDirectory(signal?: AbortSignal): Promise<string | null> {
+    const service = this.ctx.get('directoryPicker') as {
+      capability?: () => { readonly kind?: string; pick?: (signal: AbortSignal) => Promise<string | null> }
+    } | undefined
+    if (service === undefined || typeof service.capability !== 'function') throw new Error('workspace-picker-unavailable')
+    const capability = service.capability()
+    if (capability === null || typeof capability !== 'object' || capability.kind !== 'native' || typeof capability.pick !== 'function') {
+      throw new Error('workspace-picker-unavailable')
+    }
+    const picked = await capability.pick(signal ?? new AbortController().signal)
+    return typeof picked === 'string' && picked !== '' ? picked : null
+  }
+
+  /**
    * Move the floating-ball Agent to an empty custom directory (or back to the default).
    * The old directory is never touched. A running turn is refused; an idle current
    * session is replaced by a fresh one in the new workspace.

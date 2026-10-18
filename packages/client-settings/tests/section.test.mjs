@@ -173,6 +173,9 @@ function loadSection(hooks = {}) {
       if (options.method === 'POST' && path === '/.dsh-orb/history/retention') {
         snapshot.history = { ...snapshot.history, retentionDays: JSON.parse(options.body).days }
       }
+      if (options.method === 'POST' && path === '/.dsh-orb/workspace/pick') {
+        return json({ path: '/tmp/picked-workspace' })
+      }
       if (options.method === 'POST' && path === '/.dsh-orb/workspace') {
         const next = JSON.parse(options.body).path
         if (next === '/not-empty') return { ok: false, status: 400, async text() { return JSON.stringify({ error: 'workspace-not-empty' }) } }
@@ -614,8 +617,15 @@ describe('settings section', () => {
     assert.equal(find(view, (node) => node.children?.includes('当前工作区：/Users/test/.dsh/dsh_orb（默认）')).length, 1)
     const defaultButton = find(view, (node) => node.type === 'button' && node.children?.includes('恢复默认工作区'))[0]
     assert.equal(defaultButton.props.disabled, true)
-
+    const pick = find(view, (node) => node.type === 'button' && node.props?.['aria-label'] === '选择…')[0]
+    pick.props.onClick()
+    await settle()
+    view = page.render()
     let input = find(view, (node) => node.type === 'input' && node.props?.placeholder === '输入一个空的绝对路径')[0]
+    assert.equal(input.props.value, '/tmp/picked-workspace')
+    assert.ok(!page.calls.some((call) => call.path === '/.dsh-orb/workspace'))
+
+    input = find(view, (node) => node.type === 'input' && node.props?.placeholder === '输入一个空的绝对路径')[0]
     input.props.onChange({ target: { value: '/tmp/empty-workspace' } })
     view = page.render()
     let change = find(view, (node) => node.type === 'button' && node.children?.includes('修改'))[0]

@@ -25,10 +25,14 @@ function response(): ServerResponse & { status: number; body: Buffer } {
   const res = {
     status: 0,
     body: Buffer.alloc(0),
+    writableEnded: false,
     writeHead(status: number) { this.status = status },
     end(chunk?: Buffer | string) {
       if (chunk) this.body = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      this.writableEnded = true
     },
+    on() { return this },
+    off() { return this },
   }
   return res as ServerResponse & { status: number; body: Buffer }
 }
@@ -415,6 +419,7 @@ describe('settings routes', () => {
       },
       cleanHistory() { calls.push('clean') },
       workspaceState: () => workspace,
+      async pickWorkspaceDirectory() { return '/tmp/picked-workspace' },
       async setWorkspaceDirectory(path) {
         calls.push(['workspace', path])
         if (path === '/not-empty') throw new Error('workspace-not-empty')
@@ -465,6 +470,9 @@ describe('settings routes', () => {
 
     const settings = await answer('GET', '/.dsh-orb/settings')
     assert.equal(settings.json.workspace.path, '/tmp/orb-default')
+    const picked = await answer('POST', '/.dsh-orb/workspace/pick', '{}')
+    assert.equal(picked.status, 200)
+    assert.equal(picked.json.path, '/tmp/picked-workspace')
     assert.equal((await answer('POST', '/.dsh-orb/workspace', JSON.stringify({ path: '/tmp/empty-workspace' }))).status, 200)
     assert.deepEqual(calls.at(-1), ['workspace', '/tmp/empty-workspace'])
     assert.equal(workspace.path, '/tmp/empty-workspace')
