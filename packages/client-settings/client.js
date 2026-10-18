@@ -92,8 +92,16 @@ window.__ModuleLoader__.load({
       historyDaysOption: '{days} 天',
       historyWorkspace: '工作区：{path}',
       historyRestoreHint: '在系统废纸篓/回收站放回会话文件夹即可恢复；恢复后的会话不会再被自动清理。',
-      historyPreviewLine: '将清理 {roots} 个会话（含 {members} 个子会话）到系统回收站，约 {images} 张截图 / {size}。',
-      historyConfirm: '继续？',
+      historyDialogTitle: '修改保留期限',
+      historyDialogDelete: '确认后，将把 {count} 个会话清理到系统回收站。',
+      historyDialogNoDelete: '当前没有超过 {days} 天的会话需要立即清理。',
+      historyDialogKeep: '以后只保留最近 {days} 天的会话。',
+      historyDialogForever: '确认后改为永久保留，不再自动清理会话，也不会删除任何内容。',
+      historyDialogMore: '还有 {count} 个会话…',
+      historyDialogUnnamed: '未命名会话',
+      historyDialogCancel: '取消',
+      historyDialogConfirm: '确定',
+      historyPreviewFailed: '无法计算要清理的会话，请重试。',
       historyLast: '上次清理：{sessions} 个会话。',
       historyCleaning: '正在清理…',
       historyRestoring: '正在从系统回收站还原…',
@@ -186,8 +194,16 @@ window.__ModuleLoader__.load({
       historyDaysOption: '{days} days',
       historyWorkspace: 'Workspace: {path}',
       historyRestoreHint: 'Put a conversation folder back from the system trash to restore it; a restored conversation will not be cleaned automatically again.',
-      historyPreviewLine: 'Will move {roots} conversations ({members} including subagents) into the system trash, about {images} screenshots / {size}.',
-      historyConfirm: 'Continue?',
+      historyDialogTitle: 'Change retention',
+      historyDialogDelete: 'This will move {count} conversations to the system trash.',
+      historyDialogNoDelete: 'No conversations are older than {days} days right now.',
+      historyDialogKeep: 'Afterwards only conversations from the last {days} days are kept.',
+      historyDialogForever: 'Afterwards conversations are kept forever and will not be cleaned automatically. Nothing is deleted.',
+      historyDialogMore: 'and {count} more conversations…',
+      historyDialogUnnamed: 'Untitled conversation',
+      historyDialogCancel: 'Cancel',
+      historyDialogConfirm: 'Confirm',
+      historyPreviewFailed: 'Could not calculate what to clean. Try again.',
       historyLast: 'Last cleanup: {sessions} conversations.',
       historyCleaning: 'Cleaning…',
       historyRestoring: 'Restoring from the system trash…',
@@ -731,11 +747,23 @@ window.__ModuleLoader__.load({
       const [choice, setChoice] = React.useState(current)
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState('')
+      const [dialog, setDialog] = React.useState(null)
       React.useEffect(() => {
         if (!history || history.cleaning !== true) return undefined
         const timer = setInterval(() => { void refreshHistory() }, 2000)
         return () => { clearInterval(timer) }
       }, [history && history.cleaning])
+      React.useEffect(() => {
+        if (!dialog) return undefined
+        const onKey = (event) => {
+          if (event.key === 'Escape') {
+            setDialog(null)
+            setChoice(current)
+          }
+        }
+        window.addEventListener('keydown', onKey)
+        return () => { window.removeEventListener('keydown', onKey) }
+      }, [dialog, current])
       if (!history) return null
       if (history.available === false) {
         return h('section', { className: 'dsh-orb-set-card' },
@@ -744,15 +772,7 @@ window.__ModuleLoader__.load({
           h('p', { className: 'dsh-orb-set-banner', role: 'status' }, text.historyUnavailable))
       }
       const cleaning = history.cleaning === true
-      const pending = busy || cleaning
-
-      function describePreview(value) {
-        return text.historyPreviewLine
-          .replaceAll('{roots}', String(value.roots))
-          .replaceAll('{members}', String(value.members))
-          .replaceAll('{images}', String(value.images))
-          .replaceAll('{size}', megabytes(value.bytes))
-      }
+      const pending = busy || cleaning || dialog !== null
 
       async function saveRetention(days) {
         await request('/.dsh-orb/history/retention', {
@@ -773,31 +793,42 @@ window.__ModuleLoader__.load({
         setBusy(true)
         try {
           if (next === 0) {
-            await saveRetention(0)
-            await refreshHistory()
+            setDialog({ next: 0, preview: null })
             return
           }
-          let preview
-          try {
-            const response = await request('/.dsh-orb/history/preview', {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ days: next }),
-            })
-            preview = response && response.preview
-          } catch (cause) {
-            throw cause instanceof Error ? cause : new Error(String(cause))
-          }
-          if (preview && preview.roots > 0
-            && !window.confirm(`${describePreview(preview)} ${text.historyConfirm}`)) {
-            setChoice(current)
-            return
-          }
+          const response = await request('/.dsh-orb/history/preview', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ days: next }),
+          })
+          if (!response || !response.preview) throw new Error(text.historyPreviewFailed)
+          setDialog({ next, preview: response.preview })
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause))
+          setChoice(current)
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      function cancelDialog() {
+        setDialog(null)
+        setChoice(current)
+      }
+
+      async function applyDialog() {
+        if (!dialog) return
+        const next = dialog.next
+        setDialog(null)
+        setError('')
+        setBusy(true)
+        try {
           await saveRetention(next)
-          if (preview && preview.roots > 0) {
-            await mutate('/.dsh-orb/history/clean', {})
-          } else {
+          if (next === 0) {
             await refreshHistory()
+          } else {
+            // The retention is already saved; the clean run now uses that new cutoff.
+            await mutate('/.dsh-orb/history/clean', {})
           }
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : String(cause))
@@ -805,6 +836,53 @@ window.__ModuleLoader__.load({
         } finally {
           setBusy(false)
         }
+      }
+
+      function dialogList() {
+        const preview = dialog && dialog.preview
+        if (!preview || !Array.isArray(preview.sessions) || preview.sessions.length === 0) return null
+        const shown = preview.sessions.slice(0, 10)
+        const more = Math.max(0, (preview.roots ?? 0) - shown.length)
+        return h('ul', { className: 'dsh-orb-set-dialog-list' },
+          shown.map((session) => h('li', { key: session.id }, session.title || text.historyDialogUnnamed)),
+          more > 0 ? h('li', { className: 'dsh-orb-set-muted' }, text.historyDialogMore.replaceAll('{count}', String(more))) : null)
+      }
+
+      function retentionDialog() {
+        if (!dialog) return null
+        const next = dialog.next
+        const preview = dialog.preview
+        return h('div', {
+          className: 'dsh-orb-set-dialog-backdrop',
+          onClick: (event) => { if (event.target === event.currentTarget) cancelDialog() },
+        },
+          h('div', {
+            className: 'dsh-orb-set-dialog',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': text.historyDialogTitle,
+          },
+            h('h3', null, text.historyDialogTitle),
+            next === 0
+              ? h('p', null, text.historyDialogForever)
+              : h('div', null,
+                h('p', null, preview && preview.roots > 0
+                  ? text.historyDialogDelete.replaceAll('{count}', String(preview.roots))
+                  : text.historyDialogNoDelete.replaceAll('{days}', String(next))),
+                h('p', { className: 'dsh-orb-set-muted' }, text.historyDialogKeep.replaceAll('{days}', String(next))),
+                dialogList()),
+            h('div', { className: 'dsh-orb-set-dialog-actions' },
+              h('button', {
+                type: 'button',
+                className: 'dsh-orb-set-button dsh-orb-set-ghost',
+                autoFocus: true,
+                onClick: cancelDialog,
+              }, text.historyDialogCancel),
+              h('button', {
+                type: 'button',
+                className: 'dsh-orb-set-button dsh-orb-set-primary',
+                onClick: () => { void applyDialog() },
+              }, text.historyDialogConfirm))))
       }
 
       return h('section', { className: 'dsh-orb-set-card' },
@@ -827,7 +905,8 @@ window.__ModuleLoader__.load({
         error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
         cleaning ? h('p', { className: 'dsh-orb-set-banner', role: 'status' }, history.phase === 'restoring' ? text.historyRestoring : text.historyCleaning) : null,
         history.error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, `${text.historyFailed}${history.error}`) : null,
-        history.lastCleanupAt ? h('p', { className: 'dsh-orb-set-muted' }, text.historyLast.replaceAll('{sessions}', String(history.lastDeletedSessions))) : null)
+        history.lastCleanupAt ? h('p', { className: 'dsh-orb-set-muted' }, text.historyLast.replaceAll('{sessions}', String(history.lastDeletedSessions))) : null,
+        retentionDialog())
     }
 
     function card(title, description, control) {
@@ -948,6 +1027,14 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-input { width: 72px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 8px; padding: 6px 8px; font: inherit; }
 .dsh-orb-set-label { display: flex; align-items: center; gap: 12px; font-weight: 600; }
 .dsh-orb-set-select { min-width: 190px; }
+.dsh-orb-set-dialog-backdrop { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.32)); }
+.dsh-orb-set-dialog { width: min(460px, 100%); max-height: min(70vh, 560px); overflow: auto; padding: 20px; border-radius: 12px; background: var(--dsw-alias-bg-overlay, var(--dsw-alias-bg-layer-3, #fff)); box-shadow: 0 18px 60px var(--dsw-alias-bg-mask-3, rgba(0, 0, 0, 0.28)); }
+.dsh-orb-set-dialog h3 { margin: 0 0 10px; }
+.dsh-orb-set-dialog p { margin: 8px 0; }
+.dsh-orb-set-dialog-list { margin: 12px 0 0; padding-left: 20px; max-height: 200px; overflow: auto; }
+.dsh-orb-set-dialog-list li { margin: 4px 0; overflow-wrap: anywhere; }
+.dsh-orb-set-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.dsh-orb-set-primary { background: var(--dsw-alias-button-info-fill, #2f6fed); color: var(--dsw-static-neutral-bluish-00, white); border-color: transparent; }
 .dsh-orb-set-muted { color: color-mix(in srgb, currentColor 58%, transparent); }
 `
 

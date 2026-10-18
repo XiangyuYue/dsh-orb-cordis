@@ -261,6 +261,8 @@ describe('history retention', () => {
     assert.equal(preview.members, 2)
     assert.equal(preview.images, 1)
     assert.equal(preview.bytes, 222 + 1000 + 1000)
+    assert.equal(preview.sessions.length, 1)
+    assert.equal(preview.sessions[0]?.id, rootSession.id)
 
     const rootDir = join(case_.sessionsRoot, 'proj-1', rootSession.id)
     await case_.run()

@@ -80,6 +80,12 @@ export interface HistoryState {
   readonly lastMovedBytes: number
 }
 
+export interface HistoryPreviewSession {
+  readonly id: string
+  readonly title: string
+  readonly updatedAt: number
+}
+
 export interface HistoryPreview {
   readonly days: number
   readonly cutoff: number
@@ -90,6 +96,8 @@ export interface HistoryPreview {
   readonly oldest: number | null
   readonly newest: number | null
   readonly skipped: HistorySkipCounts
+  /** Root sessions in the run, capped; the dialog names what it will remove. */
+  readonly sessions: readonly HistoryPreviewSession[]
 }
 
 export interface HistorySkipCounts {
@@ -251,6 +259,7 @@ export class HistoryCleaner {
         oldest: null,
         newest: null,
         skipped: emptySkips(),
+        sessions: [],
       }
     }
     const plan = await this.plan(days)
@@ -266,6 +275,11 @@ export class HistoryCleaner {
       oldest: plan.trees.length === 0 ? null : Math.min(...plan.trees.map((tree) => tree.oldest)),
       newest: plan.trees.length === 0 ? null : Math.max(...plan.trees.map((tree) => tree.newest)),
       skipped: plan.skipped,
+      sessions: plan.trees.slice(0, 20).map((tree) => ({
+        id: tree.root.sessionId,
+        title: tree.root.projections?.values?.title || tree.root.sessionId,
+        updatedAt: tree.root.updatedAt ?? 0,
+      })),
     }
   }
 

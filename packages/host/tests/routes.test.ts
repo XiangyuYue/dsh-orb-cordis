@@ -408,7 +408,7 @@ describe('settings routes', () => {
       setHistoryRetention(days) { retention = days; calls.push(['retention', days]) },
       async previewHistory(days) {
         calls.push(['preview', days])
-        return { days, cutoff: 0, roots: 2, members: 3, images: 4, bytes: 5, oldest: null, newest: null, skipped: { active: 0, pinned: 0, archived: 0, current: 0, unchanged: 0, unreadable: 0, restored: 0 } }
+        return { days, cutoff: 0, roots: 2, members: 3, images: 4, bytes: 5, oldest: null, newest: null, skipped: { active: 0, pinned: 0, archived: 0, current: 0, unchanged: 0, unreadable: 0, restored: 0 }, sessions: [{ id: 'session-a', title: 'A', updatedAt: 1 }] }
       },
       cleanHistory() { calls.push('clean') },
     }

@@ -17,6 +17,7 @@ function loadSection(hooks = {}) {
   const styles = []
   let mode = 'ready'
   let confirm = false
+  let previewRoots = 2
   let jump = null
   /** Armed floating-ball-settings target, as `/.dsh-orb/settings-open` reports it. */
   let settingsOpen = null
@@ -158,7 +159,8 @@ function loadSection(hooks = {}) {
       if (path === '/.dsh-orb/history') return json(snapshot.history)
       if (options.method === 'POST' && path === '/.dsh-orb/history/preview') {
         const days = JSON.parse(options.body).days
-        return json({ preview: { days, cutoff: 0, roots: 2, members: 3, images: 4, bytes: 5 * 1024 * 1024, oldest: null, newest: null, skipped: { active: 0, pinned: 0, archived: 0, current: 0, unchanged: 0, unreadable: 0 } } })
+        const sessions = [{ id: 'session-a', title: '会话 A', updatedAt: 1 }, { id: 'session-b', title: '会话 B', updatedAt: 2 }].slice(0, previewRoots)
+        return json({ preview: { days, cutoff: 0, roots: previewRoots, members: previewRoots, images: previewRoots, bytes: previewRoots * 1024 * 1024, oldest: null, newest: null, skipped: { active: 0, pinned: 0, archived: 0, current: 0, unchanged: 0, unreadable: 0, restored: 0 }, sessions } })
       }
       if (options.method === 'POST' && path === '/.dsh-orb/history/retention') {
         snapshot.history = { ...snapshot.history, retentionDays: JSON.parse(options.body).days }
@@ -278,6 +280,8 @@ function loadSection(hooks = {}) {
     setUpdate(next) { snapshot.update = next === null ? undefined : { ...snapshot.update, ...next } },
     /** Replace the whole history block. */
     setHistory(next) { snapshot.history = next },
+    /** How many old conversations the next preview reports. */
+    setPreviewRoots(next) { previewRoots = next },
     reset() {
       stateSlots.length = 0
       effects.length = 0
@@ -586,7 +590,7 @@ describe('settings section', () => {
     page.setSettingsOpen(null)
   })
 
-  it('saves a retention window from the select and only cleans when it covers sessions', async () => {
+  it('confirms a retention change before saving, and reverts on cancel', async () => {
     const page = loadSection()
     page.setHistory({
       ...page.snapshot.history,
@@ -601,13 +605,38 @@ describe('settings section', () => {
     assert.equal(find(view, (node) => node.type === 'h3' && node.children?.[0] === '旧会话清理').length, 1)
     assert.equal(find(view, (node) => node.children?.includes('工作区：/Users/test/.dsh/dsh_orb')).length, 1)
 
-    const select = find(view, (node) => node.type === 'select' && node.props?.['aria-label'] === '保留期限')[0]
+    let select = find(view, (node) => node.type === 'select' && node.props?.['aria-label'] === '保留期限')[0]
     assert.equal(select.props.value, '0')
     const options = find(select, (node) => node.type === 'option')
     assert.deepEqual(options.map((option) => option.children?.[0]), ['永久保留', '1 天', '7 天', '14 天', '30 天', '60 天'])
 
-    page.setConfirm(true)
     select.props.onChange({ target: { value: '30' } })
+    await settle()
+    view = page.render()
+    let dialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.ok(dialog)
+    assert.equal(find(dialog, (node) => node.children?.includes('确认后，将把 2 个会话清理到系统回收站。')).length, 1)
+    assert.equal(find(dialog, (node) => node.children?.includes('以后只保留最近 30 天的会话。')).length, 1)
+    assert.equal(find(dialog, (node) => node.children?.includes('会话 A')).length, 1)
+    assert.equal(find(dialog, (node) => node.children?.includes('会话 B')).length, 1)
+    assert.ok(!page.calls.some((call) => call.path === '/.dsh-orb/history/retention'))
+    assert.ok(!page.calls.some((call) => call.path === '/.dsh-orb/history/clean'))
+    const cancel = find(dialog, (node) => node.type === 'button' && node.children?.includes('取消'))[0]
+    cancel.props.onClick()
+    await settle()
+    view = page.render()
+    select = find(view, (node) => node.type === 'select' && node.props?.['aria-label'] === '保留期限')[0]
+    assert.equal(select.props.value, '0')
+    assert.ok(!find(view, (node) => node.props?.role === 'dialog')[0])
+    assert.ok(!page.calls.some((call) => call.path === '/.dsh-orb/history/retention'))
+
+    select.props.onChange({ target: { value: '30' } })
+    await settle()
+    view = page.render()
+    dialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.ok(dialog)
+    const confirmButton = find(dialog, (node) => node.type === 'button' && node.children?.includes('确定'))[0]
+    confirmButton.props.onClick()
     await settle()
     assert.ok(page.calls.some((call) => call.path === '/.dsh-orb/history/preview'))
     const retention = page.calls.find((call) => call.path === '/.dsh-orb/history/retention')
@@ -616,16 +645,43 @@ describe('settings section', () => {
     assert.equal(page.snapshot.history.retentionDays, 30)
 
     view = page.render()
-    const current = find(view, (node) => node.type === 'select' && node.props?.['aria-label'] === '保留期限')[0]
-    assert.equal(current.props.value, '30')
+    select = find(view, (node) => node.type === 'select' && node.props?.['aria-label'] === '保留期限')[0]
+    assert.equal(select.props.value, '30')
     assert.equal(find(view, (node) => node.type === 'button' && ['保存', '立即清理', '清空回收站', '恢复'].some((label) => node.children?.includes(label))).length, 0)
     assert.ok(find(view, (node) => node.children?.some?.((child) => typeof child === 'string' && child.includes('系统回收站'))).length > 0)
 
+    // Switching back to forever also asks first, and never starts a cleanup.
     const cleanCalls = page.calls.filter((call) => call.path === '/.dsh-orb/history/clean').length
-    current.props.onChange({ target: { value: '0' } })
+    select.props.onChange({ target: { value: '0' } })
+    await settle()
+    view = page.render()
+    dialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.ok(dialog)
+    assert.equal(find(dialog, (node) => node.children?.includes('确认后改为永久保留，不再自动清理会话，也不会删除任何内容。')).length, 1)
+    const forever = find(dialog, (node) => node.type === 'button' && node.children?.includes('确定'))[0]
+    forever.props.onClick()
     await settle()
     assert.equal(page.snapshot.history.retentionDays, 0)
     assert.equal(page.calls.filter((call) => call.path === '/.dsh-orb/history/clean').length, cleanCalls)
+
+    // Even a window with nothing old enough to delete asks for confirmation before applying.
+    const second = loadSection()
+    second.setHistory({ ...second.snapshot.history, retentionDays: 7 })
+    second.setPreviewRoots(0)
+    let secondView = second.render()
+    await second.flush()
+    secondView = second.render()
+    const secondSelect = find(secondView, (node) => node.type === 'select' && node.props?.['aria-label'] === '保留期限')[0]
+    secondSelect.props.onChange({ target: { value: '30' } })
+    await settle()
+    secondView = second.render()
+    const secondDialog = find(secondView, (node) => node.props?.role === 'dialog')[0]
+    assert.ok(secondDialog)
+    assert.equal(find(secondDialog, (node) => node.children?.includes('当前没有超过 30 天的会话需要立即清理。')).length, 1)
+    const apply = find(secondDialog, (node) => node.type === 'button' && node.children?.includes('确定'))[0]
+    apply.props.onClick()
+    await settle()
+    assert.equal(second.snapshot.history.retentionDays, 30)
   })
 
   it('does not offer history controls when the host cannot clean conversations', async () => {
