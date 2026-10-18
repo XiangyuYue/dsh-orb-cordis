@@ -86,28 +86,19 @@ window.__ModuleLoader__.load({
       updateAutoDescription: '每天一次向 npmmirror（失败回退 npm）查询新版本，不发送任何标识信息。',
       updateManual: '当前 Harness 没有提供插件管理服务，请在插件页手动更新。',
       historyTitle: '旧会话清理',
-      historyDescription: '超过保留时间的悬浮球工作区会话会整段放进系统废纸篓/回收站：文字、上下文和截图一起移走，不在插件里另存一份。',
-      historyForever: '永远保留',
-      historyAuto: '自动清理旧会话',
-      historyKeep: '保留最近',
-      historyDays: '天',
-      historyDaysHint: '按最后一次聊天时间计算；正在运行、正在打开、置顶和已归档的会话会跳过。',
-      historySave: '保存',
-      historyCleanNow: '立即清理',
-      historyPreviewing: '正在计算…',
+      historyDescription: '超过保留期限的会话会自动清理到系统回收站，只处理悬浮球工作区。',
+      historyRetention: '保留期限',
+      historyForever: '永久保留',
+      historyDaysOption: '{days} 天',
+      historyWorkspace: '工作区：{path}',
+      historyRestoreHint: '在系统废纸篓/回收站放回会话文件夹即可恢复；恢复后的会话不会再被自动清理。',
+      historyPreviewLine: '将清理 {roots} 个会话（含 {members} 个子会话）到系统回收站，约 {images} 张截图 / {size}。',
+      historyConfirm: '继续？',
+      historyLast: '上次清理：{sessions} 个会话。',
       historyCleaning: '正在清理…',
       historyRestoring: '正在从系统回收站还原…',
-      historyPreviewLine: '将清理 {roots} 个会话（含 {members} 个子会话），约 {images} 张截图 / {size}。',
-      historyConfirm: '这些会话文件夹会放进系统废纸篓/回收站。需要恢复时在系统里放回文件夹即可。继续？',
-      historyLimit: '请输入 1–3650 天，或选择永远保留。',
-      historyLast: '上次清理：{sessions} 个会话，{size} 放进系统回收站。',
-      historyNever: '还没有清理过。',
-      historySystemTrash: '删除的会话是一个文件夹，里面带着它的子会话和独占截图；系统回收站里能看到，也能直接放回。没有插件自己的回收站，也没有清空按钮。',
-      historyRestoreHint: '在系统废纸篓/回收站放回会话文件夹后，Harness 会自动把子会话和截图还原；应用没开的话，下次启动时还原。手动恢复的会话会被保护，不会再次被自动清理。',
       historyUnavailable: '当前 Harness 或系统回收站不支持清理会话。',
       historyFailed: '清理失败：',
-      historyWorkspace: '工作区：{path}',
-      historyOther: '只清理悬浮球工作区；其他项目的会话和 Computer Use 截图不会动。',
     }
     const en = {
       nav: 'Floating ball',
@@ -189,28 +180,19 @@ window.__ModuleLoader__.load({
       updateAutoDescription: 'Asks npmmirror once a day (falling back to npm) for the newest version. Nothing identifying is sent.',
       updateManual: 'This Harness build ships no plugin manager — update from the Plugins page instead.',
       historyTitle: 'Old conversations',
-      historyDescription: 'Conversations in the floating-ball workspace older than the retention time move whole into the system trash (macOS Trash or Windows Recycle Bin): text, context, and screenshots. No plugin-owned copy is kept.',
+      historyDescription: 'Conversations past the retention period are moved to the system trash. Only the floating-ball workspace is cleaned.',
+      historyRetention: 'Keep for',
       historyForever: 'Keep forever',
-      historyAuto: 'Clean up old conversations automatically',
-      historyKeep: 'Keep the last',
-      historyDays: 'days',
-      historyDaysHint: 'Counted from the last chat. Running, open, pinned, and archived conversations are skipped.',
-      historySave: 'Save',
-      historyCleanNow: 'Clean now',
-      historyPreviewing: 'Calculating…',
+      historyDaysOption: '{days} days',
+      historyWorkspace: 'Workspace: {path}',
+      historyRestoreHint: 'Put a conversation folder back from the system trash to restore it; a restored conversation will not be cleaned automatically again.',
+      historyPreviewLine: 'Will move {roots} conversations ({members} including subagents) into the system trash, about {images} screenshots / {size}.',
+      historyConfirm: 'Continue?',
+      historyLast: 'Last cleanup: {sessions} conversations.',
       historyCleaning: 'Cleaning…',
       historyRestoring: 'Restoring from the system trash…',
-      historyPreviewLine: 'Will move {roots} conversations ({members} with subagents), about {images} screenshots / {size}.',
-      historyConfirm: 'These conversation folders move into the system trash. Restore a folder from the system trash when you need it. Continue?',
-      historyLimit: 'Enter 1–3650 days, or choose keep forever.',
-      historyLast: 'Last cleanup: {sessions} conversations, {size} into the system trash.',
-      historyNever: 'Nothing cleaned yet.',
-      historySystemTrash: 'A deleted conversation is one folder holding its subagents and exclusive screenshots. It is visible in the system trash and can be put back directly. There is no plugin-owned trash and no empty-trash button.',
-      historyRestoreHint: 'After you put a conversation folder back from the system trash, Harness restores its subagents and screenshots automatically. If Harness was closed, this happens on the next launch. A manually restored conversation is protected from later automatic cleanups.',
       historyUnavailable: 'This Harness build or the system trash cannot clean up conversations.',
       historyFailed: 'Cleanup failed: ',
-      historyWorkspace: 'Workspace: {path}',
-      historyOther: 'Only the floating-ball workspace is cleaned; other projects and their Computer Use screenshots are left alone.',
     }
 
     // The community GIF gallery behind the "more animations" tile. It is a plain
@@ -733,19 +715,22 @@ window.__ModuleLoader__.load({
       return null
     }
 
+    /** Retention choices shared with the Host's accepted values. */
+    const HISTORY_RETENTION_DAYS = [0, 1, 7, 14, 30, 60]
+
     /**
-     * Old floating-ball conversations: retention, preview, trash.
-     * A real component (not a plain call) so its hooks are not added to the Section
-     * after the snapshot's early return — that would break React's hook order.
+     * Old floating-ball conversations. A select is the whole control: choosing a
+     * finite window previews and confirms, then saves the policy and starts the
+     * cleanup; choosing forever saves a zero policy and deletes nothing.
      */
     function HistoryCard({ text, snap, mutate, refreshHistory }) {
       const history = snap.history
-      const saved = history && history.retentionDays > 0 ? history.retentionDays : 30
-      const [enabled, setEnabled] = React.useState(history?.retentionDays > 0)
-      const [days, setDays] = React.useState(String(saved))
+      const current = history && HISTORY_RETENTION_DAYS.includes(history.retentionDays)
+        ? String(history.retentionDays)
+        : '0'
+      const [choice, setChoice] = React.useState(current)
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState('')
-      const [preview, setPreview] = React.useState(null)
       React.useEffect(() => {
         if (!history || history.cleaning !== true) return undefined
         const timer = setInterval(() => { void refreshHistory() }, 2000)
@@ -761,15 +746,6 @@ window.__ModuleLoader__.load({
       const cleaning = history.cleaning === true
       const pending = busy || cleaning
 
-      async function requestPreview(count) {
-        const response = await request('/.dsh-orb/history/preview', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ days: count }),
-        })
-        return response && response.preview
-      }
-
       function describePreview(value) {
         return text.historyPreviewLine
           .replaceAll('{roots}', String(value.roots))
@@ -778,55 +754,54 @@ window.__ModuleLoader__.load({
           .replaceAll('{size}', megabytes(value.bytes))
       }
 
-      async function save() {
-        if (pending) return
-        setError('')
-        setBusy(true)
-        try {
-          if (!enabled) {
-            await mutate('/.dsh-orb/history/retention', { days: 0 })
-            setPreview(null)
-            return
-          }
-          const count = Number(days)
-          if (!Number.isInteger(count) || count < 1 || count > 3650) {
-            setError(text.historyLimit)
-            return
-          }
-          const value = await requestPreview(count)
-          if (!value) {
-            setError(text.historyPreviewing)
-            return
-          }
-          setPreview(value)
-          if (!window.confirm(`${describePreview(value)} ${text.historyConfirm}`)) return
-          // Persist the policy first, and only start a cleanup once that write answered:
-          // a failed retention save must never clean under the previous policy.
-          await request('/.dsh-orb/history/retention', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ days: count }),
-          })
-          await mutate('/.dsh-orb/history/clean', {})
-        } catch (cause) {
-          setError(cause instanceof Error ? cause.message : String(cause))
-        } finally {
-          setBusy(false)
-        }
+      async function saveRetention(days) {
+        await request('/.dsh-orb/history/retention', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ days }),
+        })
       }
 
-      async function cleanNow() {
-        if (pending || history.retentionDays <= 0) return
+      async function choose(next) {
+        if (pending) return
+        if (next === history.retentionDays) {
+          setChoice(current)
+          return
+        }
         setError('')
+        setChoice(String(next))
         setBusy(true)
         try {
-          const value = await requestPreview(history.retentionDays)
-          if (!value) return
-          setPreview(value)
-          if (!window.confirm(`${describePreview(value)} ${text.historyConfirm}`)) return
-          await mutate('/.dsh-orb/history/clean', {})
+          if (next === 0) {
+            await saveRetention(0)
+            await refreshHistory()
+            return
+          }
+          let preview
+          try {
+            const response = await request('/.dsh-orb/history/preview', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ days: next }),
+            })
+            preview = response && response.preview
+          } catch (cause) {
+            throw cause instanceof Error ? cause : new Error(String(cause))
+          }
+          if (preview && preview.roots > 0
+            && !window.confirm(`${describePreview(preview)} ${text.historyConfirm}`)) {
+            setChoice(current)
+            return
+          }
+          await saveRetention(next)
+          if (preview && preview.roots > 0) {
+            await mutate('/.dsh-orb/history/clean', {})
+          } else {
+            await refreshHistory()
+          }
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : String(cause))
+          setChoice(current)
         } finally {
           setBusy(false)
         }
@@ -835,58 +810,24 @@ window.__ModuleLoader__.load({
       return h('section', { className: 'dsh-orb-set-card' },
         h('h3', null, text.historyTitle),
         h('p', null, text.historyDescription),
-        h('p', { className: 'dsh-orb-set-muted' }, text.historyWorkspace.replaceAll('{path}', String(history.workspacePath || ''))),
-        h('p', { className: 'dsh-orb-set-muted' }, text.historyOther),
         h('div', { className: 'dsh-orb-set-row' },
-          h('div', null,
-            h(Toggle, {
-              checked: enabled,
-              label: text.historyAuto,
+          h('label', { className: 'dsh-orb-set-label' },
+            h('span', null, text.historyRetention),
+            h('select', {
+              className: 'dsh-orb-set-select',
+              'aria-label': text.historyRetention,
+              value: choice,
               disabled: pending,
-              onChange: (value) => {
-                setEnabled(value)
-                setError('')
-                setPreview(null)
-              },
-            }),
-            h('p', { className: 'dsh-orb-set-muted' }, history.retentionDays > 0
-              ? `${text.historyKeep} ${history.retentionDays} ${text.historyDays}`
-              : text.historyForever),
-            h('p', { className: 'dsh-orb-set-muted' }, text.historyDaysHint)),
-          h('div', { className: 'dsh-orb-set-actions' },
-            enabled ? h('input', {
-              type: 'number',
-              min: 1,
-              max: 3650,
-              className: 'dsh-orb-set-input',
-              value: days,
-              disabled: pending,
-              onChange: (event) => { setDays(event.target.value) },
-            }) : null,
-            enabled ? h('span', null, text.historyDays) : null,
-            h('button', {
-              type: 'button',
-              className: 'dsh-orb-set-button',
-              disabled: pending,
-              onClick: () => { void save() },
-            }, busy ? text.historyPreviewing : text.historySave),
-            h('button', {
-              type: 'button',
-              className: 'dsh-orb-set-button dsh-orb-set-ghost',
-              disabled: pending || history.retentionDays <= 0,
-              onClick: () => { void cleanNow() },
-            }, text.historyCleanNow))),
+              onChange: (event) => { void choose(Number(event.target.value)) },
+            },
+              HISTORY_RETENTION_DAYS.map((days) => h('option', { key: days, value: String(days) },
+                days === 0 ? text.historyForever : text.historyDaysOption.replaceAll('{days}', String(days))))))),
+        h('p', { className: 'dsh-orb-set-muted' }, text.historyWorkspace.replaceAll('{path}', String(history.workspacePath || ''))),
+        h('p', { className: 'dsh-orb-set-muted' }, text.historyRestoreHint),
         error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
         cleaning ? h('p', { className: 'dsh-orb-set-banner', role: 'status' }, history.phase === 'restoring' ? text.historyRestoring : text.historyCleaning) : null,
         history.error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, `${text.historyFailed}${history.error}`) : null,
-        preview ? h('p', { className: 'dsh-orb-set-muted' }, describePreview(preview)) : null,
-        h('p', null, history.lastCleanupAt
-          ? text.historyLast
-            .replaceAll('{sessions}', String(history.lastDeletedSessions))
-            .replaceAll('{size}', megabytes(history.lastMovedBytes))
-          : text.historyNever),
-        h('p', { className: 'dsh-orb-set-muted' }, text.historySystemTrash),
-        h('p', { className: 'dsh-orb-set-muted' }, text.historyRestoreHint))
+        history.lastCleanupAt ? h('p', { className: 'dsh-orb-set-muted' }, text.historyLast.replaceAll('{sessions}', String(history.lastDeletedSessions))) : null)
     }
 
     function card(title, description, control) {
@@ -1005,6 +946,8 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-status { font-weight: 600; }
 .dsh-orb-set-fields:disabled { opacity: 0.55; }
 .dsh-orb-set-input { width: 72px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 8px; padding: 6px 8px; font: inherit; }
+.dsh-orb-set-label { display: flex; align-items: center; gap: 12px; font-weight: 600; }
+.dsh-orb-set-select { min-width: 190px; }
 .dsh-orb-set-muted { color: color-mix(in srgb, currentColor 58%, transparent); }
 `
 

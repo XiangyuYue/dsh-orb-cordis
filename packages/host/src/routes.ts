@@ -12,8 +12,8 @@ import { normalizeCatalog, type ModelCatalog } from './catalog.ts'
 import { EMPTY_HISTORY_STATE, type HistoryPreview, type HistoryState } from './history.ts'
 import {
   isAgentModelSelection,
+  isHistoryRetentionDays,
   MAX_AVATAR_BYTES,
-  MAX_HISTORY_RETENTION_DAYS,
   sniffAvatarMime,
   type AgentModelSelection,
   type ProfileStore,
@@ -186,7 +186,7 @@ async function handle(deps: RouteDeps, req: IncomingMessage, res: ServerResponse
   }
   if (method === 'POST' && path === `${PREFIX}/history/retention`) {
     const days = integerField(await readJson(req), 'days')
-    if (!historyAvailable(deps) || days === undefined || days < 0 || days > MAX_HISTORY_RETENTION_DAYS) {
+    if (!historyAvailable(deps) || days === undefined || !isHistoryRetentionDays(days)) {
       sendJson(res, historyAvailable(deps) ? 400 : 409, { error: historyAvailable(deps) ? 'invalid-retention' : 'history-unavailable' })
       return
     }
@@ -196,7 +196,7 @@ async function handle(deps: RouteDeps, req: IncomingMessage, res: ServerResponse
   }
   if (method === 'POST' && path === `${PREFIX}/history/preview`) {
     const days = integerField(await readJson(req), 'days')
-    if (!historyAvailable(deps) || days === undefined || days < 0 || days > MAX_HISTORY_RETENTION_DAYS) {
+    if (!historyAvailable(deps) || days === undefined || !isHistoryRetentionDays(days)) {
       sendJson(res, historyAvailable(deps) ? 400 : 409, { error: historyAvailable(deps) ? 'invalid-retention' : 'history-unavailable' })
       return
     }

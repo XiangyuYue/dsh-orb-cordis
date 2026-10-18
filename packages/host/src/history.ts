@@ -13,7 +13,7 @@
 import { existsSync, statSync } from 'node:fs'
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import type { ProfileStore } from './preferences.ts'
+import { isHistoryRetentionDays, type ProfileStore } from './preferences.ts'
 
 /** One row from the official Session list. Only the fields retention reads are named. */
 export interface HistorySessionRow {
@@ -231,7 +231,7 @@ export class HistoryCleaner {
 
   /** Persist a retention policy. 0 means forever and deletes nothing. */
   setRetention(days: number): void {
-    if (!Number.isInteger(days) || days < 0 || days > 3650) throw new Error('invalid-retention')
+    if (!isHistoryRetentionDays(days)) throw new Error('invalid-retention')
     this.deps.store.setHistoryRecord({ retentionDays: days })
     this.error = null
   }
@@ -239,7 +239,7 @@ export class HistoryCleaner {
   /** Read-only count of what the current policy would move. */
   async preview(days: number): Promise<HistoryPreview> {
     this.assertAvailable()
-    if (!Number.isInteger(days) || days < 0 || days > 3650) throw new Error('invalid-retention')
+    if (!isHistoryRetentionDays(days)) throw new Error('invalid-retention')
     if (days === 0) {
       return {
         days,

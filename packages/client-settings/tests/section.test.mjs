@@ -586,7 +586,7 @@ describe('settings section', () => {
     page.setSettingsOpen(null)
   })
 
-  it('saves a finite history retention after previewing it, without a plugin-owned trash', async () => {
+  it('saves a retention window from the select and only cleans when it covers sessions', async () => {
     const page = loadSection()
     page.setHistory({
       ...page.snapshot.history,
@@ -601,15 +601,13 @@ describe('settings section', () => {
     assert.equal(find(view, (node) => node.type === 'h3' && node.children?.[0] === '旧会话清理').length, 1)
     assert.equal(find(view, (node) => node.children?.includes('工作区：/Users/test/.dsh/dsh_orb')).length, 1)
 
-    const toggle = find(view, (node) => node.props?.['aria-label'] === '自动清理旧会话')[0]
-    toggle.props.onClick()
-    view = page.render()
-    const input = find(view, (node) => node.type === 'input' && node.props?.type === 'number')[0]
-    input.props.onChange({ target: { value: '30' } })
-    view = page.render()
+    const select = find(view, (node) => node.type === 'select' && node.props?.['aria-label'] === '保留期限')[0]
+    assert.equal(select.props.value, '0')
+    const options = find(select, (node) => node.type === 'option')
+    assert.deepEqual(options.map((option) => option.children?.[0]), ['永久保留', '1 天', '7 天', '14 天', '30 天', '60 天'])
+
     page.setConfirm(true)
-    const save = find(view, (node) => node.type === 'button' && node.children?.includes('保存'))[0]
-    save.props.onClick()
+    select.props.onChange({ target: { value: '30' } })
     await settle()
     assert.ok(page.calls.some((call) => call.path === '/.dsh-orb/history/preview'))
     const retention = page.calls.find((call) => call.path === '/.dsh-orb/history/retention')
@@ -618,10 +616,16 @@ describe('settings section', () => {
     assert.equal(page.snapshot.history.retentionDays, 30)
 
     view = page.render()
-    assert.equal(find(view, (node) => node.type === 'button' && node.children?.includes('恢复')).length, 0)
-    assert.equal(find(view, (node) => node.type === 'button' && node.children?.includes('清空回收站')).length, 0)
-    assert.ok(find(view, (node) => node.children?.some?.((child) => typeof child === 'string' && child.includes('系统废纸篓/回收站'))).length > 0)
-    assert.ok(!page.calls.some((call) => String(call.path).includes('/history/trash/')))
+    const current = find(view, (node) => node.type === 'select' && node.props?.['aria-label'] === '保留期限')[0]
+    assert.equal(current.props.value, '30')
+    assert.equal(find(view, (node) => node.type === 'button' && ['保存', '立即清理', '清空回收站', '恢复'].some((label) => node.children?.includes(label))).length, 0)
+    assert.ok(find(view, (node) => node.children?.some?.((child) => typeof child === 'string' && child.includes('系统回收站'))).length > 0)
+
+    const cleanCalls = page.calls.filter((call) => call.path === '/.dsh-orb/history/clean').length
+    current.props.onChange({ target: { value: '0' } })
+    await settle()
+    assert.equal(page.snapshot.history.retentionDays, 0)
+    assert.equal(page.calls.filter((call) => call.path === '/.dsh-orb/history/clean').length, cleanCalls)
   })
 
   it('does not offer history controls when the host cannot clean conversations', async () => {

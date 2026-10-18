@@ -20,8 +20,16 @@ const UPDATE_FILE = 'orb-update.json'
 const HISTORY_FILE = 'orb-history.json'
 const WORKSPACE_FILE = 'orb-workspace.json'
 
-/** Largest retention a person can ask for: ten years, in days. */
-export const MAX_HISTORY_RETENTION_DAYS = 3650
+/** Retention choices shown in the settings select; 0 means forever. */
+export const HISTORY_RETENTION_DAYS = [0, 1, 7, 14, 30, 60] as const
+
+/** Largest finite retention the select offers, in days. */
+export const MAX_HISTORY_RETENTION_DAYS = 60
+
+/** True for the six choices the settings page can send. */
+export function isHistoryRetentionDays(value: number): boolean {
+  return (HISTORY_RETENTION_DAYS as readonly number[]).includes(value)
+}
 
 export const PERMISSION_PRESETS = ['read-only', 'workspace-write', 'danger-full-access'] as const
 
@@ -433,7 +441,7 @@ function readHistory(dir: string): HistoryRecord {
   const stored = record(readJson(join(dir, HISTORY_FILE)))
   if (stored === undefined) return DEFAULT_HISTORY
   const days = stored.retentionDays
-  const retentionDays = typeof days === 'number' && Number.isInteger(days) && days >= 0 && days <= MAX_HISTORY_RETENTION_DAYS
+  const retentionDays = typeof days === 'number' && isHistoryRetentionDays(days)
     ? days
     : DEFAULT_HISTORY.retentionDays
   return {
