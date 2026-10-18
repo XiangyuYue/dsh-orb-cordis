@@ -4,7 +4,8 @@
  */
 
 import { readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { isAvatarPresetId } from './avatar-presets.ts'
 
 const PERMISSION_FILE = 'orb-permission.json'
@@ -16,6 +17,11 @@ const BALL_FILE = 'ball-enabled.json'
 const AVATAR_FILE = 'orb-avatar'
 const AVATAR_META_FILE = 'orb-avatar.json'
 const UPDATE_FILE = 'orb-update.json'
+const HISTORY_FILE = 'orb-history.json'
+const WORKSPACE_FILE = 'orb-workspace.json'
+
+/** Largest retention a person can ask for: ten years, in days. */
+export const MAX_HISTORY_RETENTION_DAYS = 3650
 
 export const PERMISSION_PRESETS = ['read-only', 'workspace-write', 'danger-full-access'] as const
 
@@ -57,6 +63,31 @@ export interface UpdateRecord {
 }
 
 const DEFAULT_UPDATE: UpdateRecord = { checkedAt: 0, latestVersion: '', notifiedVersion: '', autoCheck: true, lastError: '' }
+
+/**
+ * Retention for the floating-ball workspace history. `retentionDays` of 0 means forever,
+ * which is the default: an absent or unreadable file never deletes anything.
+ */
+export interface HistoryRecord {
+  readonly retentionDays: number
+  /** Unix time in milliseconds; 0 until a cleanup has moved something to the trash. */
+  readonly lastCleanupAt: number
+  readonly lastDeletedSessions: number
+  /** Bytes moved into the trash by the last cleanup, not yet freed. */
+  readonly lastMovedBytes: number
+}
+
+const DEFAULT_HISTORY: HistoryRecord = {
+  retentionDays: 0,
+  lastCleanupAt: 0,
+  lastDeletedSessions: 0,
+  lastMovedBytes: 0,
+}
+
+/** The floating-ball workspace when the profile names no other one. */
+export function defaultWorkspaceDirectory(): string {
+  return resolve(dshHomePath('dsh_orb'))
+}
 
 const DEFAULT_MODEL: AgentModelSelection = {
   provider: 'deepseek-official',
@@ -104,6 +135,7 @@ export class ProfileStore {
   private selectionLanguage: 'zh' | 'en'
   private ballValue: boolean
   private updateValue: UpdateRecord
+  private historyValue: HistoryRecord
 
   constructor(readonly dir: string) {
     const permission = readPermission(dir)
@@ -117,6 +149,7 @@ export class ProfileStore {
     this.selectionLanguage = selection.language
     this.ballValue = readBall(dir)
     this.updateValue = readUpdate(dir)
+    this.historyValue = readHistory(dir)
   }
 
   permission(): PermissionPreset {
@@ -213,6 +246,25 @@ export class ProfileStore {
   setUpdateRecord(patch: Partial<UpdateRecord>): void {
     this.updateValue = { ...this.updateValue, ...patch }
     writeJson(join(this.dir, UPDATE_FILE), this.updateValue)
+  }
+
+  history(): HistoryRecord {
+    return this.historyValue
+  }
+
+  setHistoryRecord(patch: Partial<HistoryRecord>): void {
+    this.historyValue = { ...this.historyValue, ...patch }
+    writeJson(join(this.dir, HISTORY_FILE), this.historyValue)
+  }
+
+  /**
+   * The workspace the ball creates its conversations in. The future workspace setting
+   * writes `orb-workspace.json`; missing or relative paths keep the shipped default.
+   */
+  workspaceDirectory(): string {
+    const stored = record(readJson(join(this.dir, WORKSPACE_FILE)))?.path
+    if (typeof stored === 'string' && isAbsolute(stored)) return resolve(stored)
+    return defaultWorkspaceDirectory()
   }
 
   /** Bumped by every avatar change: the ball refetches on it, the settings preview re-renders on it. */
@@ -367,6 +419,21 @@ function readUpdate(dir: string): UpdateRecord {
     notifiedVersion: typeof stored.notifiedVersion === 'string' ? stored.notifiedVersion : '',
     autoCheck: typeof stored.autoCheck === 'boolean' ? stored.autoCheck : true,
     lastError: typeof stored.lastError === 'string' ? stored.lastError : '',
+  }
+}
+
+function readHistory(dir: string): HistoryRecord {
+  const stored = record(readJson(join(dir, HISTORY_FILE)))
+  if (stored === undefined) return DEFAULT_HISTORY
+  const days = stored.retentionDays
+  const retentionDays = typeof days === 'number' && Number.isInteger(days) && days >= 0 && days <= MAX_HISTORY_RETENTION_DAYS
+    ? days
+    : DEFAULT_HISTORY.retentionDays
+  return {
+    retentionDays,
+    lastCleanupAt: typeof stored.lastCleanupAt === 'number' && Number.isFinite(stored.lastCleanupAt) ? stored.lastCleanupAt : 0,
+    lastDeletedSessions: typeof stored.lastDeletedSessions === 'number' && Number.isInteger(stored.lastDeletedSessions) && stored.lastDeletedSessions >= 0 ? stored.lastDeletedSessions : 0,
+    lastMovedBytes: typeof stored.lastMovedBytes === 'number' && Number.isFinite(stored.lastMovedBytes) && stored.lastMovedBytes >= 0 ? stored.lastMovedBytes : 0,
   }
 }
 

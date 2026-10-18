@@ -80,6 +80,7 @@ export function apply(ctx: OrbContext, config: { autoStart?: boolean } = {}): vo
     // settings service leaves the ball on its system defaults.
     const detachAppearance = watchAppearance(ctx, (appearance) => { runtime.setAppearance(appearance) })
     const detachUpdates = updater.start()
+    const detachHistory = runtime.startHistory()
     const start = process.platform !== 'linux' && config.autoStart !== false && store.ballEnabled()
     let cancelled = false
     if (installing) {
@@ -114,6 +115,7 @@ export function apply(ctx: OrbContext, config: { autoStart?: boolean } = {}): vo
       detachRoutes()
       detachAppearance()
       detachUpdates()
+      detachHistory()
       runtime.halt()
     }
   })

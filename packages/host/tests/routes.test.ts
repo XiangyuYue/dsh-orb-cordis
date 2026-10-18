@@ -372,6 +372,93 @@ describe('settings routes', () => {
     dispose()
   })
 
+  it('exposes history retention, preview, cleanup, and the trash', async () => {
+    const profile = join(root, 'profile-history')
+    mkdirSync(profile, { recursive: true })
+    const store = new ProfileStore(profile)
+    const calls: unknown[] = []
+    let retention = 0
+    const historyState = (): import('../src/history.ts').HistoryState => ({
+      available: true,
+      workspacePath: '/tmp/orb-workspace',
+      retentionDays: retention,
+      cleaning: false,
+      phase: '',
+      error: null,
+      lastCleanupAt: null,
+      lastDeletedSessions: 0,
+      lastMovedBytes: 0,
+      trashBytes: 0,
+      trashBatches: [],
+    })
+    const control: OrbControl = {
+      helperAuthorized: () => false,
+      takeJump: () => null,
+      confirmJump() {},
+      takeSettingsOpen: () => null,
+      confirmSettingsOpen() {},
+      async publishChrome() {},
+      async setOverlayModel() {},
+      async setBackgroundModel() {},
+      async setSelectionEnabled() {},
+      async setMillifractionEnabled() {},
+      async setObservationFrameEnabled() {},
+      async setBallEnabled() {},
+      updateState: () => ({ ...emptyUpdate }),
+      setAutoCheck() {},
+      historyState,
+      setHistoryRetention(days) { retention = days; calls.push(['retention', days]) },
+      async previewHistory(days) {
+        calls.push(['preview', days])
+        return { days, cutoff: 0, roots: 2, members: 3, images: 4, bytes: 5, oldest: null, newest: null, skipped: { active: 0, pinned: 0, archived: 0, current: 0, unchanged: 0, unreadable: 0 } }
+      },
+      cleanHistory() { calls.push('clean') },
+      async emptyHistoryTrash() { calls.push('empty') },
+      async restoreHistoryTrash(batchId) { calls.push(['restore', batchId]) },
+    }
+    let handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | undefined
+    const dispose = registerOrbRoutes({
+      ctx: {
+        webServer: { register(route) { handler = route.handler; return () => { handler = undefined } } },
+        connection: {
+          admit(req) {
+            return req.headers['x-dsh-user'] === 'ok' ? { peer: { id: 'local' } } : { rejection: 401 }
+          },
+        },
+        sessionController: { modelCatalog: () => ({ groups: [] }) },
+      },
+      store,
+      tcc: new TccMonitor(),
+      control,
+    })
+    assert.ok(handler)
+    const answer = async (method: string, url: string, body?: string): Promise<{ status: number; json: any }> => {
+      const res = response()
+      await handler!(request(method, url, body, { 'x-dsh-user': 'ok' }), res)
+      const text = res.body.toString('utf8')
+      return { status: res.status, json: text === '' ? undefined : JSON.parse(text) }
+    }
+
+    const state = await answer('GET', '/.dsh-orb/history')
+    assert.equal(state.status, 200)
+    assert.equal(state.json.retentionDays, 0)
+    assert.equal((await answer('POST', '/.dsh-orb/history/retention', JSON.stringify({ days: 30 }))).status, 200)
+    assert.deepEqual(calls.at(-1), ['retention', 30])
+    const preview = await answer('POST', '/.dsh-orb/history/preview', JSON.stringify({ days: 30 }))
+    assert.equal(preview.status, 200)
+    assert.equal(preview.json.preview.roots, 2)
+    assert.equal((await answer('POST', '/.dsh-orb/history/clean', '{}')).status, 200)
+    assert.equal(calls.at(-1), 'clean')
+    assert.equal((await answer('POST', '/.dsh-orb/history/trash/empty', '{}')).status, 200)
+    assert.equal(calls.at(-1), 'empty')
+    assert.equal((await answer('POST', '/.dsh-orb/history/trash/restore', JSON.stringify({ batchId: 'batch-1' }))).status, 200)
+    assert.deepEqual(calls.at(-1), ['restore', 'batch-1'])
+    assert.equal((await answer('POST', '/.dsh-orb/history/retention', JSON.stringify({ days: 3651 }))).status, 400)
+    assert.equal((await answer('POST', '/.dsh-orb/history/retention', JSON.stringify({ days: 1.5 }))).status, 400)
+    assert.equal((await answer('POST', '/.dsh-orb/history/retention', JSON.stringify({ days: '30' }))).status, 400)
+    dispose()
+  })
+
   it('hands a bookmark jump and a settings target to the main window once', async () => {
     let armed: string | undefined = 'session-agent-9'
     let settings: number | undefined = 4242

@@ -9,9 +9,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { AVATAR_PRESETS, avatarPresetPath, isAvatarPresetId } from './avatar-presets.ts'
 import { normalizeCatalog, type ModelCatalog } from './catalog.ts'
+import { EMPTY_HISTORY_STATE, type HistoryPreview, type HistoryState } from './history.ts'
 import {
   isAgentModelSelection,
   MAX_AVATAR_BYTES,
+  MAX_HISTORY_RETENTION_DAYS,
   sniffAvatarMime,
   type AgentModelSelection,
   type ProfileStore,
@@ -67,6 +69,13 @@ export interface OrbControl {
   /** Starts the upgrade and returns at once; the page polls {@link updateState} while it runs. */
   installUpdate(approvedBuilds?: string[]): void
   setAutoCheck(enabled: boolean): void
+  historyState?(): HistoryState
+  setHistoryRetention?(days: number): void
+  previewHistory?(days: number): Promise<HistoryPreview>
+  /** Starts the cleanup and returns at once; the page polls `historyState`. */
+  cleanHistory?(): void
+  emptyHistoryTrash?(): Promise<void>
+  restoreHistoryTrash?(batchId?: string): Promise<void>
 }
 
 interface RouteDeps {
@@ -101,6 +110,19 @@ export function registerOrbRoutes(deps: RouteDeps): () => void {
 function errorStatus(error: unknown): number | undefined {
   const status = (error as { status?: unknown } | undefined)?.status
   return typeof status === 'number' && status >= 400 && status < 600 ? status : undefined
+}
+
+function historyAvailable(deps: RouteDeps): boolean {
+  try {
+    return deps.control.historyState?.().available === true
+      && typeof deps.control.setHistoryRetention === 'function'
+      && typeof deps.control.previewHistory === 'function'
+      && typeof deps.control.cleanHistory === 'function'
+      && typeof deps.control.emptyHistoryTrash === 'function'
+      && typeof deps.control.restoreHistoryTrash === 'function'
+  } catch {
+    return false
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -159,6 +181,61 @@ async function handle(deps: RouteDeps, req: IncomingMessage, res: ServerResponse
       return
     }
     deps.control.setAutoCheck(enabled)
+    sendJson(res, 200, await snapshot(deps))
+    return
+  }
+  if (method === 'GET' && path === `${PREFIX}/history`) {
+    sendJson(res, 200, deps.control.historyState?.() ?? EMPTY_HISTORY_STATE)
+    return
+  }
+  if (method === 'POST' && path === `${PREFIX}/history/retention`) {
+    const days = integerField(await readJson(req), 'days')
+    if (!historyAvailable(deps) || days === undefined || days < 0 || days > MAX_HISTORY_RETENTION_DAYS) {
+      sendJson(res, historyAvailable(deps) ? 400 : 409, { error: historyAvailable(deps) ? 'invalid-retention' : 'history-unavailable' })
+      return
+    }
+    deps.control.setHistoryRetention?.(days)
+    sendJson(res, 200, await snapshot(deps))
+    return
+  }
+  if (method === 'POST' && path === `${PREFIX}/history/preview`) {
+    const days = integerField(await readJson(req), 'days')
+    if (!historyAvailable(deps) || days === undefined || days < 0 || days > MAX_HISTORY_RETENTION_DAYS) {
+      sendJson(res, historyAvailable(deps) ? 400 : 409, { error: historyAvailable(deps) ? 'invalid-retention' : 'history-unavailable' })
+      return
+    }
+    sendJson(res, 200, { preview: await deps.control.previewHistory?.(days) })
+    return
+  }
+  if (method === 'POST' && path === `${PREFIX}/history/clean`) {
+    if (!historyAvailable(deps)) {
+      sendJson(res, 409, { error: 'history-unavailable' })
+      return
+    }
+    deps.control.cleanHistory?.()
+    sendJson(res, 200, await snapshot(deps))
+    return
+  }
+  if (method === 'POST' && path === `${PREFIX}/history/trash/empty`) {
+    if (!historyAvailable(deps)) {
+      sendJson(res, 409, { error: 'history-unavailable' })
+      return
+    }
+    await deps.control.emptyHistoryTrash?.()
+    sendJson(res, 200, await snapshot(deps))
+    return
+  }
+  if (method === 'POST' && path === `${PREFIX}/history/trash/restore`) {
+    if (!historyAvailable(deps)) {
+      sendJson(res, 409, { error: 'history-unavailable' })
+      return
+    }
+    const batch = asRecord(await readJson(req))?.batchId
+    if (batch !== undefined && (typeof batch !== 'string' || batch === '')) {
+      sendJson(res, 400, { error: 'invalid-batch' })
+      return
+    }
+    await deps.control.restoreHistoryTrash?.(typeof batch === 'string' ? batch : undefined)
     sendJson(res, 200, await snapshot(deps))
     return
   }
@@ -340,6 +417,7 @@ async function snapshot(deps: RouteDeps): Promise<{
   selectionAvailable: boolean
   permissionFallback: boolean
   update: UpdateState
+  history: HistoryState
 }> {
   const models = deps.store.models()
   const version = Math.trunc(deps.store.avatarVersion())
@@ -363,6 +441,7 @@ async function snapshot(deps: RouteDeps): Promise<{
     selectionAvailable: selectionRuntimeAvailable(),
     permissionFallback: deps.store.permissionFallback(),
     update: deps.control.updateState(),
+    history: deps.control.historyState?.() ?? EMPTY_HISTORY_STATE,
   }
 }
 
@@ -445,6 +524,12 @@ function selectionFrom(value: unknown): AgentModelSelection | undefined {
 function booleanField(value: unknown): boolean | undefined {
   const enabled = asRecord(value)?.enabled
   return typeof enabled === 'boolean' ? enabled : undefined
+}
+
+/** One integer field, undefined for a missing/non-integer value. */
+function integerField(value: unknown, key: string): number | undefined {
+  const item = asRecord(value)?.[key]
+  return typeof item === 'number' && Number.isSafeInteger(item) ? item : undefined
 }
 
 /** Optional list of package names, absent when the field is missing or empty. */

@@ -14,6 +14,15 @@ import { avatarPresetSrc } from './avatar-presets.ts'
 import { normalizeCatalog } from './catalog.ts'
 import { resolveElectronBinary } from './electron-runtime.ts'
 import { helperMain } from './helper-path.ts'
+import {
+  HistoryCleaner,
+  historyTrashRoot,
+  type HistoryPersistence,
+  type HistoryPreview,
+  type HistorySessionRow,
+  type HistoryState,
+  type WorkspaceSafety,
+} from './history.ts'
 import { openMainWindow } from './open-main.ts'
 import { isDesktopHost, isTccRight, TccMonitor, type TccRight, type TccStatus } from './tcc.ts'
 import {
@@ -56,6 +65,21 @@ export interface OrbContext {
     create(request: { readonly path: string }): Promise<{
       readonly workspace: { readonly workspaceId: string }
     }>
+    /** Complete archive/pin projection; absent on a Host that predates it. */
+    baseline?(): {
+      readonly archivedSessionIds?: readonly string[]
+      readonly pinnedSessionIds?: readonly string[]
+    }
+    /** First frame carries a baseline on a controller that exposes only the stream. */
+    follow?(signal: AbortSignal): AsyncIterable<{
+      readonly type?: string
+      readonly value?: {
+        readonly archivedSessionIds?: readonly string[]
+        readonly pinnedSessionIds?: readonly string[]
+      }
+    }>
+    archiveSession?(request: { readonly sessionId: string }): Promise<unknown>
+    unarchiveSession?(request: { readonly sessionId: string }): Promise<unknown>
   }
   readonly sessionController: {
     create(request: {
@@ -320,6 +344,8 @@ export class OrbRuntime {
   private appearance: Appearance = {}
   /** Set by the plugin entry; the settings routes and the ball menu both drive it. */
   private updater: UpdateChecker | undefined
+  /** Retention for the floating-ball workspace history; routes and scheduling delegate here. */
+  private readonly history: HistoryCleaner
   private readonly overlayWaiters = new Map<string, () => void>()
   /** Chrome window ids each helper reported, keyed by its socket. */
   private readonly chromeWindows = new Map<Socket, readonly number[]>()
@@ -366,6 +392,22 @@ export class OrbRuntime {
       accessibilityTrusted: () => access.accessibilityTrusted(),
       now: () => Date.now(),
     }, options.startMonitor)
+    this.history = new HistoryCleaner({
+      store: this.store,
+      workspacePath: () => this.store.workspaceDirectory(),
+      currentSession: () => this.sessionId,
+      listSessions: () => this.listHistoryRows(),
+      isAttached: (id) => this.ctx.sessions.get(id) !== undefined,
+      workspaceSafety: () => readWorkspaceSafety(this.ctx),
+      archive: (id) => archiveHistorySession(this.ctx, id),
+      unarchive: (id) => unarchiveHistorySession(this.ctx, id),
+      persistence: () => historyPersistence(this.ctx),
+      available: () => historyAvailable(this.ctx),
+      sessionsRoot: dshHomePath('sessions'),
+      objectsRoot: dshHomePath('attachments', 'v1', 'objects'),
+      trashRoot: historyTrashRoot(),
+      log: (message) => console.error(`dsh-orb: ${message}`),
+    })
     ctx.provide('computerUseOverlayGuard', this.overlay)
     this.listenAssistantStream()
   }
@@ -779,7 +821,7 @@ export class OrbRuntime {
   }
 
   private async createWorkspace(): Promise<string> {
-    const workspace = dshHomePath('dsh_orb')
+    const workspace = this.store.workspaceDirectory()
     await mkdir(workspace, { recursive: true })
     const created = await this.ctx.workspaceController.create({ path: workspace })
     return created.workspace.workspaceId
@@ -1559,6 +1601,35 @@ export class OrbRuntime {
     this.updater?.setAutoCheck(enabled)
   }
 
+  /** Start the daily retention check; the plugin effect owns the disposer. */
+  startHistory(): () => void {
+    return this.history.start()
+  }
+
+  historyState(): HistoryState {
+    return this.history.state()
+  }
+
+  setHistoryRetention(days: number): void {
+    this.history.setRetention(days)
+  }
+
+  previewHistory(days: number): Promise<HistoryPreview> {
+    return this.history.preview(days)
+  }
+
+  cleanHistory(): void {
+    this.history.startClean()
+  }
+
+  emptyHistoryTrash(): Promise<void> {
+    return this.history.emptyTrash()
+  }
+
+  restoreHistoryTrash(batchId?: string): Promise<void> {
+    return this.history.restore(batchId)
+  }
+
   private onControl(message: unknown, socket: Socket): void {
     const record = asRecord(message)
     if (!record || typeof record.type !== 'string') return
@@ -1731,9 +1802,8 @@ export class OrbRuntime {
 
   private async historyRecords(): Promise<{ sessionId: string; title: string; running: boolean }[]> {
     try {
-      const listed = await this.ctx.sessionController.list({}, AbortSignal.timeout(15_000))
-      const rows = Array.isArray(listed) ? listed : (listed as { items?: readonly unknown[] }).items ?? []
-      const orb = resolve(dshHomePath('dsh_orb'))
+      const rows = await this.listHistoryRows()
+      const orb = this.store.workspaceDirectory()
       const items: { sessionId: string; title: string; running: boolean }[] = []
       for (const row of rows) {
         const record = asRecord(row)
@@ -1750,6 +1820,13 @@ export class OrbRuntime {
       console.error(`dsh-orb: history failed: ${error instanceof Error ? error.message : String(error)}`)
       return []
     }
+  }
+
+  /** One official list read, unfiltered, for both the ball history and retention. */
+  private async listHistoryRows(): Promise<HistorySessionRow[]> {
+    const listed = await this.ctx.sessionController.list({}, AbortSignal.timeout(15_000))
+    const rows = Array.isArray(listed) ? listed : (listed as { items?: readonly unknown[] }).items ?? []
+    return rows as HistorySessionRow[]
   }
 
   private resetTranscript(): void {
@@ -2136,9 +2213,65 @@ function isQuestionCancel(message: unknown): message is { type: 'question-cancel
 
 function isHistoryRow(record: Record<string, unknown>, orb: string): boolean {
   if (record.origin === 'subagent') return false
-  if (typeof record.cwd !== 'string' || resolve(record.cwd) !== orb) return false
+  if (typeof record.cwd !== 'string' || resolve(record.cwd) !== resolve(orb)) return false
   const preset = projection(record, 'agentPreset')
   return preset === undefined || preset === 'computer-use'
+}
+
+/** The persistence service, when this Host exposes its read surface. */
+function historyPersistence(ctx: OrbContext): HistoryPersistence | undefined {
+  const value = ctx.get('sessionPersistence')
+  if (typeof value !== 'object' || value === null) return undefined
+  const candidate = value as Partial<HistoryPersistence>
+  if (typeof candidate.list !== 'function' || typeof candidate.stat !== 'function' || typeof candidate.open !== 'function') return undefined
+  return value as HistoryPersistence
+}
+
+/** All services retention needs, checked before the card offers the action. */
+function historyAvailable(ctx: OrbContext): boolean {
+  if (historyPersistence(ctx) === undefined) return false
+  const controller = ctx.workspaceController
+  if (typeof controller.archiveSession !== 'function' || typeof controller.unarchiveSession !== 'function') return false
+  return typeof controller.baseline === 'function' || typeof controller.follow === 'function'
+}
+
+/** Pinned and archived Session ids, read from the Workspace projection. */
+async function readWorkspaceSafety(ctx: OrbContext): Promise<WorkspaceSafety> {
+  const controller = ctx.workspaceController
+  if (typeof controller.baseline === 'function') {
+    const baseline = controller.baseline()
+    return {
+      pinned: [...baseline.pinnedSessionIds ?? []],
+      archived: [...baseline.archivedSessionIds ?? []],
+    }
+  }
+  if (typeof controller.follow === 'function') {
+    const abort = new AbortController()
+    try {
+      for await (const frame of controller.follow(abort.signal)) {
+        if (frame.type !== 'baseline' || frame.value === undefined) continue
+        return {
+          pinned: [...frame.value.pinnedSessionIds ?? []],
+          archived: [...frame.value.archivedSessionIds ?? []],
+        }
+      }
+    } finally {
+      abort.abort()
+    }
+  }
+  throw new Error('workspace-safety-unavailable')
+}
+
+async function archiveHistorySession(ctx: OrbContext, sessionId: string): Promise<void> {
+  const archive = ctx.workspaceController.archiveSession
+  if (typeof archive !== 'function') throw new Error('workspace-archive-unavailable')
+  await archive.call(ctx.workspaceController, { sessionId })
+}
+
+async function unarchiveHistorySession(ctx: OrbContext, sessionId: string): Promise<void> {
+  const unarchive = ctx.workspaceController.unarchiveSession
+  if (typeof unarchive !== 'function') throw new Error('workspace-unarchive-unavailable')
+  await unarchive.call(ctx.workspaceController, { sessionId })
 }
 
 function projection(record: Record<string, unknown>, key: string): unknown {

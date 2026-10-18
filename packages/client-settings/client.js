@@ -85,6 +85,34 @@ window.__ModuleLoader__.load({
       updateAuto: '自动检查更新',
       updateAutoDescription: '每天一次向 npmmirror（失败回退 npm）查询新版本，不发送任何标识信息。',
       updateManual: '当前 Harness 没有提供插件管理服务，请在插件页手动更新。',
+      historyTitle: '旧会话清理',
+      historyDescription: '超过保留时间的悬浮球工作区会话会整段移入回收站：文字、上下文和截图一起删除。',
+      historyForever: '永远保留',
+      historyAuto: '自动清理旧会话',
+      historyKeep: '保留最近',
+      historyDays: '天',
+      historyDaysHint: '按最后一次聊天时间计算；正在运行、正在打开、置顶和已归档的会话会跳过。',
+      historySave: '保存',
+      historyCleanNow: '立即清理',
+      historyPreviewing: '正在计算…',
+      historyCleaning: '正在清理…',
+      historyPreviewLine: '将清理 {roots} 个会话（含 {members} 个子会话），约 {images} 张截图 / {size}。',
+      historyConfirm: '这些会话会移入回收站，7 天后自动删除。继续？',
+      historyLimit: '请输入 1–3650 天，或选择永远保留。',
+      historyLast: '上次清理：{sessions} 个会话，{size} 移入回收站。',
+      historyBatch: '{sessions} 个会话 · {images} 张图 · {size}',
+      historyNever: '还没有清理过。',
+      historyTrash: '回收站：{size}',
+      historyTrashEmpty: '回收站是空的。',
+      historyTrashHint: '回收站保留 7 天，期间可以恢复。',
+      historyRestore: '恢复',
+      historyEmptyTrash: '清空回收站',
+      historyEmptyConfirm: '回收站里的会话和截图将永久删除，无法恢复。继续？',
+      historyRestoreConfirm: '把这批会话移回并重新显示？',
+      historyUnavailable: '当前 Harness 不支持清理会话。',
+      historyFailed: '清理失败：',
+      historyWorkspace: '工作区：{path}',
+      historyOther: '只清理悬浮球工作区；其他项目的会话和 Computer Use 截图不会动。',
     }
     const en = {
       nav: 'Floating ball',
@@ -165,6 +193,34 @@ window.__ModuleLoader__.load({
       updateAuto: 'Check for updates automatically',
       updateAutoDescription: 'Asks npmmirror once a day (falling back to npm) for the newest version. Nothing identifying is sent.',
       updateManual: 'This Harness build ships no plugin manager — update from the Plugins page instead.',
+      historyTitle: 'Old conversations',
+      historyDescription: 'Conversations in the floating-ball workspace older than the retention time move to the trash whole: text, context, and screenshots.',
+      historyForever: 'Keep forever',
+      historyAuto: 'Clean up old conversations automatically',
+      historyKeep: 'Keep the last',
+      historyDays: 'days',
+      historyDaysHint: 'Counted from the last chat. Running, open, pinned, and archived conversations are skipped.',
+      historySave: 'Save',
+      historyCleanNow: 'Clean now',
+      historyPreviewing: 'Calculating…',
+      historyCleaning: 'Cleaning…',
+      historyPreviewLine: 'Will move {roots} conversations ({members} with subagents), about {images} screenshots / {size}.',
+      historyConfirm: 'These conversations move to the trash and are deleted after 7 days. Continue?',
+      historyLimit: 'Enter 1–3650 days, or choose keep forever.',
+      historyLast: 'Last cleanup: {sessions} conversations, {size} moved to the trash.',
+      historyBatch: '{sessions} conversations · {images} images · {size}',
+      historyNever: 'Nothing cleaned yet.',
+      historyTrash: 'Trash: {size}',
+      historyTrashEmpty: 'The trash is empty.',
+      historyTrashHint: 'The trash keeps batches for 7 days so they can be restored.',
+      historyRestore: 'Restore',
+      historyEmptyTrash: 'Empty trash',
+      historyEmptyConfirm: 'Conversations and screenshots in the trash are deleted permanently. Continue?',
+      historyRestoreConfirm: 'Move this batch back and show it again?',
+      historyUnavailable: 'This Harness build cannot clean up conversations.',
+      historyFailed: 'Cleanup failed: ',
+      historyWorkspace: 'Workspace: {path}',
+      historyOther: 'Only the floating-ball workspace is cleaned; other projects and their Computer Use screenshots are left alone.',
     }
 
     // The community GIF gallery behind the "more animations" tile. It is a plain
@@ -424,6 +480,16 @@ window.__ModuleLoader__.load({
         }
       }
 
+      async function refreshHistory() {
+        const ticket = takeTicket(false)
+        try {
+          const history = await request('/.dsh-orb/history')
+          applyGet(ticket, (prev) => prev.snapshot ? { ...prev, snapshot: { ...prev.snapshot, history } } : prev)
+        } catch {
+          // Keep the last known state; the next poll or a page reload tries again.
+        }
+      }
+
       async function mutate(path, body, avatarError) {
         // This save outranks every GET already in flight (the confirm-dialog focus load, a
         // poll), and every GET sent before it settles.
@@ -562,7 +628,8 @@ window.__ModuleLoader__.load({
               void mutate('/.dsh-orb/observation-frame', { enabled })
             },
           })),
-          snap.tcc && snap.tcc.applicable ? tccCard(text, snap, disabled, mutate) : null))
+          snap.tcc && snap.tcc.applicable ? tccCard(text, snap, disabled, mutate) : null),
+        historyCard(text, snap, mutate, refreshHistory))
     }
 
     /**
@@ -674,6 +741,211 @@ window.__ModuleLoader__.load({
           .replaceAll('{version}', update.latestVersion))
       }
       return null
+    }
+
+    /** Old floating-ball conversations: retention, preview, trash. */
+    function historyCard(text, snap, mutate, refreshHistory) {
+      const history = snap.history
+      const batches = Array.isArray(history && history.trashBatches) ? history.trashBatches : []
+      const saved = history && history.retentionDays > 0 ? history.retentionDays : 30
+      const [enabled, setEnabled] = React.useState(history?.retentionDays > 0)
+      const [days, setDays] = React.useState(String(saved))
+      const [busy, setBusy] = React.useState(false)
+      const [error, setError] = React.useState('')
+      const [preview, setPreview] = React.useState(null)
+      React.useEffect(() => {
+        if (!history || history.cleaning !== true) return undefined
+        const timer = setInterval(() => { void refreshHistory() }, 2000)
+        return () => { clearInterval(timer) }
+      }, [history && history.cleaning])
+      if (!history) return null
+      if (history.available === false) {
+        return h('section', { className: 'dsh-orb-set-card' },
+          h('h3', null, text.historyTitle),
+          h('p', null, text.historyDescription),
+          h('p', { className: 'dsh-orb-set-banner', role: 'status' }, text.historyUnavailable))
+      }
+      const cleaning = history.cleaning === true
+      const pending = busy || cleaning
+
+      async function requestPreview(count) {
+        const response = await request('/.dsh-orb/history/preview', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ days: count }),
+        })
+        return response && response.preview
+      }
+
+      function describePreview(value) {
+        return text.historyPreviewLine
+          .replaceAll('{roots}', String(value.roots))
+          .replaceAll('{members}', String(value.members))
+          .replaceAll('{images}', String(value.images))
+          .replaceAll('{size}', megabytes(value.bytes))
+      }
+
+      async function save() {
+        if (pending) return
+        setError('')
+        setBusy(true)
+        try {
+          if (!enabled) {
+            await mutate('/.dsh-orb/history/retention', { days: 0 })
+            setPreview(null)
+            return
+          }
+          const count = Number(days)
+          if (!Number.isInteger(count) || count < 1 || count > 3650) {
+            setError(text.historyLimit)
+            return
+          }
+          const value = await requestPreview(count)
+          if (!value) {
+            setError(text.historyPreviewing)
+            return
+          }
+          setPreview(value)
+          if (!window.confirm(`${describePreview(value)} ${text.historyConfirm}`)) return
+          // Persist the policy first, and only start a cleanup once that write answered:
+          // a failed retention save must never clean under the previous policy.
+          await request('/.dsh-orb/history/retention', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ days: count }),
+          })
+          await mutate('/.dsh-orb/history/clean', {})
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      async function cleanNow() {
+        if (pending || history.retentionDays <= 0) return
+        setError('')
+        setBusy(true)
+        try {
+          const value = await requestPreview(history.retentionDays)
+          if (!value) return
+          setPreview(value)
+          if (!window.confirm(`${describePreview(value)} ${text.historyConfirm}`)) return
+          await mutate('/.dsh-orb/history/clean', {})
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      async function emptyTrash() {
+        if (pending || batches.length === 0) return
+        if (!window.confirm(text.historyEmptyConfirm)) return
+        setError('')
+        setBusy(true)
+        try {
+          await mutate('/.dsh-orb/history/trash/empty', {})
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      async function restore(batchId) {
+        if (pending) return
+        if (!window.confirm(text.historyRestoreConfirm)) return
+        setError('')
+        setBusy(true)
+        try {
+          await mutate('/.dsh-orb/history/trash/restore', { batchId })
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      return h('section', { className: 'dsh-orb-set-card' },
+        h('h3', null, text.historyTitle),
+        h('p', null, text.historyDescription),
+        h('p', { className: 'dsh-orb-set-muted' }, text.historyWorkspace.replaceAll('{path}', String(history.workspacePath || ''))),
+        h('p', { className: 'dsh-orb-set-muted' }, text.historyOther),
+        h('div', { className: 'dsh-orb-set-row' },
+          h('div', null,
+            h(Toggle, {
+              checked: enabled,
+              label: text.historyAuto,
+              disabled: pending,
+              onChange: (value) => {
+                setEnabled(value)
+                setError('')
+                setPreview(null)
+              },
+            }),
+            h('p', { className: 'dsh-orb-set-muted' }, history.retentionDays > 0
+              ? `${text.historyKeep} ${history.retentionDays} ${text.historyDays}`
+              : text.historyForever),
+            h('p', { className: 'dsh-orb-set-muted' }, text.historyDaysHint)),
+          h('div', { className: 'dsh-orb-set-actions' },
+            enabled ? h('input', {
+              type: 'number',
+              min: 1,
+              max: 3650,
+              className: 'dsh-orb-set-input',
+              value: days,
+              disabled: pending,
+              onChange: (event) => { setDays(event.target.value) },
+            }) : null,
+            enabled ? h('span', null, text.historyDays) : null,
+            h('button', {
+              type: 'button',
+              className: 'dsh-orb-set-button',
+              disabled: pending,
+              onClick: () => { void save() },
+            }, busy ? text.historyPreviewing : text.historySave),
+            h('button', {
+              type: 'button',
+              className: 'dsh-orb-set-button dsh-orb-set-ghost',
+              disabled: pending || history.retentionDays <= 0,
+              onClick: () => { void cleanNow() },
+            }, text.historyCleanNow))),
+        error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
+        cleaning ? h('p', { className: 'dsh-orb-set-banner', role: 'status' }, text.historyCleaning) : null,
+        history.error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, `${text.historyFailed}${history.error}`) : null,
+        preview ? h('p', { className: 'dsh-orb-set-muted' }, describePreview(preview)) : null,
+        h('div', { className: 'dsh-orb-set-row' },
+          h('div', null,
+            h('p', null, history.lastCleanupAt
+              ? text.historyLast
+                .replaceAll('{sessions}', String(history.lastDeletedSessions))
+                .replaceAll('{size}', megabytes(history.lastMovedBytes))
+              : text.historyNever),
+            h('p', { className: 'dsh-orb-set-muted' }, text.historyTrash.replaceAll('{size}', megabytes(history.trashBytes || 0)))),
+          h('button', {
+            type: 'button',
+            className: 'dsh-orb-set-button dsh-orb-set-ghost',
+            disabled: pending || batches.length === 0,
+            onClick: () => { void emptyTrash() },
+          }, text.historyEmptyTrash)),
+        batches.length === 0
+          ? h('p', { className: 'dsh-orb-set-muted' }, text.historyTrashEmpty)
+          : h('div', { className: 'dsh-orb-set-history-batches' },
+            batches.map((batch) => h('div', { className: 'dsh-orb-set-history-batch', key: batch.id },
+              h('div', null,
+                h('p', null, new Date(batch.createdAt).toLocaleString()),
+                h('p', { className: 'dsh-orb-set-muted' }, text.historyBatch
+                  .replaceAll('{sessions}', String(batch.sessions))
+                  .replaceAll('{images}', String(batch.images))
+                  .replaceAll('{size}', megabytes(batch.bytes)))),
+              h('button', {
+                type: 'button',
+                className: 'dsh-orb-set-button dsh-orb-set-ghost',
+                disabled: pending,
+                onClick: () => { void restore(batch.id) },
+              }, text.historyRestore)))),
+        h('p', { className: 'dsh-orb-set-muted' }, text.historyTrashHint))
     }
 
     function card(title, description, control) {
@@ -791,6 +1063,10 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-tcc { margin-top: 12px; }
 .dsh-orb-set-status { font-weight: 600; }
 .dsh-orb-set-fields:disabled { opacity: 0.55; }
+.dsh-orb-set-input { width: 72px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 8px; padding: 6px 8px; font: inherit; }
+.dsh-orb-set-muted { color: color-mix(in srgb, currentColor 58%, transparent); }
+.dsh-orb-set-history-batches { display: flex; flex-direction: column; gap: 8px; }
+.dsh-orb-set-history-batch { display: flex; justify-content: space-between; gap: 12px; align-items: center; border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent); padding-top: 8px; }
 `
 
     /** Settings-section id of this page; the ball's menu row asks the shell to show exactly this one. */

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import {
   ProfileStore,
   defaultMillifraction,
+  defaultWorkspaceDirectory,
   profileDirectory,
   sniffAvatarMime,
 } from '../src/preferences.ts'
@@ -180,5 +181,41 @@ describe('profile preferences', () => {
     assert.equal(defaultMillifraction('win32'), true)
     assert.equal(defaultMillifraction('darwin'), false)
     assert.equal(defaultMillifraction('linux'), false)
+  })
+
+  it('keeps the history retention record, defaulting to forever', () => {
+    const path = dir('history')
+    const store = new ProfileStore(path)
+    assert.deepEqual(store.history(), {
+      retentionDays: 0,
+      lastCleanupAt: 0,
+      lastDeletedSessions: 0,
+      lastMovedBytes: 0,
+    })
+    store.setHistoryRecord({ retentionDays: 30, lastCleanupAt: 1700000000000, lastDeletedSessions: 2, lastMovedBytes: 4096 })
+    assert.deepEqual(new ProfileStore(path).history(), {
+      retentionDays: 30,
+      lastCleanupAt: 1700000000000,
+      lastDeletedSessions: 2,
+      lastMovedBytes: 4096,
+    })
+    writeFileSync(join(path, 'orb-history.json'), JSON.stringify({ retentionDays: 99999, lastDeletedSessions: -1 }))
+    assert.equal(new ProfileStore(path).history().retentionDays, 0)
+    assert.equal(new ProfileStore(path).history().lastDeletedSessions, 0)
+    writeFileSync(join(path, 'orb-history.json'), '{')
+    assert.equal(new ProfileStore(path).history().retentionDays, 0)
+  })
+
+  it('uses the default floating-ball workspace until a profile names one', () => {
+    const path = dir('workspace')
+    const store = new ProfileStore(path)
+    assert.equal(store.workspaceDirectory(), defaultWorkspaceDirectory())
+    const custom = join(path, 'custom-workspace')
+    writeFileSync(join(path, 'orb-workspace.json'), JSON.stringify({ path: custom }))
+    assert.equal(new ProfileStore(path).workspaceDirectory(), custom)
+    writeFileSync(join(path, 'orb-workspace.json'), JSON.stringify({ path: 'relative/workspace' }))
+    assert.equal(new ProfileStore(path).workspaceDirectory(), defaultWorkspaceDirectory())
+    writeFileSync(join(path, 'orb-workspace.json'), JSON.stringify({ path: 42 }))
+    assert.equal(new ProfileStore(path).workspaceDirectory(), defaultWorkspaceDirectory())
   })
 })
