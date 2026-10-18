@@ -629,7 +629,7 @@ window.__ModuleLoader__.load({
             },
           })),
           snap.tcc && snap.tcc.applicable ? tccCard(text, snap, disabled, mutate) : null),
-        historyCard(text, snap, mutate, refreshHistory))
+        h(HistoryCard, { text, snap, mutate, refreshHistory }))
     }
 
     /**
@@ -743,8 +743,12 @@ window.__ModuleLoader__.load({
       return null
     }
 
-    /** Old floating-ball conversations: retention, preview, trash. */
-    function historyCard(text, snap, mutate, refreshHistory) {
+    /**
+     * Old floating-ball conversations: retention, preview, trash.
+     * A real component (not a plain call) so its hooks are not added to the Section
+     * after the snapshot's early return — that would break React's hook order.
+     */
+    function HistoryCard({ text, snap, mutate, refreshHistory }) {
       const history = snap.history
       const batches = Array.isArray(history && history.trashBatches) ? history.trashBatches : []
       const saved = history && history.retentionDays > 0 ? history.retentionDays : 30
