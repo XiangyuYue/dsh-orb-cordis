@@ -39,6 +39,23 @@ describe('Computer Use services', () => {
     assert.equal(provided.get('orbCoordinateMode')?.currentMode?.(), 'millifraction')
   })
 
+  it('offers the untouched background track the shared fallback', () => {
+    const free = join(profile, 'free')
+    mkdirSync(free, { recursive: true })
+    const store = new ProfileStore(free)
+    store.applyModelFallback({ provider: 'deepseek-account', model: 'deepseek-flash' })
+    const provided = new Map<string, { currentSelection?: () => unknown }>()
+    installOrbServices({
+      get: () => undefined,
+      provide: (name, value) => { provided.set(name, value as { currentSelection?: () => unknown }) },
+      on: () => () => {},
+    }, store)
+    assert.deepEqual(provided.get('orbCodeAgentModel')?.currentSelection?.(), {
+      provider: 'deepseek-account',
+      model: 'deepseek-flash',
+    })
+  })
+
   it('pins Computer Use and standard sessions under dsh_orb, including later subdirectories', () => {
     const pins = join(home, 'pins')
     mkdirSync(pins, { recursive: true })

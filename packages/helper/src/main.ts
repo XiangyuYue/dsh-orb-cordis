@@ -35,15 +35,15 @@ interface ChromeState {
   update: string | null
 }
 
-const defaultSelection: MenuSelection = {
-  provider: 'deepseek-official',
-  model: 'deepseek-flash',
-  reasoningEffort: 'max',
-}
+/**
+ * Until the host publishes chrome the menu must not tick a model the profile never
+ * chose: the host resolves both tracks, including following the main window.
+ */
+const noSelection: MenuSelection = { provider: '', model: '' }
 
 let chrome: ChromeState = {
-  overlay: defaultSelection,
-  background: defaultSelection,
+  overlay: noSelection,
+  background: noSelection,
   millifractionEnabled: false,
   openMain: false,
   catalog: { groups: [] },

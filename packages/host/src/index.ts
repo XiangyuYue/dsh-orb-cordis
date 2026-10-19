@@ -49,6 +49,9 @@ export function apply(ctx: OrbContext, config: { autoStart?: boolean } = {}): vo
     // the next update on Windows (see native-images.ts).
     stageNativeImages()
   }
+  // A track the user never picked in the ball follows the model fallback the runtime
+  // refreshes from the live catalog and the main window's default — the route the
+  // official sign-in points at the account once the profile has no API key.
   const store = new ProfileStore(profile)
   // pnpm appends a `name@version` rule for every young release it installs and reads
   // only the first rule per package name, so a profile that installed this plugin
@@ -61,6 +64,9 @@ export function apply(ctx: OrbContext, config: { autoStart?: boolean } = {}): vo
   if (own !== undefined && !installing) exemptReleaseAge(store.dir, own.name)
   const tcc = new TccMonitor()
   const runtime = new OrbRuntime(ctx, store, { tcc })
+  // Warm the unpicked-track fallback before anything reads a model, so the settings page
+  // shows what a session would use even when the ball never starts.
+  void runtime.refreshModelDefaults()
   installOrbServices(ctx, store)
   // The official plugin manager mounts after this plugin, so it is read live and an
   // absent one only costs the one-click upgrade: the check and the notice stay.

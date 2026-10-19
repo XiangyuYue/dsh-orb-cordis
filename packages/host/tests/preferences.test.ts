@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  DEFAULT_MODEL,
   ProfileStore,
   defaultMillifraction,
   defaultWorkspaceDirectory,
@@ -25,11 +26,8 @@ describe('profile preferences', () => {
     const store = new ProfileStore(dir('empty'))
     assert.equal(store.permission(), 'danger-full-access')
     assert.equal(store.permissionFallback(), false)
-    assert.deepEqual(store.models().overlay, {
-      provider: 'deepseek-official',
-      model: 'deepseek-flash',
-      reasoningEffort: 'max',
-    })
+    // No fallback installed yet: the shipped pair is what an unpicked track starts on.
+    assert.deepEqual(store.models().overlay, DEFAULT_MODEL)
     assert.deepEqual(store.models().background, store.models().overlay)
     assert.equal(store.millifractionEnabled(), defaultMillifraction())
     assert.equal(store.coordinateMode(), defaultMillifraction() ? 'millifraction' : 'pixel')
@@ -39,6 +37,53 @@ describe('profile preferences', () => {
     assert.equal(store.readAvatar(), undefined)
     // Nothing has been checked yet: no remembered version, and the automatic check is on.
     assert.deepEqual(store.updateRecord(), { checkedAt: 0, latestVersion: '', notifiedVersion: '', autoCheck: true, lastError: '' })
+  })
+
+  it('follows the shared fallback on both tracks until the ball picks one', () => {
+    const path = dir('follow')
+    const account = { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: 'max' }
+    const store = new ProfileStore(path)
+    assert.deepEqual(store.models(), { overlay: DEFAULT_MODEL, background: DEFAULT_MODEL })
+    // The runtime installed what the unpicked tracks follow: the account route.
+    assert.equal(store.applyModelFallback(account), true)
+    assert.deepEqual(store.models(), { overlay: account, background: account })
+    assert.equal(store.applyModelFallback(account), false, 'the same fallback does not report a move')
+    store.setOverlay({ provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+    assert.deepEqual(store.models().overlay, { provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+    assert.deepEqual(store.models().background, account, 'the untouched track keeps following')
+    // Only the picked track is written, and it never reaches the fallback.
+    assert.deepEqual(JSON.parse(readFileSync(join(path, 'orb-agent-models.json'), 'utf8')), {
+      overlay: { provider: 'deepseek-official', model: 'deepseek-v4-pro' },
+    })
+    const other = { provider: 'other', model: 'switched-in-the-main-window' }
+    assert.equal(store.applyModelFallback(other), true)
+    assert.deepEqual(store.models().overlay, { provider: 'deepseek-official', model: 'deepseek-v4-pro' })
+    assert.deepEqual(store.models().background, other, 'a later switch still reaches the free track')
+    store.setBackground({ provider: 'background', model: 'chosen' })
+    assert.deepEqual(JSON.parse(readFileSync(join(path, 'orb-agent-models.json'), 'utf8')), {
+      overlay: { provider: 'deepseek-official', model: 'deepseek-v4-pro' },
+      background: { provider: 'background', model: 'chosen' },
+    })
+    // Both tracks are explicit now: a fresh store keeps them and ignores the fallback,
+    // which is memory only and therefore back to the shipped pair.
+    assert.deepEqual(new ProfileStore(path).models(), {
+      overlay: { provider: 'deepseek-official', model: 'deepseek-v4-pro' },
+      background: { provider: 'background', model: 'chosen' },
+    })
+  })
+
+  it('keeps the shipped pair when the fallback or a stored track is unusable', () => {
+    const stored = dir('follow-broken')
+    writeFileSync(join(stored, 'orb-agent-models.json'), JSON.stringify({
+      overlay: { provider: 'kept', model: 'kept' },
+      background: { provider: '', model: '' },
+    }))
+    const empty = new ProfileStore(stored)
+    assert.equal(empty.applyModelFallback({ provider: '', model: '' }), false)
+    assert.deepEqual(empty.models(), {
+      overlay: { provider: 'kept', model: 'kept' },
+      background: DEFAULT_MODEL,
+    })
   })
 
   it('remembers the last update check and survives a half-written file', () => {

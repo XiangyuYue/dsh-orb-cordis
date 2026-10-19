@@ -9,6 +9,8 @@
  * official write and the restore sees the chosen model once.
  */
 
+import { sameSelection } from './preferences.ts'
+
 const QUEUE = Symbol.for('dsh-orb.select-model.queue')
 
 function enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -61,10 +63,4 @@ async function selectAndRestore(
   if (previous === undefined || sameSelection(previous, chosen)) return
   await defaults.saveSelection(previous)
   console.error('dsh-orb: restored the global default model after a session-only selection')
-}
-
-function sameSelection(left: KeptModelSelection, right: KeptModelSelection): boolean {
-  return left.provider === right.provider
-    && left.model === right.model
-    && left.reasoningEffort === right.reasoningEffort
 }

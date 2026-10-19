@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection, type Socket } from 'node:net'
@@ -49,6 +49,10 @@ interface Harness {
     workspace?: { path?: string }
   }
   savedDefaults: { provider: string; model: string; reasoningEffort?: string }[]
+  /** The main window's default model; a test can move it to imitate a sign-in. */
+  setHostDefault: (selection: { provider: string; model: string; reasoningEffort?: string }) => void
+  /** The advertised catalog; a test can widen it to imitate a provider appearing. */
+  setCatalog: (groups: { id: string; name: string; models: { id: string; name: string }[] }[]) => void
   listItems: Row[]
   pins: { preset: string; cwd?: string }[]
   inject: (sessionId: string, row: EventRow) => void
@@ -77,10 +81,17 @@ function boot(extra: {
   if (extra.millifraction !== undefined) {
     writeFileSync(join(profile, 'millifraction-coordinates.json'), JSON.stringify({ enabled: extra.millifraction }))
   }
+  // A track the ball never picked follows the fallback `model-defaults` resolves from
+  // this catalog and this product default, so both are what the tests move.
+  let previousDefault = { provider: 'deepseek-official', model: 'deepseek-v4', reasoningEffort: 'high' }
+  let catalogGroups = [{
+    id: 'deepseek-official',
+    name: 'DeepSeek',
+    models: [{ id: 'deepseek-v4', name: 'V4' }, { id: 'deepseek-flash', name: 'Flash' }],
+  }]
   const store = new ProfileStore(profile)
   const calls: Harness['calls'] = { create: [], resolve: [], prompt: [], cancel: [], selectModel: [] }
   const savedDefaults: Harness['savedDefaults'] = []
-  const previousDefault = { provider: 'deepseek-official', model: 'deepseek-v4', reasoningEffort: 'high' }
   const sessions = new Map<string, { events: EventRow[]; header: { cwd: string; agentPreset: string } }>()
   const pins: Harness['pins'] = []
   const listItems: Row[] = []
@@ -171,9 +182,7 @@ function boot(extra: {
         if (cancelGate !== undefined) await cancelGate
         if (cancelError !== undefined) throw cancelError
       },
-      modelCatalog: () => ({
-        groups: [{ id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-flash', name: 'Flash' }] }],
-      }),
+      modelCatalog: () => ({ groups: catalogGroups }),
     },
     sessions: {
       get(id: string) {
@@ -228,6 +237,8 @@ function boot(extra: {
     profile,
     calls,
     savedDefaults,
+    setHostDefault(selection) { previousDefault = selection },
+    setCatalog(groups) { catalogGroups = groups },
     listItems,
     pins,
     inject(sessionId, row) {
@@ -480,14 +491,12 @@ describe('ball control socket', { concurrency: 1 }, () => {
       assert.deepEqual(Object.keys(harness.calls.workspace ?? {}), ['path'])
       assert.equal(harness.calls.workspace?.path, orb)
       assert.equal(harness.calls.selectModel[0]?.saveAsDefault, undefined)
-      assert.deepEqual(harness.savedDefaults.at(-1), {
-        provider: 'deepseek-official',
-        model: 'deepseek-v4',
-        reasoningEffort: 'high',
-      })
+      // No explicit ball choice: the session takes the main window's default, so the
+      // runtime has nothing to restore and writes no default of its own.
       assert.equal(harness.calls.selectModel[0]?.sessionId, session.sessionId)
-      assert.equal(harness.calls.selectModel[0]?.model, 'deepseek-flash')
-      assert.equal(harness.calls.selectModel[0]?.reasoningEffort, 'max')
+      assert.equal(harness.calls.selectModel[0]?.model, 'deepseek-v4')
+      assert.equal(harness.calls.selectModel[0]?.reasoningEffort, 'high')
+      assert.deepEqual(harness.savedDefaults, [])
       const saved = JSON.parse(readFileSync(join(home, 'dsh-orb', 'floating-session.json'), 'utf8')) as { sessionId: string }
       assert.equal(saved.sessionId, session.sessionId)
       assert.equal(harness.pins.at(-1)?.preset, 'danger-full-access')
@@ -546,6 +555,58 @@ describe('ball control socket', { concurrency: 1 }, () => {
       assert.equal(chrome.millifractionEnabled, true)
       assert.equal(chrome.update, null, 'no checker took over this runtime')
       assert.equal(chrome.catalog.groups[0]?.id, 'deepseek-official')
+    } finally {
+      client.socket.end()
+      harness.runtime.halt()
+    }
+  })
+
+  it('runs a fresh session on the account route when the main window defaults to it', async () => {
+    // Account-only profile: signed in, no API key, so the official sign-in already
+    // moved the main-window default to `deepseek-account`.
+    const harness = boot()
+    harness.setHostDefault({ provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: 'max' })
+    harness.setCatalog([
+      { id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-flash', name: 'Flash' }] },
+      { id: 'deepseek-account', name: 'DeepSeek Account', models: [{ id: 'deepseek-flash', name: 'Flash' }] },
+    ])
+    const client = await connect(harness.runtime)
+    try {
+      client.send({ type: 'new' })
+      await waitFor(() => client.messages.some((message) => message.type === 'session'))
+      assert.equal(harness.calls.selectModel[0]?.model, 'deepseek-flash')
+      assert.equal(harness.calls.selectModel[0]?.reasoningEffort, 'max')
+      // The runtime must not push the API-key route or touch the saved default.
+      assert.equal(harness.calls.selectModel[0]?.provider, 'deepseek-account')
+      assert.deepEqual(harness.savedDefaults, [])
+      assert.equal(existsSync(join(harness.profile, 'orb-agent-models.json')), false)
+    } finally {
+      client.socket.end()
+      harness.runtime.halt()
+    }
+  })
+
+  it('keeps a track the ball picked when the main window switches later', async () => {
+    const harness = boot()
+    harness.store.setOverlay({ provider: 'deepseek-official', model: 'deepseek-pro', reasoningEffort: 'high' })
+    // A later sign-in moves the main-window default; the picked track must not follow.
+    harness.setHostDefault({ provider: 'deepseek-account', model: 'deepseek-flash' })
+    harness.setCatalog([
+      { id: 'deepseek-official', name: 'DeepSeek', models: [{ id: 'deepseek-flash', name: 'Flash' }] },
+      { id: 'deepseek-account', name: 'DeepSeek Account', models: [{ id: 'deepseek-flash', name: 'Flash' }] },
+    ])
+    const client = await connect(harness.runtime)
+    try {
+      client.send({ type: 'new' })
+      await waitFor(() => client.messages.some((message) => message.type === 'session'))
+      assert.equal(harness.calls.selectModel[0]?.provider, 'deepseek-official')
+      assert.equal(harness.calls.selectModel[0]?.model, 'deepseek-pro')
+      assert.equal(harness.calls.selectModel[0]?.reasoningEffort, 'high')
+      // The free background track still follows the main window.
+      assert.deepEqual(harness.store.models().background, { provider: 'deepseek-account', model: 'deepseek-flash' })
+      assert.deepEqual(JSON.parse(readFileSync(join(harness.profile, 'orb-agent-models.json'), 'utf8')), {
+        overlay: { provider: 'deepseek-official', model: 'deepseek-pro', reasoningEffort: 'high' },
+      })
     } finally {
       client.socket.end()
       harness.runtime.halt()

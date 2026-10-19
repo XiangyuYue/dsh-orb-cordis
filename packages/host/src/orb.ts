@@ -11,7 +11,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { Appearance, ThemePreference } from './appearance.ts'
 import { avatarPresetSrc } from './avatar-presets.ts'
-import { normalizeCatalog } from './catalog.ts'
+import type { ModelCatalog } from './catalog.ts'
 import { resolveElectronBinary } from './electron-runtime.ts'
 import { helperMain } from './helper-path.ts'
 import {
@@ -23,6 +23,7 @@ import {
   type WorkspaceSafety,
 } from './history.ts'
 import { moveToOsTrash, osTrashAvailable } from './os-trash.ts'
+import { refreshModelFallback } from './model-defaults.ts'
 import { openMainWindow } from './open-main.ts'
 import { isDesktopHost, isTccRight, TccMonitor, type TccRight, type TccStatus } from './tcc.ts'
 import {
@@ -832,9 +833,26 @@ export class OrbRuntime {
 
   private async adopt(sessionId: string): Promise<string> {
     const id = await this.remember(sessionId)
+    // Refresh before the model is applied: a sign-in that happened since the last
+    // chrome publish must reach this session, not the one after it.
+    await this.refreshModelDefaults()
     await this.applyOverlayQuiet(id)
     pinSessionId(this.ctx, id, this.store.permission(), this.store.workspaceDirectory())
     return id
+  }
+
+  /**
+   * Refresh the unpicked-track fallback from the live catalog and the main-window
+   * default, keeping the previous one when that read fails. The settings page calls this
+   * through the plugin entry, so the value it shows is the one a session would use even
+   * when the ball never starts.
+   */
+  async refreshModelDefaults(): Promise<void> {
+    try {
+      await refreshModelFallback(this.ctx, this.store)
+    } catch (error) {
+      console.error(`dsh-orb: model fallback failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   private async remember(sessionId: string): Promise<string> {
@@ -1466,15 +1484,22 @@ export class OrbRuntime {
     return tokensMatch(token, this.token)
   }
 
-  /** Push permission, both models, the catalog, and the avatar version to the ball. */
+  /**
+   * Push permission, both models, the catalog, and the avatar version to the ball.
+   * Refreshing the model fallback here is also what keeps an unpicked track in step with
+   * the main window: a sign-in moves the product default, and the ball follows.
+   */
   async publishChrome(): Promise<void> {
-    const models = this.store.models()
-    let catalog = { groups: [] as readonly { id: string; name: string; models: readonly unknown[] }[] }
+    let catalog: ModelCatalog = { groups: [] }
+    let moved = false
     try {
-      catalog = normalizeCatalog(await this.ctx.sessionController.modelCatalog())
+      const refreshed = await refreshModelFallback(this.ctx, this.store)
+      catalog = refreshed.catalog
+      moved = refreshed.changed
     } catch (error) {
       console.error(`dsh-orb: model catalog failed: ${error instanceof Error ? error.message : String(error)}`)
     }
+    const models = this.store.models()
     this.broadcast({ type: 'permission', preset: this.store.permission() })
     this.broadcast({
       type: 'chrome',
@@ -1486,6 +1511,9 @@ export class OrbRuntime {
       catalog,
     })
     this.broadcast(avatarMessage(this.store))
+    // A live session still runs the previous fallback: hand it the new one. Only the
+    // fallback moves this way — an explicit pick is never reported as changed.
+    if (moved && this.sessionId !== undefined) await this.applyOverlayQuiet(this.sessionId)
   }
 
   /**

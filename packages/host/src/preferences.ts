@@ -1,6 +1,12 @@
 /**
  * Profile files the ball and the settings page share.
  * Names match the desktop fork so an existing profile keeps its choices.
+ *
+ * `orb-agent-models.json` records only the tracks the user picked in the ball. A track
+ * without an entry follows the shared fallback in {@link ProfileStore.applyModelFallback},
+ * which `model-defaults.ts` resolves from the live catalog and the main window's default
+ * model — the route the official sign-in points at the account once the profile has no
+ * API key. {@link DEFAULT_MODEL} is the last resort, not the shipped default.
  */
 
 import { readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -44,6 +50,13 @@ export interface AgentModelSelection {
 export interface AgentModels {
   readonly overlay: AgentModelSelection
   readonly background: AgentModelSelection
+}
+
+/** Same provider, model, and effort. Used to skip writes that would change nothing. */
+export function sameSelection(left: AgentModelSelection, right: AgentModelSelection): boolean {
+  return left.provider === right.provider
+    && left.model === right.model
+    && left.reasoningEffort === right.reasoningEffort
 }
 
 export type AvatarMime = 'image/gif' | 'image/png' | 'image/webp'
@@ -111,10 +124,21 @@ export function defaultWorkspaceDirectory(): string {
   return resolve(dshHomePath('dsh_orb'))
 }
 
-const DEFAULT_MODEL: AgentModelSelection = {
+/**
+ * The shipped DeepSeek pair. It is the fallback the unpicked tracks start on, and the
+ * last resort for a deployment whose catalog or main-window default names nothing the
+ * ball can route. `model-defaults.ts` decides which of those wins and installs it.
+ */
+export const DEFAULT_MODEL: AgentModelSelection = {
   provider: 'deepseek-official',
   model: 'deepseek-flash',
   reasoningEffort: 'max',
+}
+
+/** Explicit ball choices only: an absent track follows the unpicked-track fallback. */
+interface StoredModels {
+  readonly overlay?: AgentModelSelection
+  readonly background?: AgentModelSelection
 }
 
 /**
@@ -150,7 +174,12 @@ export function isAgentModelSelection(value: unknown): value is AgentModelSelect
 export class ProfileStore {
   private permissionValue: PermissionPreset
   private permissionFallbackValue: boolean
-  private modelValue: AgentModels
+  private modelValue: StoredModels
+  /**
+   * What a track the user never picked follows. Memory only: it is the main window's
+   * default, refreshed by `model-defaults.ts`, and must not be mistaken for a choice.
+   */
+  private modelFallbackValue: AgentModelSelection = DEFAULT_MODEL
   private millifractionValue: boolean
   private observationFrameValue: boolean
   private selectionValue: boolean
@@ -189,17 +218,37 @@ export class ProfileStore {
     writeJson(join(this.dir, PERMISSION_FILE), { preset })
   }
 
+  /**
+   * The two tracks: an explicit ball choice wins, a track the user never picked follows
+   * the unpicked-track fallback. Nothing here is persisted — a track stays "following"
+   * until the user picks a model for it.
+   */
   models(): AgentModels {
-    return this.modelValue
+    return {
+      overlay: this.modelValue.overlay ?? this.modelFallbackValue,
+      background: this.modelValue.background ?? this.modelFallbackValue,
+    }
+  }
+
+  /**
+   * Install what the unpicked tracks follow.
+   * @param selection - the resolved fallback; invalid values are ignored.
+   * @returns whether it moved, which is what makes a live session re-select.
+   */
+  applyModelFallback(selection: AgentModelSelection): boolean {
+    const next = parseSelection(selection)
+    if (next === undefined || sameSelection(next, this.modelFallbackValue)) return false
+    this.modelFallbackValue = next
+    return true
   }
 
   setOverlay(selection: AgentModelSelection): void {
-    this.modelValue = { overlay: selection, background: this.modelValue.background }
+    this.modelValue = { ...this.modelValue, overlay: selection }
     this.writeModels()
   }
 
   setBackground(selection: AgentModelSelection): void {
-    this.modelValue = { overlay: this.modelValue.overlay, background: selection }
+    this.modelValue = { ...this.modelValue, background: selection }
     this.writeModels()
   }
 
@@ -353,10 +402,16 @@ export class ProfileStore {
     }
   }
 
+  /**
+   * Persist the explicit choices only. Writing a resolved value would freeze a track
+   * the user never picked, and the reader already treats a missing entry as "follow
+   * the main window".
+   */
   private writeModels(): void {
+    const { overlay, background } = this.modelValue
     writeJson(join(this.dir, MODELS_FILE), {
-      overlay: serializeSelection(this.modelValue.overlay),
-      background: serializeSelection(this.modelValue.background),
+      ...overlay === undefined ? {} : { overlay: serializeSelection(overlay) },
+      ...background === undefined ? {} : { background: serializeSelection(background) },
     })
   }
 }
@@ -403,11 +458,14 @@ function readPermission(dir: string): { preset: PermissionPreset; fallback: bool
   return { preset: 'workspace-write', fallback: true }
 }
 
-function readModels(dir: string): AgentModels {
+/** Explicit choices, keyed by track. A track with no entry is resolved on read. */
+function readModels(dir: string): StoredModels {
   const value = record(readJson(join(dir, MODELS_FILE)))
+  const overlay = parseSelection(value?.overlay)
+  const background = parseSelection(value?.background)
   return {
-    overlay: parseSelection(value?.overlay) ?? DEFAULT_MODEL,
-    background: parseSelection(value?.background) ?? DEFAULT_MODEL,
+    ...overlay === undefined ? {} : { overlay },
+    ...background === undefined ? {} : { background },
   }
 }
 
