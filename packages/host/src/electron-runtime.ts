@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { access, chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, basename } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 
@@ -58,9 +58,9 @@ export function cancelRuntimeDownload(): void {
 }
 
 /**
- * Delete what a killed process left behind: half-written `.electron-*.zip` downloads and
- * `.electron-staging-*` extraction folders. Attempts carry a unique stamp, so before a manual
- * redownload starts there is nothing here but leftovers.
+ * Delete what a killed process left behind: half-written downloads and `.electron-staging-*`
+ * extraction folders. The resumable partial of this version's asset stays — a redownload
+ * continues those bytes rather than fetching them twice.
  */
 export async function purgeRuntimeArtifacts(): Promise<void> {
   const dir = dshHomePath('dsh-orb')
@@ -70,9 +70,25 @@ export async function purgeRuntimeArtifacts(): Promise<void> {
   } catch {
     return
   }
+  const kept = basename(partialPath(dir, assetName()))
   for (const name of entries) {
     if (!name.startsWith('.electron-')) continue
+    if (name === kept) continue
     await rm(join(dir, name), { recursive: true, force: true }).catch(() => undefined)
+  }
+}
+
+/** The file one asset's transfer writes, and the one a later attempt resumes. */
+function partialPath(parent: string, fileName: string): string {
+  return join(parent, `.electron-${fileName}.partial`)
+}
+
+/** Size of a file, or 0 when it is not there: "no bytes to resume from" is not an error. */
+async function fileSize(path: string): Promise<number> {
+  try {
+    return (await stat(path)).size
+  } catch {
+    return 0
   }
 }
 
@@ -117,11 +133,14 @@ async function downloadRuntime(
       console.error(`dsh-orb: downloading Electron ${ELECTRON_VERSION} (${fileName})`)
       const sums = await fetchText('SHASUMS256.txt', signal)
       const expected = expectedHash(sums, fileName)
-      const stamp = randomBytes(8).toString('hex')
-      const zipPath = join(parent, `.electron-${stamp}.zip`)
-      const staging = join(parent, `.electron-staging-${stamp}`)
+      // One stable partial per asset: a retry continues it instead of paying for the whole
+      // 124–150 MB twice. Only the staging folder is stamped, and it never outlives one attempt.
+      const zipPath = partialPath(parent, fileName)
+      const staging = join(parent, `.electron-staging-${randomBytes(8).toString('hex')}`)
       try {
         report?.('downloading')
+        const resumed = await fileSize(zipPath)
+        if (resumed > 0) console.error(`dsh-orb: resuming the download at ${resumed} bytes`)
         await downloadVerifiedZip(fileName, expected, zipPath, signal)
         report?.('extracting')
         await mkdir(staging, { recursive: true })
@@ -136,9 +155,11 @@ async function downloadRuntime(
         await writeFile(join(staging, `.complete-${ELECTRON_VERSION}`), `${ELECTRON_VERSION}\n`)
         await replaceDirectory(staging, dest)
       } finally {
-        await rm(zipPath, { force: true })
         await rm(staging, { recursive: true, force: true })
       }
+      // Past the rename the zip has done its job. A failure above leaves it in place instead:
+      // those bytes are exactly what the next attempt resumes from.
+      await rm(zipPath, { force: true }).catch(() => undefined)
       console.error(`dsh-orb: Electron ${ELECTRON_VERSION} is ready`)
     }, signal)
   } finally {
@@ -204,6 +225,13 @@ export function isLockTaken(error: unknown): boolean {
   return code === 'EEXIST' || code === 'ENOTEMPTY' || code === 'EPERM' || code === 'EACCES'
 }
 
+/**
+ * How long a lock's owner is believed before it is treated as a recycled pid. A transfer has no
+ * total time limit — a slow line is allowed to finish — so this only has to outlast the longest
+ * believable download, not the longest expected one.
+ */
+const STALE_OWNER_MS = 3 * 60 * 60 * 1000
+
 export async function lockExpired(lock: string): Promise<boolean> {
   let text: string
   try {
@@ -226,7 +254,7 @@ export async function lockExpired(lock: string): Promise<boolean> {
   const pid = Number(pidText)
   const started = Number(startedText)
   if (!Number.isInteger(pid) || pid <= 0) return true
-  if (Number.isFinite(started) && Date.now() - started > 20 * 60 * 1000) return true
+  if (Number.isFinite(started) && Date.now() - started > STALE_OWNER_MS) return true
   try {
     process.kill(pid, 0)
     return false
@@ -302,6 +330,15 @@ const CURL_TLS = process.platform === 'win32' ? ['--ssl-no-revoke'] : []
 const CONNECT_TIMEOUT_SECONDS = '5'
 
 /**
+ * The stall floor, and how long a transfer may sit under it before curl gives up on it.
+ * This is the only thing that ends a transfer early: a slow line is not a dead one, and whatever
+ * it has already delivered is kept for the next attempt to resume. 20 KB/s for 30 s is a
+ * connection that has stopped — the runtime is 124–150 MB, so nothing sane sits below it for long.
+ */
+const STALL_BYTES_PER_SECOND = '20000'
+const STALL_SECONDS = '30'
+
+/**
  * Mirrors of an Electron release, in the order they are asked.
  * npmmirror goes first: github.com is unreachable for a large part of the audience,
  * and a silently dropped connection there would otherwise stall the first ball launch.
@@ -340,26 +377,61 @@ async function downloadVerifiedZip(fileName: string, expected: string, dest: str
   const urls = releaseUrls(fileName)
   let lastError: unknown
   for (const url of urls) {
+    const resume = await fileSize(dest) > 0
     try {
-      await rm(dest, { force: true })
-      await run('curl', [
-        '-fsSL', ...CURL_HTTPS, ...CURL_TLS, '--retry', '2', '--retry-delay', '1',
-        '--connect-timeout', CONNECT_TIMEOUT_SECONDS,
-        '--speed-limit', '100000', '--speed-time', '20',
-        '--max-time', '300', '-o', dest, url,
-      ], signal)
+      await run('curl', zipCurlArgs(url, dest, resume), signal)
       const actual = await sha256(dest)
       if (!sameHash(actual, expected)) {
+        // Whatever went wrong, the bytes on disk are wrong as a whole. Dropping them here is what
+        // keeps a bad resume from being verified again and again: the next attempt starts at zero.
+        await rm(dest, { force: true })
         throw new Error(`dsh-orb: Electron ${ELECTRON_VERSION} checksum did not match SHASUMS256.txt`)
       }
       return
     } catch (error) {
       if (signal.aborted) throw cancelled()
+      // A mirror that cannot resume (or a partial the server thinks is out of range) must not
+      // pin the file: those bytes go, and the next attempt fetches that file from zero.
+      if (resume && isResumeRefused(error)) await rm(dest, { force: true }).catch(() => undefined)
       lastError = error
       console.error(`dsh-orb: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
   throw lastError instanceof Error ? lastError : new Error(`dsh-orb: failed to download Electron ${ELECTRON_VERSION}`)
+}
+
+/**
+ * The curl that fetches one zip.
+ *
+ * There is deliberately no total time limit. A 124–150 MB runtime on a slow line can take longer
+ * than any cap worth writing, and cutting it off just means paying for the same bytes again —
+ * the stall guard (`--speed-limit`/`--speed-time`) is what catches a connection that has actually
+ * stopped delivering. `resume` continues an interrupted transfer instead of starting it over.
+ *
+ * @param url - mirror URL of the zip.
+ * @param dest - file the transfer writes; `-C -` appends to whatever is already there.
+ * @param resume - true when `dest` already holds bytes worth keeping.
+ * @returns argv for curl.
+ */
+export function zipCurlArgs(url: string, dest: string, resume: boolean): string[] {
+  return [
+    '-fsSL', ...CURL_HTTPS, ...CURL_TLS, '--retry', '2', '--retry-delay', '1',
+    '--connect-timeout', CONNECT_TIMEOUT_SECONDS,
+    '--speed-limit', STALL_BYTES_PER_SECOND, '--speed-time', STALL_SECONDS,
+    ...(resume ? ['-C', '-'] : []),
+    '-o', dest, url,
+  ]
+}
+
+/**
+ * Whether curl refused the resume rather than the transfer. 33/36 are its "cannot resume" exits;
+ * a 416 arrives as the generic HTTP-failure exit 22, so the status has to be read out of the
+ * message. A 404 must not land here: that mirror is simply down, and the bytes stay for the next one.
+ */
+export function isResumeRefused(error: unknown): boolean {
+  const code = (error as { exitCode?: unknown } | undefined)?.exitCode
+  if (code === 33 || code === 36) return true
+  return code === 22 && error instanceof Error && error.message.includes('416')
 }
 
 function run(command: string, args: string[], signal?: AbortSignal): Promise<{ stdout: string }> {
@@ -383,7 +455,12 @@ function run(command: string, args: string[], signal?: AbortSignal): Promise<{ s
         return
       }
       const detail = Buffer.concat(err).toString('utf8').trim()
-      reject(new Error(`dsh-orb: ${command} exited ${code ?? 'unknown'}${detail ? `: ${detail}` : ''}`))
+      // `exitCode` carries curl's own status: the caller tells a refused resume (33/36/416) from
+      // a mirror that is simply down.
+      reject(Object.assign(
+        new Error(`dsh-orb: ${command} exited ${code ?? 'unknown'}${detail ? `: ${detail}` : ''}`),
+        { exitCode: code },
+      ))
     })
   })
 }

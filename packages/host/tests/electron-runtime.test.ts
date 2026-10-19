@@ -8,11 +8,13 @@ import {
   cancelRuntimeDownload,
   expectedHash,
   isLockTaken,
+  isResumeRefused,
   isRuntimeDownloadCancelled,
   lockExpired,
   PINNED_SHA256,
   purgeRuntimeArtifacts,
   withDownloadLock,
+  zipCurlArgs,
 } from '../src/electron-runtime.ts'
 
 const fileName = 'electron-v44.0.0-darwin-arm64.zip'
@@ -182,13 +184,14 @@ describe('manual runtime redownload', () => {
     assert.equal(existsSync(held), true, 'the lock belongs to another process and stays')
   })
 
-  it('clears what an interrupted attempt left behind, and nothing else', async () => {
+  it('clears what an interrupted attempt left behind, but keeps the bytes a retry resumes', async () => {
     const home = join(root, 'home-purge')
     const orb = join(home, 'dsh-orb')
     mkdirSync(join(orb, 'electron-runtime'), { recursive: true })
-    writeFileSync(join(orb, '.electron-abc123.zip'), 'half a download')
+    writeFileSync(join(orb, '.electron-abc123.zip'), 'a zip from the old naming')
     mkdirSync(join(orb, '.electron-staging-def456'), { recursive: true })
-    writeFileSync(join(orb, '.electron-staging-def456', 'partial'), 'x')
+    writeFileSync(join(orb, '.electron-staging-def456', 'half an extraction'), 'x')
+    writeFileSync(join(orb, '.electron-electron-v44.0.0-darwin-arm64.zip.partial'), '93 MB of the real one')
     writeFileSync(join(orb, 'electron-runtime', '.complete-44.0.0'), '44.0.0\n')
     const previous = process.env.DSH_HOME
     process.env.DSH_HOME = home
@@ -198,9 +201,48 @@ describe('manual runtime redownload', () => {
       if (previous === undefined) delete process.env.DSH_HOME
       else process.env.DSH_HOME = previous
     }
-    assert.equal(existsSync(join(orb, '.electron-abc123.zip')), false, 'the half-written zip is gone')
-    assert.equal(existsSync(join(orb, '.electron-staging-def456')), false, 'the partial staging folder is gone')
+    assert.equal(existsSync(join(orb, '.electron-abc123.zip')), false, 'a leftover zip is gone')
+    assert.equal(existsSync(join(orb, '.electron-staging-def456')), false, 'the half-extracted folder is gone')
+    assert.equal(
+      existsSync(join(orb, '.electron-electron-v44.0.0-darwin-arm64.zip.partial')),
+      true,
+      'the resumable partial of this platform stays: a redownload continues it',
+    )
     assert.equal(existsSync(join(orb, 'electron-runtime', '.complete-44.0.0')), true, 'the finished runtime stays')
+  })
+
+  it('downloads without a total time limit, and resumes only when there are bytes to keep', () => {
+    const fresh = zipCurlArgs('https://example.invalid/electron.zip', '/tmp/electron.zip', false)
+    const resumed = zipCurlArgs('https://example.invalid/electron.zip', '/tmp/electron.zip', true)
+    // A cap here is what made a 124–150 MB runtime impossible to finish below ~450 KB/s: the
+    // transfer was cut off mid-flight and the next attempt paid for the same bytes again.
+    assert.equal(fresh.some((arg) => arg === '--max-time'), false, 'no total time limit on the zip')
+    assert.equal(fresh.some((arg) => arg.startsWith('--speed-limit')), true, 'the stall guard stays')
+    assert.equal(fresh.includes('-C'), false, 'nothing to resume from on a fresh file')
+    assert.equal(resumed[resumed.indexOf('-C') + 1], '-', 'a partial download continues from its end')
+    assert.deepEqual(
+      resumed.slice(-5),
+      ['-C', '-', '-o', '/tmp/electron.zip', 'https://example.invalid/electron.zip'],
+      'the resume flag sits with the output, and the mirror comes last',
+    )
+    // Everything else is identical: the resume is the only difference between the two calls.
+    assert.deepEqual(resumed.filter((arg) => arg !== '-C' && arg !== '-'), fresh)
+  })
+
+  it('reads a refused resume out of curl, without mistaking a dead mirror for one', () => {
+    assert.equal(isResumeRefused(Object.assign(new Error('curl exited 33'), { exitCode: 33 })), true)
+    assert.equal(isResumeRefused(Object.assign(new Error('curl exited 36'), { exitCode: 36 })), true)
+    assert.equal(
+      isResumeRefused(Object.assign(new Error('curl exited 22: The requested URL returned error: 416'), { exitCode: 22 })),
+      true,
+      'a 416 arrives as the generic HTTP-failure exit and has to be read out of the message',
+    )
+    // A mirror that is down must not throw the downloaded bytes away: the next one resumes them.
+    assert.equal(
+      isResumeRefused(Object.assign(new Error('curl exited 22: The requested URL returned error: 404'), { exitCode: 22 })),
+      false,
+    )
+    assert.equal(isResumeRefused(new Error('no exit code')), false)
   })
 
   it('marks only its own cancellation, never a real download failure', () => {
