@@ -833,7 +833,7 @@ export class OrbRuntime {
   private async adopt(sessionId: string): Promise<string> {
     const id = await this.remember(sessionId)
     await this.applyOverlayQuiet(id)
-    pinSessionId(this.ctx, id, this.store.permission())
+    pinSessionId(this.ctx, id, this.store.permission(), this.store.workspaceDirectory())
     return id
   }
 
@@ -1630,7 +1630,7 @@ export class OrbRuntime {
   }
 
   /**
-   * Move the floating-ball Agent to an empty custom directory (or back to the default).
+   * Move the floating-ball Agent to a custom directory (or back to the default).
    * The old directory is never touched. A running turn is refused; an idle current
    * session is replaced by a fresh one in the new workspace.
    */
@@ -1787,7 +1787,7 @@ export class OrbRuntime {
 
   private async setPermission(preset: PermissionPreset): Promise<void> {
     this.store.setPermission(preset)
-    if (this.sessionId) pinSessionId(this.ctx, this.sessionId, preset)
+    if (this.sessionId) pinSessionId(this.ctx, this.sessionId, preset, this.store.workspaceDirectory())
     await this.publishChrome()
   }
 

@@ -78,11 +78,50 @@ describe('Computer Use services', () => {
       { preset: 'workspace-write', cwd: join(orb, 'job'), agent: 'standard' },
     ])
     sessions.set('session-live', { header: { cwd: orb, agentPreset: 'computer-use' } })
-    pinSessionId(ctx, 'session-live', 'read-only')
-    pinSessionId(ctx, 'session-missing', 'read-only')
+    pinSessionId(ctx, 'session-live', 'read-only', orb)
+    pinSessionId(ctx, 'session-missing', 'read-only', orb)
     assert.equal(pinned.at(-1)?.preset, 'read-only')
     stop()
     emit({ header: { cwd: orb, agentPreset: 'computer-use' } })
     assert.equal(pinned.length, 3)
+  })
+
+  it('pins the current custom workspace and leaves the shipped default alone', () => {
+    const pins = join(home, 'custom-pins')
+    mkdirSync(pins, { recursive: true })
+    const store = new ProfileStore(pins)
+    const custom = join(home, 'custom-workspace')
+    store.setWorkspaceDirectory(custom)
+    store.setPermission('danger-full-access')
+    const pinned: { preset: string; cwd?: string; agent?: string }[] = []
+    let created: ((session: Session) => void) | undefined
+    const ctx = {
+      get(name: string) {
+        if (name === 'permissionPresets') {
+          return {
+            set(session: Session, preset: string) {
+              pinned.push({ preset, cwd: session.header?.cwd, agent: session.header?.agentPreset })
+            },
+          }
+        }
+        return undefined
+      },
+      provide() {},
+      on(_name: 'session/created', listener: (session: Session) => void) {
+        created = listener
+        return () => { created = undefined }
+      },
+    }
+    const stop = watchOrbPermissions(ctx, store)
+    const emit = (session: Session) => { created?.(session) }
+    emit({ header: { cwd: custom, agentPreset: 'computer-use' } })
+    emit({ header: { cwd: join(custom, 'job'), agentPreset: 'standard' } })
+    emit({ header: { cwd: orb, agentPreset: 'computer-use' } })
+    emit({ header: { cwd: custom, agentPreset: 'code_agent' } })
+    assert.deepEqual(pinned, [
+      { preset: 'danger-full-access', cwd: custom, agent: 'computer-use' },
+      { preset: 'danger-full-access', cwd: join(custom, 'job'), agent: 'standard' },
+    ])
+    stop()
   })
 })
