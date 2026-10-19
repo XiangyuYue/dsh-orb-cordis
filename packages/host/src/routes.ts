@@ -54,6 +54,11 @@ export interface OrbControl {
   setMillifractionEnabled(enabled: boolean): Promise<void>
   setObservationFrameEnabled(enabled: boolean): Promise<void>
   setBallEnabled(enabled: boolean): Promise<void>
+  /**
+   * Fetch the helper runtime again from zero: drop the attempt in flight, delete what an
+   * interrupted one left behind, and hand the download a fresh retry budget.
+   */
+  redownloadRuntime?(): Promise<void>
   helperStatus?(): string
   /** 'downloading'/'extracting' while the helper runtime is prepared; '' otherwise. */
   helperPhase?(): string
@@ -373,6 +378,15 @@ async function handle(deps: RouteDeps, req: IncomingMessage, res: ServerResponse
       return
     }
     await deps.control.setBallEnabled(enabled)
+    sendJson(res, 200, await snapshot(deps))
+    return
+  }
+  if (method === 'POST' && path === `${PREFIX}/runtime/redownload`) {
+    if (typeof deps.control.redownloadRuntime !== 'function') {
+      sendJson(res, 404, { error: 'unsupported' })
+      return
+    }
+    await deps.control.redownloadRuntime()
     sendJson(res, 200, await snapshot(deps))
     return
   }

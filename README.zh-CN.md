@@ -119,7 +119,7 @@ pnpm --filter dsh-orb run pack        # 生成 ./dsh-orb-<version>.tgz
 dsh plugin add ./dsh-orb-<version>.tgz
 ```
 
-首次使用悬浮球时会下载 helper 的 Electron 运行时，之后缓存复用。
+首次使用悬浮球时会下载 helper 的 Electron 运行时，之后缓存复用。下载期间、下载失败或被中途打断时，主窗口 **设置 → 悬浮球** 顶部会显示醒目的提示卡片，点其中的「重新下载」立即从头再下一次——不用重启应用。
 
 ## 开发
 

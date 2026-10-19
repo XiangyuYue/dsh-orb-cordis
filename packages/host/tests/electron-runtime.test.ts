@@ -4,7 +4,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, it, mock } from 'node:test'
 import assert from 'node:assert/strict'
-import { expectedHash, isLockTaken, lockExpired, PINNED_SHA256, withDownloadLock } from '../src/electron-runtime.ts'
+import {
+  cancelRuntimeDownload,
+  expectedHash,
+  isLockTaken,
+  isRuntimeDownloadCancelled,
+  lockExpired,
+  PINNED_SHA256,
+  purgeRuntimeArtifacts,
+  withDownloadLock,
+} from '../src/electron-runtime.ts'
 
 const fileName = 'electron-v44.0.0-darwin-arm64.zip'
 
@@ -156,5 +165,53 @@ describe('Electron download lock', () => {
     }
     assert.equal(isLockTaken(new Error('no code')), false)
     assert.equal(isLockTaken(undefined), false)
+  })
+})
+
+describe('manual runtime redownload', () => {
+  it('stops waiting for a lock the moment the user restarts the download', async () => {
+    const dir = parent()
+    const held = staleLock(dir, `${process.pid}\n${Date.now()}\n`)
+    const controller = new AbortController()
+    controller.abort()
+    await assert.rejects(
+      withDownloadLock(dir, async () => {}, controller.signal),
+      (error: unknown) => isRuntimeDownloadCancelled(error),
+      'an aborted attempt must not sit out the ten-minute lock deadline',
+    )
+    assert.equal(existsSync(held), true, 'the lock belongs to another process and stays')
+  })
+
+  it('clears what an interrupted attempt left behind, and nothing else', async () => {
+    const home = join(root, 'home-purge')
+    const orb = join(home, 'dsh-orb')
+    mkdirSync(join(orb, 'electron-runtime'), { recursive: true })
+    writeFileSync(join(orb, '.electron-abc123.zip'), 'half a download')
+    mkdirSync(join(orb, '.electron-staging-def456'), { recursive: true })
+    writeFileSync(join(orb, '.electron-staging-def456', 'partial'), 'x')
+    writeFileSync(join(orb, 'electron-runtime', '.complete-44.0.0'), '44.0.0\n')
+    const previous = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+    try {
+      await purgeRuntimeArtifacts()
+    } finally {
+      if (previous === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previous
+    }
+    assert.equal(existsSync(join(orb, '.electron-abc123.zip')), false, 'the half-written zip is gone')
+    assert.equal(existsSync(join(orb, '.electron-staging-def456')), false, 'the partial staging folder is gone')
+    assert.equal(existsSync(join(orb, 'electron-runtime', '.complete-44.0.0')), true, 'the finished runtime stays')
+  })
+
+  it('marks only its own cancellation, never a real download failure', () => {
+    // Nothing in flight is not an error: a redownload with no attempt running is the normal case.
+    cancelRuntimeDownload()
+    assert.equal(isRuntimeDownloadCancelled(new Error('dsh-orb: curl exited 22')), false)
+    assert.equal(isRuntimeDownloadCancelled(undefined), false)
+    assert.equal(
+      isRuntimeDownloadCancelled(Object.assign(new Error('cancelled'), { code: 'dsh-orb-download-cancelled' })),
+      true,
+      'the host keys the "do not count this retry" branch on this tag',
+    )
   })
 })

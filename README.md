@@ -119,7 +119,7 @@ Then either add the tarball in the desktop app's plugin page, or:
 dsh plugin add ./dsh-orb-<version>.tgz
 ```
 
-After the first installation the helper's Electron runtime is downloaded on first use of the ball, then cached.
+After the first installation the helper's Electron runtime is downloaded on first use of the ball, then cached. While it downloads — and if it fails or is interrupted — **Settings → Floating ball** in the main window shows a prominent notice whose **Download again** button restarts the download from zero, with no app restart.
 
 ## Development
 

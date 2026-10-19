@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { access, chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
@@ -28,6 +28,53 @@ export const PINNED_SHA256: Readonly<Record<string, string>> = {
 
 /** What {@link resolveElectronBinary} is busy with, for the settings page's progress line. */
 export type ElectronRuntimePhase = 'downloading' | 'extracting'
+
+/**
+ * Marker for a step the user aborted with a manual redownload. It is not a download failure:
+ * whoever cancelled the attempt owns the next one, so the caller must not count it.
+ */
+const CANCELLED_CODE = 'dsh-orb-download-cancelled'
+
+/** The one download this process can have in flight; the lock serialises attempts across processes. */
+let active: AbortController | undefined
+
+function cancelled(): Error {
+  return Object.assign(new Error('dsh-orb: Electron download cancelled'), { code: CANCELLED_CODE })
+}
+
+/** Whether a rejection is this module's own cancellation rather than a real download failure. */
+export function isRuntimeDownloadCancelled(error: unknown): boolean {
+  return (error as { code?: unknown } | undefined)?.code === CANCELLED_CODE
+}
+
+/**
+ * Drop the download in flight, if any. The attempt unwinds at its next step and deletes its own
+ * partial zip and staging folder on the way out.
+ */
+export function cancelRuntimeDownload(): void {
+  const controller = active
+  active = undefined
+  controller?.abort()
+}
+
+/**
+ * Delete what a killed process left behind: half-written `.electron-*.zip` downloads and
+ * `.electron-staging-*` extraction folders. Attempts carry a unique stamp, so before a manual
+ * redownload starts there is nothing here but leftovers.
+ */
+export async function purgeRuntimeArtifacts(): Promise<void> {
+  const dir = dshHomePath('dsh-orb')
+  let entries: string[]
+  try {
+    entries = await readdir(dir)
+  } catch {
+    return
+  }
+  for (const name of entries) {
+    if (!name.startsWith('.electron-')) continue
+    await rm(join(dir, name), { recursive: true, force: true }).catch(() => undefined)
+  }
+}
 
 /**
  * Resolve the helper executable.
@@ -59,35 +106,44 @@ async function downloadRuntime(
 ): Promise<void> {
   const parent = dirname(dest)
   await mkdir(parent, { recursive: true })
-  await withDownloadLock(parent, async () => {
-    if (await exists(binary) && await exists(marker)) return
-    const fileName = assetName()
-    console.error(`dsh-orb: downloading Electron ${ELECTRON_VERSION} (${fileName})`)
-    const sums = await fetchText('SHASUMS256.txt')
-    const expected = expectedHash(sums, fileName)
-    const stamp = randomBytes(8).toString('hex')
-    const zipPath = join(parent, `.electron-${stamp}.zip`)
-    const staging = join(parent, `.electron-staging-${stamp}`)
-    try {
-      report?.('downloading')
-      await downloadVerifiedZip(fileName, expected, zipPath)
-      report?.('extracting')
-      await mkdir(staging, { recursive: true })
-      await extractZip(zipPath, staging)
-      const stagedBinary = join(staging, binaryRelative())
-      if (process.platform === 'darwin') {
-        await spawnChecked('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', staging]).catch(() => undefined)
+  const controller = new AbortController()
+  active = controller
+  const signal = controller.signal
+  try {
+    await withDownloadLock(parent, async () => {
+      if (signal.aborted) throw cancelled()
+      if (await exists(binary) && await exists(marker)) return
+      const fileName = assetName()
+      console.error(`dsh-orb: downloading Electron ${ELECTRON_VERSION} (${fileName})`)
+      const sums = await fetchText('SHASUMS256.txt', signal)
+      const expected = expectedHash(sums, fileName)
+      const stamp = randomBytes(8).toString('hex')
+      const zipPath = join(parent, `.electron-${stamp}.zip`)
+      const staging = join(parent, `.electron-staging-${stamp}`)
+      try {
+        report?.('downloading')
+        await downloadVerifiedZip(fileName, expected, zipPath, signal)
+        report?.('extracting')
+        await mkdir(staging, { recursive: true })
+        await extractZip(zipPath, staging, signal)
+        const stagedBinary = join(staging, binaryRelative())
+        if (process.platform === 'darwin') {
+          await spawnChecked('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', staging]).catch(() => undefined)
+        }
+        if (signal.aborted) throw cancelled()
+        await chmod(stagedBinary, 0o755)
+        await access(stagedBinary)
+        await writeFile(join(staging, `.complete-${ELECTRON_VERSION}`), `${ELECTRON_VERSION}\n`)
+        await replaceDirectory(staging, dest)
+      } finally {
+        await rm(zipPath, { force: true })
+        await rm(staging, { recursive: true, force: true })
       }
-      await chmod(stagedBinary, 0o755)
-      await access(stagedBinary)
-      await writeFile(join(staging, `.complete-${ELECTRON_VERSION}`), `${ELECTRON_VERSION}\n`)
-      await replaceDirectory(staging, dest)
-    } finally {
-      await rm(zipPath, { force: true })
-      await rm(staging, { recursive: true, force: true })
-    }
-    console.error(`dsh-orb: Electron ${ELECTRON_VERSION} is ready`)
-  })
+      console.error(`dsh-orb: Electron ${ELECTRON_VERSION} is ready`)
+    }, signal)
+  } finally {
+    if (active === controller) active = undefined
+  }
 }
 
 /**
@@ -96,7 +152,11 @@ async function downloadRuntime(
  * so a second process can never read a half-made lock. A dead owner, or one past the
  * 20-minute ceiling, can be taken over.
  */
-export async function withDownloadLock(parent: string, task: () => Promise<void>): Promise<void> {
+export async function withDownloadLock(
+  parent: string,
+  task: () => Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
   const lock = join(parent, 'electron-runtime.download.lock')
   const deadline = Date.now() + 10 * 60 * 1000
   for (;;) {
@@ -104,6 +164,7 @@ export async function withDownloadLock(parent: string, task: () => Promise<void>
     // lock is swept. A rename refused for a reason other than a held lock (a handle on the
     // staging directory, a deny on the parent) must not turn this into an unbounded spin.
     if (Date.now() > deadline) throw new Error('dsh-orb: Electron download is locked by another process')
+    if (signal?.aborted) throw cancelled()
     const staging = `${lock}.${randomBytes(6).toString('hex')}.tmp`
     try {
       await mkdir(staging)
@@ -254,7 +315,7 @@ function releaseUrls(path: string): string[] {
 }
 
 /** First source that answers wins; a dead host costs one connect timeout, not the whole transfer. */
-async function fetchText(path: string): Promise<string> {
+async function fetchText(path: string, signal: AbortSignal): Promise<string> {
   let lastError: unknown
   for (const url of releaseUrls(path)) {
     try {
@@ -262,9 +323,11 @@ async function fetchText(path: string): Promise<string> {
         '-fsSL', ...CURL_HTTPS, ...CURL_TLS,
         '--connect-timeout', CONNECT_TIMEOUT_SECONDS,
         '--max-time', '60', url,
-      ])
+      ], signal)
       return stdout
     } catch (error) {
+      // A cancelled attempt stops here; a dead mirror is just the next source's turn.
+      if (signal.aborted) throw cancelled()
       lastError = error
       console.error(`dsh-orb: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -272,7 +335,7 @@ async function fetchText(path: string): Promise<string> {
   throw lastError instanceof Error ? lastError : new Error(`dsh-orb: failed to download ${path}`)
 }
 
-async function downloadVerifiedZip(fileName: string, expected: string, dest: string): Promise<void> {
+async function downloadVerifiedZip(fileName: string, expected: string, dest: string, signal: AbortSignal): Promise<void> {
   // Official checksums decide what is accepted. The mirror only decides how fast it arrives.
   const urls = releaseUrls(fileName)
   let lastError: unknown
@@ -284,13 +347,14 @@ async function downloadVerifiedZip(fileName: string, expected: string, dest: str
         '--connect-timeout', CONNECT_TIMEOUT_SECONDS,
         '--speed-limit', '100000', '--speed-time', '20',
         '--max-time', '300', '-o', dest, url,
-      ])
+      ], signal)
       const actual = await sha256(dest)
       if (!sameHash(actual, expected)) {
         throw new Error(`dsh-orb: Electron ${ELECTRON_VERSION} checksum did not match SHASUMS256.txt`)
       }
       return
     } catch (error) {
+      if (signal.aborted) throw cancelled()
       lastError = error
       console.error(`dsh-orb: ${error instanceof Error ? error.message : String(error)}`)
     }
@@ -298,14 +362,21 @@ async function downloadVerifiedZip(fileName: string, expected: string, dest: str
   throw lastError instanceof Error ? lastError : new Error(`dsh-orb: failed to download Electron ${ELECTRON_VERSION}`)
 }
 
-function run(command: string, args: string[]): Promise<{ stdout: string }> {
+function run(command: string, args: string[], signal?: AbortSignal): Promise<{ stdout: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    if (signal?.aborted) {
+      reject(cancelled())
+      return
+    }
+    // `signal` kills the child — curl included — the moment the user asks for a redownload.
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], ...(signal === undefined ? {} : { signal }) })
     const out: Buffer[] = []
     const err: Buffer[] = []
     child.stdout?.on('data', (chunk: Buffer) => out.push(chunk))
     child.stderr?.on('data', (chunk: Buffer) => err.push(chunk))
-    child.once('error', reject)
+    child.once('error', (error) => {
+      reject(signal?.aborted ? cancelled() : error)
+    })
     child.once('exit', (code) => {
       if (code === 0) {
         resolve({ stdout: Buffer.concat(out).toString('utf8') })
@@ -329,21 +400,31 @@ function sameHash(actual: string, expected: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right)
 }
 
-async function extractZip(zipPath: string, dest: string): Promise<void> {
+async function extractZip(zipPath: string, dest: string, signal: AbortSignal): Promise<void> {
   if (process.platform === 'win32') {
     const command = `Expand-Archive -LiteralPath '${zipPath.replaceAll("'", "''")}' -DestinationPath '${dest.replaceAll("'", "''")}' -Force`
-    await spawnChecked('powershell.exe', ['-NoProfile', '-Command', command])
+    await spawnChecked('powershell.exe', ['-NoProfile', '-Command', command], signal)
     return
   }
   const unzip = process.platform === 'darwin' ? '/usr/bin/unzip' : 'unzip'
-  await spawnChecked(unzip, ['-q', '-o', zipPath, '-d', dest])
+  await spawnChecked(unzip, ['-q', '-o', zipPath, '-d', dest], signal)
 }
 
-function spawnChecked(command: string, args: string[]): Promise<void> {
+function spawnChecked(command: string, args: string[], signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: 'ignore' })
-    child.once('error', reject)
+    if (signal?.aborted) {
+      reject(cancelled())
+      return
+    }
+    const child = spawn(command, args, { stdio: 'ignore', ...(signal === undefined ? {} : { signal }) })
+    child.once('error', (error) => {
+      reject(signal?.aborted ? cancelled() : error)
+    })
     child.once('exit', (code) => {
+      if (signal?.aborted) {
+        reject(cancelled())
+        return
+      }
       if (code === 0) resolve()
       else reject(new Error(`dsh-orb: ${command} exited ${code ?? 'unknown'}`))
     })

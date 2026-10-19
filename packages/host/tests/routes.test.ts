@@ -630,6 +630,82 @@ describe('settings routes', () => {
     assert.equal(JSON.parse(huge.body.toString('utf8')).error, 'too-large')
     dispose()
   })
+
+  it('restarts the runtime download on request, and says so on a host that cannot', async () => {
+    const profile = join(root, 'profile-redownload')
+    mkdirSync(profile, { recursive: true })
+    const store = new ProfileStore(profile)
+    let redownloads = 0
+    let phase = ''
+    let failure = 'runtime-download'
+    const base: OrbControl = {
+      helperAuthorized: () => false,
+      takeJump: () => null,
+      confirmJump() {},
+      takeSettingsOpen: () => null,
+      confirmSettingsOpen() {},
+      async publishChrome() {},
+      async setOverlayModel() {},
+      async setBackgroundModel() {},
+      async setSelectionEnabled() {},
+      async setMillifractionEnabled() {},
+      async setObservationFrameEnabled() {},
+      async setBallEnabled() {},
+      helperStatus: () => failure,
+      helperPhase: () => phase,
+      updateState: () => ({ ...emptyUpdate }),
+      async checkUpdate() {},
+      installUpdate() {},
+      setAutoCheck() {},
+    }
+    let handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | undefined
+    const dispose = registerOrbRoutes({
+      ctx: {
+        webServer: { register(route) { handler = route.handler; return () => { handler = undefined } } },
+        connection: { admit: () => ({ peer: { id: 'local' } }) },
+        sessionController: { modelCatalog: () => ({ groups: [] }) },
+      },
+      store,
+      tcc: new TccMonitor(),
+      control: {
+        ...base,
+        async redownloadRuntime() {
+          redownloads += 1
+          // Same bookkeeping as the host: the failure goes away and a fresh attempt is armed
+          // before the page reads its snapshot back.
+          failure = ''
+          phase = 'downloading'
+        },
+      },
+    })
+    assert.ok(handler)
+    const fresh = response()
+    await handler(request('POST', '/.dsh-orb/runtime/redownload', '{}'), fresh)
+    assert.equal(fresh.status, 200)
+    assert.equal(redownloads, 1, 'the route reaches the control')
+    const body = JSON.parse(fresh.body.toString('utf8')) as { helperPhase: string; helperError: string }
+    assert.equal(body.helperPhase, 'downloading', 'the snapshot the page reads back is the new attempt')
+    assert.equal(body.helperError, '', 'the failure is gone the moment the redownload is armed')
+    dispose()
+
+    // An older host without the action answers 404 rather than pretending it worked.
+    let oldHandler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | undefined
+    const disposeOld = registerOrbRoutes({
+      ctx: {
+        webServer: { register(route) { oldHandler = route.handler; return () => { oldHandler = undefined } } },
+        connection: { admit: () => ({ peer: { id: 'local' } }) },
+        sessionController: { modelCatalog: () => ({ groups: [] }) },
+      },
+      store,
+      tcc: new TccMonitor(),
+      control: { ...base },
+    })
+    assert.ok(oldHandler)
+    const unsupported = response()
+    await oldHandler(request('POST', '/.dsh-orb/runtime/redownload', '{}'), unsupported)
+    assert.equal(unsupported.status, 404)
+    disposeOld()
+  })
 })
 
 /** Update state a host without a checker answers, for tests that only exercise one route. */

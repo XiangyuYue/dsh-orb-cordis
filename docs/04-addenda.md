@@ -288,3 +288,23 @@ Windows 上的实测反馈:在浏览器里点球、输入、回车提交后,**Ag
 - **验证**:把 `packages/host/src/orb.ts` 还原成旧代码后跑同一批用例,**两条新用例必红**(27 过 2 挂),修复后 29 例全绿——回归点被钉住。`pnpm typecheck` / `pnpm test`(node:test + vitest 321 例)/ `pnpm build` 全部通过。
 - **装机**:只动 host,按第 14 节流程把 `dist/host/index.js`(连 `index.d.ts`)备份到 `~/.dsh/dsh-orb-installed-backup-<时间戳>-session-open/` 后同步进 `~/.dsh/profiles/desktop/node_modules/dsh-orb/dist/host/`(临时名 + `mv`)。host 在进程启动时加载,**需重启应用**生效。
 - **遗留**:修复前每点一次历史都会真的铸出一个空会话,它们仍在历史列表里(不是幻觉);而 `floating-session.json` 现在指向的多半正是这样一个空会话,所以重启后球可能先落在空白对话上——从历史里点回那一段即可。要清理那些空壳会话得走官方会话存储,本次未动。
+
+## 22. 下载运行时的提示看不见：改成醒目卡片 + 「重新下载」按钮(2026-10-19)
+
+现象(承接第 1 节那条用户反馈的正根):装完插件没有球的人,进 设置 → 悬浮球 只看到一行灰色小字「悬浮球运行时没有下载成功。关闭后再打开可再试一次。」和一个**没有边框、没有底色**的「重试」,排版上紧跟页面介绍行「更改写入当前配置。」。实测计算样式:错误行与介绍行颜色**完全相同**(dark 下都是 `color(srgb 0.976471 0.980392 0.984314 / 0.72)`,13px/400),而页面自己也**只在这一页**提示——主窗口、会话列表都没有任何提示。两条具体缺陷:
+
+- **错误色从未生效**:`.dsh-orb-set p`(0,1,1)压过 `.dsh-orb-set-error`(0,1,0),而插件里每一处 `.dsh-orb-set-error` 都是 `<p>`,所以红色 token(`--dsw-alias-state-error-primary`,dark 下 `#f25a5a`)**一次都没轮到**。同理,「重试」用的是 `.dsh-orb-set-ghost`(`border-color: transparent`、无底色),视觉上像正文里的一句话。
+- **按钮做的事和文案说的不是一回事**:文案让用户「关闭后再打开」,而下载**没有断点续传**(每次全新 `curl -o .electron-<随机>.zip`,`finally` 删掉 zip 与 staging),所以重启 = 从 0 开始;反倒是那个不显眼的按钮能走 `setBallEnabled(true)` → `runtimeRetries = 0`(注释原文 "A manual retry grants a fresh download budget"),比重启更有效。
+
+改动:
+
+- **客户端**:`helperNotice` 重写为 `runtimeNotice` —— 带色调的卡片(等待=蓝、失败=红,`color-mix` 边框 + 10% 底色)、圆点标记(失败 `!`、等待 CSS 转圈)、加粗标题、正文,以及**主按钮**(填充 `--dsw-alias-button-info-fill`),不再是 ghost。等待态**也给按钮**:下载被打断或卡住时,用户不必等退避也不必重启。文案改写为「点「重新下载」立即从头再下一次——不用重启应用」,并把 helper 反复退出那条并入同一组件(标题「悬浮球没能启动」,按钮仍是「重试」,走原来的 `/.dsh-orb/ball`)。
+- **CSS**:补 `.dsh-orb-set p.dsh-orb-set-error` 把错误色真正落到段落上(其余错误文案同样受益);通知块用 `.dsh-orb-set-notice*` 独立类,正文显式 `color: inherit` 以脱离那条 72% 灰的公共规则。
+- **host**:新增 `POST /.dsh-orb/runtime/redownload` → `OrbRuntime.redownloadRuntime()`:取消在飞的下载(`AbortController` 贯穿取 SHASUMS、`curl`、`unzip`/`Expand-Archive` 与下载锁等待)、删掉被杀进程留下的 `.electron-*.zip` 与 `.electron-staging-*`、重置重试预算并立刻重新开始。被取消的那次用 `code: 'dsh-orb-download-cancelled'` 标记,`beginRuntime` 见到它**不计失败、不写 `helperError`**(否则一次手动重下会凭空烧掉一次重试并闪一下失败态)。方法不 await 整段下载:一次下载跑几分钟,由设置页按 `helperPhase` 跟随,和首次启动同一条路。
+
+验证:
+
+- 单测:`client-settings/tests/section.test.mjs` 那一例重写为断言两种 tone、标题/正文文案、按钮指向 `/.dsh-orb/runtime/redownload`,以及 helper-exited 仍指向 `/.dsh-orb/ball`;`host/tests/routes.test.ts` 新增一例(新路由命中 control、回读快照已是新一次尝试、老 host 没有该方法时答 404);`host/tests/electron-runtime.test.ts` 新增 3 例(取消后不再等锁、清理只动 `.electron-*` 而保留已完成的运行时、取消标记只认自己的 code)。
+- `pnpm typecheck` / `pnpm test`(node:test 全绿 + computer-use 321 例)/ `pnpm build` 全部通过。
+- **真实 UI 端到端**:用临时 `DSH_HOME` 装本次打包产物(`--version 0.1.9-uinotice2`),另起一份 `dsh web`,无头 Chrome 打开真实设置页截图:失败态是红色卡片 + 主按钮;点击后确实发出 `POST /.dsh-orb/runtime/redownload`,界面立刻切到蓝色等待卡片;再把 `DSH_ORB_ELECTRON_PATH` 指向一个可执行文件后再次点击,host 日志由 `ENOENT: … access '/tmp/orb-shot/fake-electron'` 变为 `helper started pid 78834` —— 证明按钮真的重跑了整条运行时解析,而不是只改了界面。用户的 52455 实例与 `~/.dsh` 全程未动,临时 home 与临时目录已删除,仓库里只留打包用的临时版本号 tarball(验证后即删)。
+- **未做**:主窗口/会话列表侧的提示(本次只要求设置页内显眼)。慢网 5 分钟硬超时(`--max-time 300`)与 100 KB/s 下限仍在,所以「下不完」这件事本身没变——变的是用户现在看得见、点得动。

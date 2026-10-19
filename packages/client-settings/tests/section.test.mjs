@@ -187,6 +187,11 @@ function loadSection(hooks = {}) {
         snapshot.history = { ...snapshot.history, cleaning: false, lastCleanupAt: 1700000000000 }
       }
       if (options.method === 'POST' && path === '/.dsh-orb/ball') snapshot.ballEnabled = JSON.parse(options.body).enabled
+      if (options.method === 'POST' && path === '/.dsh-orb/runtime/redownload') {
+        // The host drops the failure and arms a fresh attempt, exactly like a first launch.
+        snapshot.helperError = ''
+        snapshot.helperPhase = 'downloading'
+      }
       if (options.method === 'POST' && path === '/.dsh-orb/millifraction') snapshot.millifractionEnabled = JSON.parse(options.body).enabled
       if (options.method === 'POST' && path === '/.dsh-orb/observation-frame') snapshot.observationFrameEnabled = JSON.parse(options.body).enabled
       if (options.method === 'POST' && path === '/.dsh-orb/overlay-model') snapshot.overlay = JSON.parse(options.body)
@@ -493,30 +498,60 @@ describe('settings section', () => {
     assert.match(node.textContent, /\.dsh-orb-set-more \{/, 'the live node is rewritten, not left stale')
   })
 
-  it('explains the first-launch runtime wait and offers a retry when it failed', async () => {
+  it('shows the runtime wait and its failure as loud notices whose button downloads again', async () => {
     const page = loadSection()
+    const notice = (view, tone) => find(view, (node) => node.props?.className === `dsh-orb-set-notice is-${tone}`)[0]
+    const said = (node) => {
+      if (typeof node === 'string') return node
+      if (!node || typeof node !== 'object') return ''
+      return (node.children ?? []).map(said).join('')
+    }
+    const actionOf = (node) => find(node, (child) => child.type === 'button' && String(child.props?.className).includes('dsh-orb-set-notice-action'))[0]
+
     page.snapshot.helperPhase = 'downloading'
     let view = page.render()
     await page.flush()
     view = page.render()
-    assert.equal(
-      find(view, (node) => node.children?.includes('正在准备悬浮球：首次使用需要下载约 124–150 MB 的运行时，完成后悬浮球会自动出现。')).length,
-      1,
-      'the waiting line tells the user the ball is being prepared',
-    )
+    const waiting = notice(view, 'wait')
+    assert.ok(waiting, 'the wait is a notice block, not a bare grey line')
+    assert.match(said(waiting), /正在下载悬浮球运行时/)
+    assert.match(said(waiting), /124–150 MB/)
+    const waitAction = actionOf(waiting)
+    assert.ok(waitAction, 'the wait carries its own action, so an interrupted download can be restarted')
+    assert.equal(waitAction.children[0], '重新下载')
+    waitAction.props.onClick()
+    await settle()
+    assert.equal(page.calls.at(-1).path, '/.dsh-orb/runtime/redownload', 'the wait action downloads again')
 
     page.snapshot.helperPhase = ''
     page.snapshot.helperError = 'runtime-download'
     await page.tick()
     view = page.render()
-    assert.equal(find(view, (node) => node.children?.includes('悬浮球运行时没有下载成功。关闭后再打开可再试一次。')).length, 1)
-    const retry = find(view, (node) => node.type === 'button' && node.children?.includes('重试'))[0]
-    assert.ok(retry, 'the failure line carries a retry button')
+    const failed = notice(view, 'error')
+    assert.ok(failed, 'the failure is a notice block')
+    assert.match(said(failed), /悬浮球运行时下载失败/)
+    assert.match(said(failed), /不用重启应用/)
+    const action = actionOf(failed)
+    assert.ok(action, 'the failure carries a download button')
+    assert.equal(action.children[0], '重新下载')
+    // The old block hung a ghost button under the sentence; the loud one is a primary button.
+    assert.doesNotMatch(String(action.props.className), /ghost/)
+    action.props.onClick()
+    await settle()
+    assert.equal(page.calls.at(-1).path, '/.dsh-orb/runtime/redownload')
+    assert.equal(JSON.parse(page.calls.at(-1).options.body).enabled, undefined, 'a redownload is not a ball toggle')
+
+    page.snapshot.helperError = 'helper-exited'
+    await page.tick()
+    view = page.render()
+    const exited = notice(view, 'error')
+    assert.match(said(exited), /悬浮球没能启动/)
+    const retry = actionOf(exited)
+    assert.equal(retry.children[0], '重试')
     retry.props.onClick()
     await settle()
-    const call = page.calls.at(-1)
-    assert.equal(call.path, '/.dsh-orb/ball')
-    assert.equal(JSON.parse(call.options.body).enabled, true, 'retry asks the host to start the ball again')
+    assert.equal(page.calls.at(-1).path, '/.dsh-orb/ball')
+    assert.equal(JSON.parse(page.calls.at(-1).options.body).enabled, true, 'retry asks the host to start the ball again')
 
     page.snapshot.helperError = ''
   })

@@ -12,10 +12,13 @@ window.__ModuleLoader__.load({
       linux: '悬浮球在 Linux 上不可用。',
       error: '无法加载悬浮球设置。',
       saveError: '无法保存。',
-      helperFailed: '悬浮球多次退出，已经停止重试。关闭后再打开可再试一次。',
-      runtimeFailed: '悬浮球运行时没有下载成功。关闭后再打开可再试一次。',
+      helperFailedTitle: '悬浮球没能启动',
+      helperFailed: '悬浮球多次退出，已经停止重试。点「重试」立刻再拉起一次。',
+      runtimeFailedTitle: '悬浮球运行时下载失败',
+      runtimeFailed: '下载没有完成，所以球没有出现。点「重新下载」立即从头再下一次——不用重启应用。',
       permissionFallback: '权限设置无法读取，已改为工作区内修改。',
       retry: '重试',
+      redownload: '重新下载',
       ball: '启用悬浮球',
       ballDescription: '关闭后插件仍在，Computer Use 仍可在主窗口使用。',
       avatarTitle: '悬浮球头像',
@@ -51,7 +54,8 @@ window.__ModuleLoader__.load({
       frameTitle: '观察框彩带',
       frameDescription: 'Computer Use 操作某个窗口时，窗口周围显示这条彩带。关闭后不再显示。',
       frameToggle: '显示观察框彩带',
-      runtimePreparing: '正在准备悬浮球：首次使用需要下载约 124–150 MB 的运行时，完成后悬浮球会自动出现。',
+      runtimePreparingTitle: '正在下载悬浮球运行时',
+      runtimePreparing: '首次使用需要下载约 124–150 MB 的运行时，完成后悬浮球会自动出现。下载被中断或长时间不动时，点「重新下载」立即从头再下。',
       tccTitle: 'Mac 权限',
       tccDescription: 'Computer Use 需要屏幕录制与辅助功能。点按钮打开系统设置对应页。',
       tccAppHint: '在列表里打开 {name}。',
@@ -142,10 +146,13 @@ window.__ModuleLoader__.load({
       linux: 'The floating ball is not available on Linux.',
       error: 'Could not load floating-ball settings.',
       saveError: 'Could not save.',
-      helperFailed: 'The floating ball exited too many times and stopped retrying. Turn it off and on to try again.',
-      runtimeFailed: 'The floating-ball runtime did not download. Turn it off and on to try again.',
+      helperFailedTitle: 'The floating ball could not start',
+      helperFailed: 'The floating ball exited too many times and stopped retrying. Retry starts it again right away.',
+      runtimeFailedTitle: 'The floating-ball runtime download failed',
+      runtimeFailed: 'The download did not finish, so no ball appeared. Download again restarts it from zero right now — no app restart needed.',
       permissionFallback: 'The permission file could not be read. Access is now Workspace Write.',
       retry: 'Retry',
+      redownload: 'Download again',
       ball: 'Enable the floating ball',
       ballDescription: 'Turning this off keeps the plugin loaded. Computer Use stays available in the main window.',
       avatarTitle: 'Ball image',
@@ -181,7 +188,8 @@ window.__ModuleLoader__.load({
       frameTitle: 'Observation ribbon',
       frameDescription: 'Draws the coloured ribbon around the window Computer Use is working on. Turn it off to hide it.',
       frameToggle: 'Show the observation ribbon',
-      runtimePreparing: 'Preparing the floating ball: the first launch downloads a ~124–150 MB runtime, then the ball appears on its own.',
+      runtimePreparingTitle: 'Downloading the floating-ball runtime',
+      runtimePreparing: 'The first launch downloads a ~124–150 MB runtime, then the ball appears on its own. If the download was interrupted or looks stuck, Download again starts it over from zero.',
       tccTitle: 'Mac permissions',
       tccDescription: 'Computer Use needs Screen Recording and Accessibility. Each button opens that System Settings pane.',
       tccAppHint: 'In the list, turn on {name}.',
@@ -678,32 +686,52 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Why the ball is not on screen yet: preparing (first-launch runtime), or
-     * failed with a retry. Nothing shows while a ball is up or the ball is off.
+     * Why the ball is not on screen yet: preparing (first-launch runtime), or failed with an
+     * action that starts the work over. Nothing shows while a ball is up or the ball is off.
+     *
+     * The notice is deliberately loud. A quiet grey line in this page is what users walked past:
+     * the failure colour follows a title and a filled button, and the waiting tone keeps its
+     * own action so an interrupted first download can be restarted without leaving the page.
      */
     function helperNotice(text, snap, disabled, mutate) {
       if (snap.ballEnabled === false) return null
-      const retry = () => {
+      const retryBall = () => {
         // POST the toggle's own value: the host restarts the helper and grants
         // a fresh download budget.
         void mutate('/.dsh-orb/ball', { enabled: true })
       }
+      const redownload = () => {
+        // Cancels the attempt in flight, clears what an interrupted one left behind, and
+        // downloads again — no app restart, no waiting out a backoff.
+        void mutate('/.dsh-orb/runtime/redownload', {})
+      }
       if (snap.helperError === 'helper-exited') {
-        return h('div', { className: 'dsh-orb-set-banner' },
-          h('p', { className: 'dsh-orb-set-error', role: 'alert' }, text.helperFailed),
-          h('div', { className: 'dsh-orb-set-actions' },
-            h('button', { type: 'button', className: 'dsh-orb-set-button dsh-orb-set-ghost', disabled, onClick: retry }, text.retry)))
+        return runtimeNotice(text.helperFailedTitle, text.helperFailed, 'error', text.retry, disabled, retryBall)
       }
       if (snap.helperError === 'runtime-download') {
-        return h('div', { className: 'dsh-orb-set-banner' },
-          h('p', { className: 'dsh-orb-set-error', role: 'alert' }, text.runtimeFailed),
-          h('div', { className: 'dsh-orb-set-actions' },
-            h('button', { type: 'button', className: 'dsh-orb-set-button dsh-orb-set-ghost', disabled, onClick: retry }, text.retry)))
+        return runtimeNotice(text.runtimeFailedTitle, text.runtimeFailed, 'error', text.redownload, disabled, redownload)
       }
       if (typeof snap.helperPhase === 'string' && snap.helperPhase !== '') {
-        return h('p', { className: 'dsh-orb-set-banner', role: 'status' }, text.runtimePreparing)
+        return runtimeNotice(text.runtimePreparingTitle, text.runtimePreparing, 'wait', text.redownload, disabled, redownload)
       }
       return null
+    }
+
+    /**
+     * One runtime notice: tone mark, title, body, and a filled action button on the same row.
+     * The button is the point of the block, so it is a primary button, not the ghost one this
+     * page used to render underneath the sentence.
+     */
+    function runtimeNotice(title, body, tone, action, disabled, onClick) {
+      return h('section', {
+        className: `dsh-orb-set-notice is-${tone}`,
+        role: tone === 'error' ? 'alert' : 'status',
+      },
+        h('span', { className: 'dsh-orb-set-notice-mark', 'aria-hidden': 'true' }, tone === 'error' ? '!' : null),
+        h('div', { className: 'dsh-orb-set-notice-main' },
+          h('h3', { className: 'dsh-orb-set-notice-title' }, title),
+          h('p', { className: 'dsh-orb-set-notice-body' }, body)),
+        h('button', { type: 'button', className: 'dsh-orb-set-notice-action', disabled, onClick }, action))
     }
 
     /** Current version, the newest published one, and the one-click upgrade. */
@@ -1254,6 +1282,23 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-intro, .dsh-orb-set p { margin: 4px 0 0; color: color-mix(in srgb, currentColor 72%, transparent); font-size: 13px; line-height: 1.45; }
 .dsh-orb-set-banner { color: inherit; }
 .dsh-orb-set-error { color: var(--dsw-alias-state-error-primary, #d92d20); }
+/* Every error line on this page is a <p>, and the rule above ("class + type") outranks the bare
+   class, so the failure colour has to be spelled with the paragraph in the selector. */
+.dsh-orb-set p.dsh-orb-set-error { color: var(--dsw-alias-state-error-primary, #d92d20); }
+.dsh-orb-set-notice { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: 12px; border: 1px solid transparent; }
+.dsh-orb-set-notice.is-error { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d92d20) 45%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d92d20) 10%, transparent); }
+.dsh-orb-set-notice.is-wait { border-color: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 40%, transparent); background: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 9%, transparent); }
+.dsh-orb-set-notice-mark { flex: none; width: 22px; height: 22px; margin-top: -1px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; line-height: 1; }
+.dsh-orb-set-notice.is-error .dsh-orb-set-notice-mark { background: var(--dsw-alias-state-error-primary, #d92d20); color: var(--dsw-static-neutral-bluish-00, #fff); }
+.dsh-orb-set-notice.is-wait .dsh-orb-set-notice-mark { border: 2px solid color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 30%, transparent); border-top-color: var(--dsw-alias-button-info-fill, #2f6fed); animation: dsh-orb-set-spin 0.9s linear infinite; }
+@keyframes dsh-orb-set-spin { to { transform: rotate(360deg); } }
+.dsh-orb-set-notice-main { flex: 1; min-width: 0; }
+.dsh-orb-set .dsh-orb-set-notice-title { margin: 0; font-size: 14px; font-weight: 600; color: inherit; }
+.dsh-orb-set-notice.is-error .dsh-orb-set-notice-title { color: var(--dsw-alias-state-error-primary, #d92d20); }
+.dsh-orb-set p.dsh-orb-set-notice-body { margin: 4px 0 0; font-size: 13px; line-height: 1.45; color: inherit; }
+.dsh-orb-set .dsh-orb-set-notice-action { flex: none; margin-left: auto; align-self: center; border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; background: var(--dsw-alias-button-info-fill, #2f6fed); color: var(--dsw-static-neutral-bluish-00, #fff); }
+.dsh-orb-set .dsh-orb-set-notice-action:hover:enabled { filter: brightness(1.08); }
+.dsh-orb-set .dsh-orb-set-notice-action:disabled { opacity: 0.5; cursor: default; }
 .dsh-orb-set-fields { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .dsh-orb-set-card { border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 12px; padding: 14px 16px; }
 .dsh-orb-set-row, .dsh-orb-set-avatar-row, .dsh-orb-set-tcc { display: flex; justify-content: space-between; gap: 16px; align-items: center; }

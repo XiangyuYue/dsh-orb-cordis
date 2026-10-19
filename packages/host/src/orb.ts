@@ -12,7 +12,7 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { Appearance, ThemePreference } from './appearance.ts'
 import { avatarPresetSrc } from './avatar-presets.ts'
 import type { ModelCatalog } from './catalog.ts'
-import { resolveElectronBinary } from './electron-runtime.ts'
+import { cancelRuntimeDownload, isRuntimeDownloadCancelled, purgeRuntimeArtifacts, resolveElectronBinary } from './electron-runtime.ts'
 import { helperMain } from './helper-path.ts'
 import {
   HistoryCleaner,
@@ -529,6 +529,13 @@ export class OrbRuntime {
       this.runtimeRetries = 0
       return true
     } catch (error) {
+      // A manual redownload aborted this attempt: it is not a failure, and the start that
+      // replaced it owns the next download. Counting it would burn a retry the user never used.
+      if (isRuntimeDownloadCancelled(error)) {
+        this.runtimeRetries = 0
+        this.runtimePhase = ''
+        return false
+      }
       const message = error instanceof Error ? error.message : String(error)
       console.error(`dsh-orb: ${message}`)
       this.runtimeRetries += 1
@@ -1584,6 +1591,36 @@ export class OrbRuntime {
       return
     }
     this.halt()
+  }
+
+  /**
+   * Start the runtime download over from zero, on the user's explicit request. A download that
+   * died with the previous process, stalled on a bad connection, or already spent its retry
+   * budget is dropped — bytes, staging folder, and budget — and fetched again right away.
+   *
+   * Returns as soon as the new attempt is armed: the download itself runs for minutes and the
+   * settings page follows it through `helperPhase`, exactly as it does a first launch.
+   */
+  async redownloadRuntime(): Promise<void> {
+    if (process.platform === 'linux') return
+    // A live helper means the runtime is already resolved: nothing to fetch, and arming a phase
+    // would leave the waiting line up over a ball that is running fine.
+    const live = this.child !== undefined && this.child.exitCode === null && this.child.signalCode === null && this.server !== undefined
+    cancelRuntimeDownload()
+    await purgeRuntimeArtifacts().catch((error: unknown) => {
+      console.error(`dsh-orb: could not clear the leftover runtime files: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    if (live) return
+    this.runtimeRetries = 0
+    this.helperError = undefined
+    // Deliberately not awaited: one attempt runs for minutes, and the page follows it through
+    // `helperPhase` the same way it follows a first launch.
+    void this.start().catch((error: unknown) => {
+      console.error(`dsh-orb: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    // `start()` clears the phase on its way in. The user just asked for a download, so the
+    // waiting line stays up until the attempt reports its own phase or fails for real.
+    this.runtimePhase = 'downloading'
   }
 
   /** Take the checker the plugin entry owns. Without one the settings page hides its update card. */
