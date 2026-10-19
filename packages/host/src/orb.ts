@@ -306,6 +306,12 @@ export class OrbRuntime {
   private helperError: string | undefined
   /** 'downloading'/'extracting' while the helper runtime is prepared; '' otherwise. */
   private runtimePhase = ''
+  /**
+   * True from the moment a runtime download is asked for until it lands or its budget is spent.
+   * The waiting phase is only ever a promise this flag backs: while it is set, a `start()` that
+   * merely relaunches must not blank the phase the settings page is polling on.
+   */
+  private runtimePending = false
   private runtimeRetries = 0
   private userData = ''
   /** Newer version waiting to be installed, or null once none is known. */
@@ -485,7 +491,11 @@ export class OrbRuntime {
     this.halted = false
     this.failures = 0
     this.helperError = undefined
-    this.runtimePhase = ''
+    // Only a start with nothing left to download may take the waiting line down. Every retry
+    // runs through here, and clearing the phase on the way in used to blank it for the length of
+    // an attempt — long enough for the settings page, which polls only while the phase is up, to
+    // stop polling and never see the download finish or fail.
+    if (!this.runtimePending) this.runtimePhase = ''
     if (this.child !== undefined && this.child.exitCode === null && this.child.signalCode === null && this.server) return
     if (this.retry) clearTimeout(this.retry)
     this.retry = undefined
@@ -523,17 +533,20 @@ export class OrbRuntime {
    * the phase stays on screen; only a spent budget surfaces the failure.
    */
   private async beginRuntime(generation: number): Promise<boolean> {
+    this.runtimePending = true
     try {
       this.binary = await resolveElectronBinary((phase) => { this.runtimePhase = phase })
       this.runtimePhase = ''
+      this.runtimePending = false
       this.runtimeRetries = 0
       return true
     } catch (error) {
       // A manual redownload aborted this attempt: it is not a failure, and the start that
       // replaced it owns the next download. Counting it would burn a retry the user never used.
+      // The phase and the pending flag stay as they are: the replacement attempt is already on
+      // its way, and taking the waiting line down here would be the same lie as above.
       if (isRuntimeDownloadCancelled(error)) {
         this.runtimeRetries = 0
-        this.runtimePhase = ''
         return false
       }
       const message = error instanceof Error ? error.message : String(error)
@@ -553,6 +566,7 @@ export class OrbRuntime {
         return false
       }
       this.runtimePhase = ''
+      this.runtimePending = false
       this.helperError = 'runtime-download'
       this.server?.close()
       this.server = undefined
@@ -597,6 +611,7 @@ export class OrbRuntime {
     this.halted = true
     this.pendingStart = false
     this.runtimePhase = ''
+    this.runtimePending = false
     if (this.retry) clearTimeout(this.retry)
     this.retry = undefined
     this.stopWatch()
@@ -1613,6 +1628,9 @@ export class OrbRuntime {
     if (live) return
     this.runtimeRetries = 0
     this.helperError = undefined
+    // Armed before `start()`: that call clears the phase unless a download is already pending,
+    // and this one is.
+    this.runtimePending = true
     // Deliberately not awaited: one attempt runs for minutes, and the page follows it through
     // `helperPhase` the same way it follows a first launch.
     void this.start().catch((error: unknown) => {

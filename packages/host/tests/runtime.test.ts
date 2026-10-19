@@ -341,6 +341,31 @@ function liveTurnCount(messages: Record<string, unknown>[]): number {
 }
 
 describe('ball control socket', { concurrency: 1 }, () => {
+  it('keeps the waiting phase up while a runtime download is still pending', async () => {
+    // A runtime path that cannot resolve stands in for a download that keeps failing: the attempt
+    // fails at once, the budget schedules a retry, and the settings page is told to keep waiting.
+    const harness = boot()
+    const previous = process.env.DSH_ORB_ELECTRON_PATH
+    process.env.DSH_ORB_ELECTRON_PATH = join(harness.profile, 'no-such-electron')
+    try {
+      await harness.runtime.start()
+      assert.equal(harness.runtime.helperPhase(), 'downloading', 'a scheduled retry keeps the waiting line up')
+      assert.equal(harness.runtime.helperStatus(), '', 'the retry budget is not spent yet')
+
+      // The retry timer starts the attempt again, and a manual redownload can land here too. This
+      // call used to blank the phase on its way in — long enough for the settings page, which polls
+      // only while the phase is up, to stop polling and never learn how the download ended.
+      const replacing = harness.runtime.start()
+      assert.equal(harness.runtime.helperPhase(), 'downloading', 'the replacing start must not blank the phase')
+      await replacing
+      assert.equal(harness.runtime.helperPhase(), 'downloading', 'and the attempt that follows keeps it up')
+    } finally {
+      harness.runtime.halt()
+      if (previous === undefined) delete process.env.DSH_ORB_ELECTRON_PATH
+      else process.env.DSH_ORB_ELECTRON_PATH = previous
+    }
+  })
+
   it('lists only Computer Use chats in dsh_orb and replays one when opened', async () => {
     const harness = boot()
     const client = await connect(harness.runtime)
