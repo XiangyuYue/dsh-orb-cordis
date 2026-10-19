@@ -27,12 +27,15 @@ describe('workspace selection', () => {
     assert.equal(choice.unchanged, false)
   })
 
-  it('rejects a non-empty custom directory', async () => {
+  it('accepts a custom directory that already has files', async () => {
     const fallback = join(root, 'default')
     const custom = join(root, 'busy')
     mkdirSync(custom, { recursive: true })
     writeFileSync(join(custom, 'file'), 'x')
-    await assert.rejects(() => validateWorkspaceSelection(custom, fallback, fallback), /workspace-not-empty/)
+    const choice = await validateWorkspaceSelection(custom, fallback, fallback)
+    assert.equal(choice.path, custom)
+    assert.equal(choice.custom, true)
+    assert.equal(choice.unchanged, false)
   })
 
   it('rejects relative, missing, and file paths', async () => {

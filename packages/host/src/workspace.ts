@@ -1,10 +1,10 @@
 /**
  * Validate the floating-ball Agent workspace selected in the settings card.
- * A custom workspace must be an existing empty directory; the shipped default may
- * already contain sessions. The old workspace is never touched.
+ * A custom workspace must be an existing directory and may already contain files.
+ * The old workspace is never touched.
  */
 
-import { readdir, stat } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 
 export interface WorkspaceSelection {
@@ -37,13 +37,6 @@ export async function validateWorkspaceSelection(
       throw new Error(code === 'ENOENT' ? 'workspace-not-found' : 'workspace-not-readable')
     }
     if (!info.isDirectory()) throw new Error('workspace-not-directory')
-    let entries
-    try {
-      entries = await readdir(path)
-    } catch {
-      throw new Error('workspace-not-readable')
-    }
-    if (entries.length > 0) throw new Error('workspace-not-empty')
   }
   return { path, custom, unchanged: false }
 }

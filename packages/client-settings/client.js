@@ -86,22 +86,18 @@ window.__ModuleLoader__.load({
       updateAutoDescription: '每天一次向 npmmirror（失败回退 npm）查询新版本，不发送任何标识信息。',
       updateManual: '当前 Harness 没有提供插件管理服务，请在插件页手动更新。',
       workspaceTitle: 'Agent 工作区',
-      workspaceDescription: '悬浮球 Agent 的新会话会创建在这里。自定义目录必须是空目录；修改后旧目录内容保持不变，也可以随时恢复默认工作区。',
+      workspaceDescription: '悬浮球 Agent 的新会话会创建在这里。切换后旧目录内容保持不变，也可以随时恢复默认工作区。',
       workspaceCurrent: '当前工作区：',
       workspaceDefault: '默认',
       workspaceCustom: '自定义',
-      workspacePlaceholder: '输入一个空的绝对路径',
       workspacePick: '选择…',
       workspacePicking: '选择中…',
-      workspacePickFailed: '无法打开系统目录选择器，请手动输入路径。',
-      workspacePickerUnavailable: '当前环境不支持系统目录选择，请手动输入路径。',
-      workspaceChange: '修改',
+      workspacePickFailed: '无法打开系统目录选择器。',
+      workspacePickerUnavailable: '当前环境不支持系统目录选择。',
       workspaceUseDefault: '恢复默认工作区',
       workspaceChanged: '工作区已切换。',
-      workspaceRequired: '请输入一个目录路径。',
-      workspaceSame: '这已经是当前工作区。',
       workspaceInvalidPath: '请输入绝对路径。',
-      workspaceNotFound: '目录不存在，请先创建一个空目录。',
+      workspaceNotFound: '目录不存在。',
       workspaceNotDirectory: '这个路径不是目录。',
       workspaceNotEmpty: '目录不是空的，请选择一个空目录。',
       workspaceNotReadable: '无法读取这个目录，请检查权限。',
@@ -220,22 +216,18 @@ window.__ModuleLoader__.load({
       updateAutoDescription: 'Asks npmmirror once a day (falling back to npm) for the newest version. Nothing identifying is sent.',
       updateManual: 'This Harness build ships no plugin manager — update from the Plugins page instead.',
       workspaceTitle: 'Agent workspace',
-      workspaceDescription: 'New floating-ball Agent conversations are created here. A custom directory must be empty; the old directory is left untouched, and you can restore the default workspace at any time.',
+      workspaceDescription: 'New floating-ball Agent conversations are created here. The old directory is left untouched, and you can restore the default workspace at any time.',
       workspaceCurrent: 'Current workspace: ',
       workspaceDefault: 'default',
       workspaceCustom: 'custom',
-      workspacePlaceholder: 'Enter an empty absolute path',
       workspacePick: 'Choose…',
       workspacePicking: 'Choosing…',
-      workspacePickFailed: 'Could not open the system directory picker. Enter the path manually.',
-      workspacePickerUnavailable: 'This environment cannot open a system directory picker. Enter the path manually.',
-      workspaceChange: 'Change',
+      workspacePickFailed: 'Could not open the system directory picker.',
+      workspacePickerUnavailable: 'This environment cannot open a system directory picker.',
       workspaceUseDefault: 'Restore default workspace',
       workspaceChanged: 'Workspace changed.',
-      workspaceRequired: 'Enter a directory path.',
-      workspaceSame: 'That is already the current workspace.',
       workspaceInvalidPath: 'Enter an absolute path.',
-      workspaceNotFound: 'The directory does not exist. Create an empty directory first.',
+      workspaceNotFound: 'The directory does not exist.',
       workspaceNotDirectory: 'That path is not a directory.',
       workspaceNotEmpty: 'The directory is not empty. Choose an empty directory.',
       workspaceNotReadable: 'The directory cannot be read. Check its permissions.',
@@ -802,7 +794,6 @@ window.__ModuleLoader__.load({
      */
     function WorkspaceCard({ text, snap, refreshSettings }) {
       const workspace = snap.workspace
-      const [draft, setDraft] = React.useState('')
       const [busy, setBusy] = React.useState(false)
       const [picking, setPicking] = React.useState(false)
       const [error, setError] = React.useState('')
@@ -823,7 +814,7 @@ window.__ModuleLoader__.load({
       }
 
       async function pickDirectory() {
-        if (busy || picking) return
+        if (busy || picking || dialog) return
         setPicking(true)
         setError('')
         setNotice('')
@@ -833,28 +824,14 @@ window.__ModuleLoader__.load({
             headers: { 'content-type': 'application/json' },
             body: '{}',
           })
-          if (response && typeof response.path === 'string' && response.path !== '') setDraft(response.path)
+          const picked = response && typeof response.path === 'string' ? response.path : ''
+          if (picked !== '' && picked !== workspace.path) setDialog({ path: picked, restore: false })
         } catch (cause) {
           const code = cause instanceof Error ? cause.message : String(cause)
           setError(code === 'workspace-picker-unavailable' ? text.workspacePickerUnavailable : text.workspacePickFailed)
         } finally {
           setPicking(false)
         }
-      }
-
-      function beginChange() {
-        const path = draft.trim()
-        if (path === '') {
-          setError(text.workspaceRequired)
-          return
-        }
-        if (path === workspace.path) {
-          setError(text.workspaceSame)
-          return
-        }
-        setError('')
-        setNotice('')
-        setDialog({ path, restore: false })
       }
 
       function beginDefault() {
@@ -867,7 +844,6 @@ window.__ModuleLoader__.load({
         if (busy) return
         setDialog(null)
         setError('')
-        setDraft('')
       }
 
       async function applyDialog() {
@@ -881,7 +857,6 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ path: dialog.path }),
           })
           setDialog(null)
-          setDraft('')
           setNotice(text.workspaceChanged)
           await refreshSettings()
         } catch (cause) {
@@ -944,24 +919,16 @@ window.__ModuleLoader__.load({
             className: 'dsh-orb-set-button dsh-orb-set-ghost dsh-orb-set-pick',
             title: text.workspacePick,
             'aria-label': text.workspacePick,
-            disabled: busy || picking,
+            disabled: busy || picking || dialog !== null,
             onClick: () => { void pickDirectory() },
           }, picking ? text.workspacePicking : text.workspacePick),
-          h('input', {
-            type: 'text',
-            className: 'dsh-orb-set-input dsh-orb-set-input-wide',
-            placeholder: text.workspacePlaceholder,
-            value: draft,
-            disabled: busy,
-            onChange: (event) => { setDraft(event.target.value) },
-          }),
-          h('div', { className: 'dsh-orb-set-actions' },
-            h('button', {
-              type: 'button',
-              className: 'dsh-orb-set-button',
-              disabled: busy || picking || draft.trim() === '',
-              onClick: beginChange,
-            }, text.workspaceChange))),
+          h('button', {
+            type: 'button',
+            className: 'dsh-orb-set-path',
+            title: text.workspacePick,
+            disabled: busy || picking || dialog !== null,
+            onClick: () => { void pickDirectory() },
+          }, workspace.path)),
         error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
         notice ? h('p', { className: 'dsh-orb-set-muted', role: 'status' }, notice) : null,
         workspaceDialog())
@@ -1317,6 +1284,8 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-label { display: flex; align-items: center; gap: 12px; font-weight: 600; }
 .dsh-orb-set-select { min-width: 190px; }
 .dsh-orb-set-input-wide { width: auto; min-width: 0; flex: 1; }
+.dsh-orb-set-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; cursor: pointer; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 8px; padding: 6px 8px; font: inherit; }
+.dsh-orb-set-path:disabled { opacity: 0.55; cursor: default; }
 .dsh-orb-set-pick { flex: none; white-space: nowrap; }
 .dsh-orb-set-workspace-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .dsh-orb-set-dialog-backdrop { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.32)); }
