@@ -216,6 +216,8 @@ class HistoryUnavailableError extends Error {}
 export class HistoryCleaner {
   private readonly deps: HistoryDeps
   private cleaning = false
+  /** A cleanup was requested while {@link cleaning} was already held. */
+  private cleanPending = false
   private phase = ''
   private error: string | null = null
   private warning: '' | 'images-kept' = ''
@@ -294,9 +296,21 @@ export class HistoryCleaner {
     }
   }
 
-  /** Start a cleanup and return at once; the card polls {@link state}. */
+  /**
+   * Start a cleanup and return at once; the card polls {@link state}.
+   * A request that arrives while a restore scan or another cleanup holds the
+   * lock is kept and runs when that pass finishes, so a confirmed retention
+   * change is not dropped.
+   */
   startClean(): void {
-    if (this.cleaning) return
+    this.cleanPending = true
+    this.startQueuedClean()
+  }
+
+  /** Run one queued cleanup once the shared lock is free. */
+  private startQueuedClean(): void {
+    if (this.cleaning || !this.cleanPending) return
+    this.cleanPending = false
     this.cleaning = true
     this.phase = 'scanning'
     this.error = null
@@ -308,6 +322,7 @@ export class HistoryCleaner {
     }).finally(() => {
       this.cleaning = false
       this.phase = ''
+      this.startQueuedClean()
     })
   }
 
@@ -349,6 +364,8 @@ export class HistoryCleaner {
     } finally {
       this.cleaning = false
       this.phase = ''
+      // A cleanup confirmed during this scan must run before the lock looks idle.
+      this.startQueuedClean()
     }
   }
 

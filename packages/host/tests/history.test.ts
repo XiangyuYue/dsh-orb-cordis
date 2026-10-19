@@ -70,6 +70,12 @@ function fixture(): {
   setCurrent: (id: string | undefined) => void
   restoreRoot: (id: string) => void
   run: () => Promise<void>
+  holdArchive: () => void
+  holdUnarchive: () => void
+  releaseHold: () => void
+  archiveHeld: () => boolean
+  unarchiveHeld: () => boolean
+  listCalls: { count: number }
 } {
   const base = mkdtempSync(join(root, 'case-'))
   const profileDir = join(base, 'profile')
@@ -92,6 +98,15 @@ function fixture(): {
   const unreadable = new Set<string>()
   const unarchived: string[] = []
   const trashed: string[] = []
+  const listCalls = { count: 0 }
+  let hold: 'archive' | 'unarchive' | undefined
+  let releaseHeld: (() => void) | undefined
+  const held = { archive: false, unarchive: false }
+  const waitIfHeld = async (kind: 'archive' | 'unarchive'): Promise<void> => {
+    if (hold !== kind) return
+    held[kind] = true
+    await new Promise<void>((resolve) => { releaseHeld = resolve })
+  }
 
   const add = (session: Partial<FakeSession> & { id: string; updatedAt: number; cwd?: string; events?: readonly unknown[]; bytes?: number }): FakeSession => {
     const record: FakeSession = {
@@ -151,15 +166,18 @@ function fixture(): {
   }
 
   let current: string | undefined
-  const rows = (): HistorySessionRow[] => sessions.map((session) => ({
-    sessionId: session.id,
-    updatedAt: session.updatedAt,
-    ...session.running === undefined ? {} : { running: session.running },
-    ...session.parent === undefined ? {} : { parentSessionId: session.parent },
-    ...session.origin === undefined ? {} : { origin: session.origin },
-    cwd: session.cwd,
-    projections: { values: { agentPreset: session.preset ?? 'computer-use' } },
-  }))
+  const rows = (): HistorySessionRow[] => {
+    listCalls.count += 1
+    return sessions.map((session) => ({
+      sessionId: session.id,
+      updatedAt: session.updatedAt,
+      ...session.running === undefined ? {} : { running: session.running },
+      ...session.parent === undefined ? {} : { parentSessionId: session.parent },
+      ...session.origin === undefined ? {} : { origin: session.origin },
+      cwd: session.cwd,
+      projections: { values: { agentPreset: session.preset ?? 'computer-use' } },
+    }))
+  }
 
   const cleaner = new HistoryCleaner({
     store,
@@ -170,9 +188,11 @@ function fixture(): {
     workspaceSafety: async (): Promise<WorkspaceSafety> => ({ pinned: [...pinned], archived: [...archived] }),
     async archive(id) {
       if (archiveFails.has(id)) throw new Error('workspace/session-active')
+      await waitIfHeld('archive')
       archived.add(id)
     },
     async unarchive(id) {
+      await waitIfHeld('unarchive')
       archived.delete(id)
       unarchived.push(id)
     },
@@ -224,6 +244,18 @@ function fixture(): {
     setCurrent: (id) => { current = id },
     restoreRoot,
     run,
+    holdArchive: () => { hold = 'archive' },
+    holdUnarchive: () => { hold = 'unarchive' },
+    releaseHold: () => {
+      hold = undefined
+      held.archive = false
+      held.unarchive = false
+      releaseHeld?.()
+      releaseHeld = undefined
+    },
+    archiveHeld: () => held.archive,
+    unarchiveHeld: () => held.unarchive,
+    listCalls,
   }
 }
 
@@ -518,4 +550,73 @@ describe('history retention', () => {
     assert.equal(existsSync(join(case_.sessionsRoot, 'proj-1', session.id)), true)
     assert.equal(case_.trashed.length, 0)
   })
+
+  it('runs a cleanup that was requested while a restore scan held the lock', async () => {
+    const case_ = fixture()
+    const old = case_.add({ id: 'session-old', updatedAt: NOW - 40 * DAY })
+    const parked = case_.add({ id: 'session-parked', updatedAt: NOW - DAY })
+    const parkedDir = join(case_.sessionsRoot, 'proj-2', parked.id)
+    const marker = join(parkedDir, MARKER)
+    mkdirSync(join(marker, 'sessions'), { recursive: true })
+    mkdirSync(join(marker, 'objects'), { recursive: true })
+    const manifest: OsTrashManifest = {
+      version: 1,
+      rootId: parked.id,
+      createdAt: NOW - DAY,
+      workspace: case_.workspace,
+      sessions: [{ id: parked.id, dir: parkedDir }],
+      images: [],
+      archived: [parked.id],
+    }
+    writeFileSync(join(marker, 'manifest.json'), `${JSON.stringify(manifest)}\n`)
+    case_.archived.add(parked.id)
+    case_.holdUnarchive()
+    const restoring = case_.cleaner.restoreStaged()
+    await waitFor(() => case_.unarchiveHeld())
+    assert.equal(case_.cleaner.state().phase, 'restoring')
+    case_.cleaner.setRetention(30)
+    case_.cleaner.startClean()
+    assert.equal(case_.cleaner.state().phase, 'restoring')
+    assert.equal(existsSync(join(case_.sessionsRoot, 'proj-1', old.id)), true)
+    assert.equal(case_.trashed.length, 0)
+    case_.releaseHold()
+    await restoring
+    await waitFor(() => !case_.cleaner.state().cleaning)
+    assert.equal(existsSync(join(case_.sessionsRoot, 'proj-1', old.id)), false)
+    assert.deepEqual(case_.trashed, [join(case_.trashDir, old.id)])
+    assert.equal(existsSync(parkedDir), true)
+    assert.equal(existsSync(marker), false)
+    assert.equal(case_.cleaner.state().lastDeletedSessions, 1)
+    assert.equal(case_.cleaner.state().error, null)
+  })
+
+  it('runs a follow-up cleanup when retention changes during an in-flight cleanup', async () => {
+    const case_ = fixture()
+    const recent = case_.add({ id: 'session-recent', updatedAt: NOW - 10 * DAY })
+    const old = case_.add({ id: 'session-old', updatedAt: NOW - 40 * DAY })
+    case_.cleaner.setRetention(30)
+    case_.holdArchive()
+    case_.cleaner.startClean()
+    await waitFor(() => case_.archiveHeld())
+    assert.equal(case_.listCalls.count, 1)
+    case_.cleaner.setRetention(7)
+    case_.cleaner.startClean()
+    assert.equal(existsSync(join(case_.sessionsRoot, 'proj-1', recent.id)), true)
+    assert.equal(case_.trashed.length, 0)
+    case_.releaseHold()
+    await waitFor(() => !case_.cleaner.state().cleaning)
+    assert.equal(existsSync(join(case_.sessionsRoot, 'proj-2', old.id)), false)
+    assert.equal(existsSync(join(case_.sessionsRoot, 'proj-1', recent.id)), false)
+    assert.equal(case_.trashed.length, 2)
+    assert.equal(case_.listCalls.count, 2)
+    assert.equal(case_.cleaner.state().error, null)
+  })
 })
+
+async function waitFor(ready: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (ready()) return
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error('timed out')
+}
