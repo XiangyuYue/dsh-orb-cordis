@@ -319,3 +319,14 @@ Windows 上的实测反馈:在浏览器里点球、输入、回车提交后,**Ag
 - **验证(限速代理,可重复)**:写了一个 HTTP CONNECT 限速代理(`/tmp` 内,未入库),实测经代理 300,460 B/s ≈ 配置的 300 KB/s。全新 home 装 `0.1.9-slownet`,主机带 `https_proxy` 启动:①90 秒后 partial = 26,296,320 B(≈292 KB/s,与限速吻合);②**`kill -9` 掉主机与 curl**(模拟强退,连 `finally` 都不跑),partial 与带死属主的锁都留在原地;③重启主机 → 日志 `resuming the download at 34205696 bytes`,**与留在盘上的字节数逐字节相同**,陈旧锁被自动清扫,没有重新下载任何一个字节;④传输途中停滞检测触发过一次(`Operation too slow`,20000 B/s/30s),curl 内部重试后**接着**下完;⑤`Electron 44.0.0 is ready` → `helper started pid 26458` → `ball 1386,476 96x96`,球出现。整段下载远超旧的 300 秒上限——旧代码在同一条件下必然失败。
 - **已知边缘**:若主机被强杀而 curl 变成孤儿(与本案相同),孤儿会继续往同一个 partial 追加,重启后的新尝试也从同一位置续传,两份写入叠加 → 最终校验失败 → 删掉 partial 从零重来。代价是一次重下,不会装上一份坏运行时(校验是硬闸门)。
 - **未做**:`withDownloadLock` 的"等锁 10 分钟"没动——只在两个主机共用一个 home 时才会遇到,等 10 分钟比早失败更糟,故保持。
+
+## 24. 球里「新建」堆出一大堆删不掉的未命名对话(2026-10-19)
+
+现象(用户截图):在球面板连点几次「新建」、一句话都不发,再打开「历史」就是一串「未命名对话」;点几次多几条,**而且删不掉**。主窗口同一个工作区里不会这样:点多少次「新会话」,列表里始终只有当前那一个空白会话。
+
+- **根因一:球每次点「新建」都真的铸一个会话**。`newSession()` 无条件 `sessionController.create({ workspaceId, agentPreset: 'computer-use' })`,不带 `sessionId`;官方 `session.create` 是 `const sessionId = request.sessionId ?? brandString(...)`——**不给 id 就必定新铸一个**。主窗口走的是 `reuseOrCreateBlank()`(`dsh-client-ui-workspace/lib/client.js:798`):先在当前工作区里找**已有的空白会话**,找到就 `create({ workspaceId, sessionId })` 复用(还空白才允许 adopt),找不到才新建。
+- **根因二:球的历史不过滤空白**。`historyRecords()` 只按"工作区 + computer-use 预设"过滤(`isHistoryRow`),`blank` 一概不看;而主窗口的 `sessionVisible()` 是 `session.blank && session.id !== current → false`——**空白会话只显示当前那一个**。所以堆出来的空会话在主窗口里看不见,在球里全露出来。
+- **为什么删不掉**:球没有单条删除;主窗口把空白会话隐藏了,选都选不到;设置页的「旧会话清理」只按保留期限把**更旧的**会话移到系统回收站,默认又是"永久保留"。三处都够不着。
+- **修法**:①`newSession()` 先读官方列表的 `blank` 标记,**当前会话还空白就只重置面板、不铸会话**;有内容才新建(与主窗口的复用语义一致,球是单会话 UI,只复用它自己那一个,不会跳到别处)。②`historyRecords()` 隐藏空白会话、保留当前那个(对齐 `sessionVisible`)。③**一次性清扫**:`HistoryCleaner.sweepBlanks()` 把"空白 × 非当前 × 未 attach × 非 pinned/archived × 5 分钟前 × computer-use 预设"的会话走**原有**的 archive + 系统回收站通道(`trashTree`,带 manifest,可恢复),所以升级后旧的那一堆会自己消失。④`scheduleBlankSweep()` 每个 profile 只跑一次,marker(`blank-sweep.json`)只在清扫**真的跑过**之后才写——服务不可用/正在清理时 `sweepBlanks` 抛错、marker 不写,下次启动再试,避免"记成已清扫但什么都没做"。
+- **测试**:`history.test.ts` 一例(旧空白被移入回收站并 archive;有内容的、5 分钟内的、attached、pinned、archived、当前会话、standard 预设一律不动;第二次运行 0 条);`runtime.test.ts` 两例(在空白会话上发 `{type:'new'}` **不**再产生 `create`,有内容时才产生;`history` 消息里当前空白可见、其它空白隐藏),以及 `scheduleBlankSweep` 一例(只跑一次;失败不写 marker、下次重试;"确实 0 条"要写 marker)。
+- **未做**:球面板本身没有可驱动的验证通道(helper 是不带调试端口的独立 Electron),所以"点按钮"那条路径由 host 层 socket 集成测试覆盖(它就是按钮实际发的消息),没有另做 UI 截图。

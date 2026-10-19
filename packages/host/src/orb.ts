@@ -4,9 +4,10 @@
  */
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, type Server, type Socket } from 'node:net'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { Appearance, ThemePreference } from './appearance.ts'
@@ -205,6 +206,13 @@ const AGENT_POLL_MS = 1_000
 const MAIN_WINDOW_TARGET_TTL_MS = 30_000
 /** Caller conversations cycle through this many attribution colors. */
 const AGENT_COLOR_COUNT = 4
+/**
+ * Where the profile records that the empty conversations the old New Chat button left behind
+ * have been swept. One pass per profile, written only once the pass actually ran.
+ */
+const BLANK_SWEEP_FILE = 'blank-sweep.json'
+/** Let the first start settle before sweeping, so the conversation on screen is already known. */
+const BLANK_SWEEP_DELAY_MS = 15_000
 
 /** One strip entry pushed to the helper. */
 interface AgentBookmarkItem {
@@ -1745,7 +1753,20 @@ export class OrbRuntime {
 
   /** Start the daily retention check; the plugin effect owns the disposer. */
   startHistory(): () => void {
+    this.sweepBlankSessionsOnce()
     return this.history.start()
+  }
+
+  /**
+   * Take the empty conversations the pre-0.1.9 New Chat button left behind out of the store.
+   * One pass per profile; see {@link scheduleBlankSweep} for the marker contract.
+   */
+  private sweepBlankSessionsOnce(): void {
+    scheduleBlankSweep({
+      marker: join(this.store.dir, BLANK_SWEEP_FILE),
+      delayMs: BLANK_SWEEP_DELAY_MS,
+      sweep: () => this.history.sweepBlanks(),
+    })
   }
 
   historyState(): HistoryState {
@@ -1897,6 +1918,14 @@ export class OrbRuntime {
 
   private async newSession(): Promise<void> {
     this.failQuestion('ask_user_question was aborted before the user answered', 'ASK_ABORTED')
+    // Aligned with the main window's reuseOrCreateBlank(): pressing New Chat inside a
+    // conversation that has not started a turn keeps the user on it. Minting one on every press
+    // is what filled profiles with empty "untitled" conversations nothing could open or delete.
+    if (await this.currentIsBlank()) {
+      this.resetTranscript()
+      await this.publishChrome()
+      return
+    }
     const session = await this.ctx.sessionController.create({
       workspaceId: await this.workspaceId(),
       agentPreset: 'computer-use',
@@ -1904,6 +1933,23 @@ export class OrbRuntime {
     await this.adopt(session.sessionId)
     this.resetTranscript()
     await this.publishChrome()
+  }
+
+  /**
+   * True while the conversation on screen holds no turn. The official list marks it
+   * (`blank`), and that mark is the same one the main window reads before it reuses a draft.
+   * An unreadable list answers false: New Chat must still work when the list cannot be read.
+   */
+  private async currentIsBlank(): Promise<boolean> {
+    const current = this.sessionId
+    if (current === undefined) return false
+    try {
+      const rows = await this.listHistoryRows()
+      return rows.find((row) => row.sessionId === current)?.blank === true
+    } catch (error) {
+      console.error(`dsh-orb: could not tell whether the conversation is blank: ${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
   }
 
   private async openSession(sessionId: string): Promise<void> {
@@ -1942,6 +1988,9 @@ export class OrbRuntime {
       for (const row of rows) {
         const record = asRecord(row)
         if (!record || !isHistoryRow(record, orb) || typeof record.sessionId !== 'string') continue
+        // The main window shows only the selected blank conversation, never the others: the ball
+        // follows it, so the empty rows an older New Chat button minted stop cluttering the list.
+        if (record.blank === true && record.sessionId !== this.sessionId) continue
         const title = projection(record, 'title')
         items.push({
           sessionId: record.sessionId,
@@ -2350,6 +2399,41 @@ function isHistoryRow(record: Record<string, unknown>, orb: string): boolean {
   if (typeof record.cwd !== 'string' || resolve(record.cwd) !== resolve(orb)) return false
   const preset = projection(record, 'agentPreset')
   return preset === undefined || preset === 'computer-use'
+}
+
+/**
+ * Run the empty-conversation sweep once per profile, a moment after startup.
+ *
+ * The marker file is the whole state: once it exists this profile has been swept, and it is
+ * written only after a pass actually ran — {@link HistoryCleaner.sweepBlanks} throws when its
+ * services are missing, the marker stays unwritten, and the next launch tries again instead of
+ * leaving the pile behind forever.
+ *
+ * @param options.marker - profile file that records the pass.
+ * @param options.delayMs - time to let the first start settle, so the adopted conversation is known.
+ * @param options.sweep - the pass; resolves with the number of conversations it moved.
+ * @param options.log - diagnostics sink, defaulting to the host's stderr.
+ */
+export function scheduleBlankSweep(options: {
+  readonly marker: string
+  readonly delayMs: number
+  readonly sweep: () => Promise<number>
+  readonly log?: (message: string) => void
+}): void {
+  if (existsSync(options.marker)) return
+  const log = options.log ?? ((message: string) => { console.error(message) })
+  const timer = setTimeout(() => {
+    void (async () => {
+      try {
+        const swept = await options.sweep()
+        await writeFile(options.marker, `${JSON.stringify({ swept, at: Date.now() })}\n`)
+        if (swept > 0) log(`dsh-orb: moved ${swept} empty conversation(s) to the system trash`)
+      } catch (error) {
+        log(`dsh-orb: blank conversation sweep failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })()
+  }, options.delayMs)
+  timer.unref()
 }
 
 /** The persistence service, when this Host exposes its read surface. */

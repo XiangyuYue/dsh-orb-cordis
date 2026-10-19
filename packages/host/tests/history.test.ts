@@ -29,6 +29,8 @@ interface FakeSession {
   readonly origin?: string
   readonly updatedAt: number
   readonly running?: boolean
+  /** Never prompted: what the old New Chat button left behind. */
+  readonly blank?: boolean
   readonly preset?: string
   readonly events: readonly unknown[]
   readonly bytes: number
@@ -116,6 +118,7 @@ function fixture(): {
       ...session.origin === undefined ? {} : { origin: session.origin },
       updatedAt: session.updatedAt,
       ...session.running === undefined ? {} : { running: session.running },
+      ...session.blank === undefined ? {} : { blank: session.blank },
       ...session.preset === undefined ? {} : { preset: session.preset },
       events: session.events ?? [],
       bytes: session.bytes ?? 1000,
@@ -175,6 +178,7 @@ function fixture(): {
       ...session.parent === undefined ? {} : { parentSessionId: session.parent },
       ...session.origin === undefined ? {} : { origin: session.origin },
       cwd: session.cwd,
+      blank: session.blank === true,
       projections: { values: { agentPreset: session.preset ?? 'computer-use' } },
     }))
   }
@@ -588,6 +592,37 @@ describe('history retention', () => {
     assert.equal(existsSync(marker), false)
     assert.equal(case_.cleaner.state().lastDeletedSessions, 1)
     assert.equal(case_.cleaner.state().error, null)
+  })
+
+  it('sweeps empty conversations into the trash and spares anything in use', async () => {
+    const case_ = fixture()
+    const junk = case_.add({ id: 'blank-junk', updatedAt: NOW - 3 * DAY, blank: true })
+    const older = case_.add({ id: 'blank-older', updatedAt: NOW - 9 * DAY, blank: true })
+    // A conversation with a turn is not blank: the list says so, and it stays.
+    const talked = case_.add({ id: 'talked', updatedAt: NOW - 3 * DAY })
+    // Anything a window may be typing into is spared: fresh, attached, current, pinned, archived.
+    case_.add({ id: 'blank-fresh', updatedAt: NOW - 1000, blank: true })
+    case_.add({ id: 'blank-attached', updatedAt: NOW - 3 * DAY, blank: true })
+    case_.attached.add('blank-attached')
+    case_.add({ id: 'blank-pinned', updatedAt: NOW - 3 * DAY, blank: true })
+    case_.pinned.add('blank-pinned')
+    case_.add({ id: 'blank-archived', updatedAt: NOW - 3 * DAY, blank: true })
+    case_.archived.add('blank-archived')
+    case_.add({ id: 'blank-current', updatedAt: NOW - 3 * DAY, blank: true })
+    case_.setCurrent('blank-current')
+    // A standard-preset conversation in the same directory is not the ball's to remove.
+    case_.add({ id: 'standard-blank', updatedAt: NOW - 3 * DAY, blank: true, preset: 'standard' })
+
+    const swept = await case_.cleaner.sweepBlanks()
+    assert.equal(swept, 2, 'the two stale empties are gone, and nothing else')
+    assert.deepEqual(case_.trashed.map((path) => basename(path)).sort(), ['blank-junk', 'blank-older'])
+    assert.equal(existsSync(join(case_.sessionsRoot, 'proj-1', junk.id)), false)
+    assert.equal(existsSync(join(case_.sessionsRoot, 'proj-2', older.id)), false)
+    assert.equal(existsSync(join(case_.sessionsRoot, 'proj-3', talked.id)), true, 'a conversation with a turn stays')
+    assert.equal(case_.archived.has('blank-junk'), true, 'a swept conversation is archived on the way out')
+    assert.equal(case_.cleaner.state().phase, '', 'the sweep does not leave the card showing a cleanup phase')
+    // A second pass finds nothing left to do.
+    assert.equal(await case_.cleaner.sweepBlanks(), 0)
   })
 
   it('runs a follow-up cleanup when retention changes during an in-flight cleanup', async () => {

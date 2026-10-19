@@ -21,6 +21,12 @@ export interface HistorySessionRow {
   /** Last chat (last prompt), which is what a retention day counts. */
   readonly updatedAt?: number
   readonly running?: boolean
+  /**
+   * True while the conversation holds no turn: the official list marks it, and the main window
+   * shows only the selected blank. The ball mints these on every New Chat press in the versions
+   * before 0.1.9, which is what {@link HistoryCleaner.sweepBlanks} takes out of the store.
+   */
+  readonly blank?: boolean
   readonly parentSessionId?: string
   readonly origin?: string
   readonly cwd?: string
@@ -590,6 +596,70 @@ export class HistoryCleaner {
     }
     if (failures.length > 0) throw new Error(`os-trash-failed:${String(failures.length)}`)
     this.error = null
+  }
+
+  /**
+   * Move conversations that never got a message to the operating system's trash.
+   *
+   * Every New Chat press used to mint a Session, so a profile that pressed it a few times carries
+   * a pile of empty "untitled" rows. Neither window shows them again — the main window draws only
+   * the selected blank, the ball now hides the rest — so what is left is to take them out of the
+   * store once. Everything a window could be using is spared: the current conversation, anything
+   * with an attached Agent, pinned or archived rows, and anything touched inside the grace window
+   * (a draft someone is typing into).
+   *
+   * @param options.graceMs - how recently a blank must have been touched to be left alone.
+   * @param options.limit - hard cap for one pass, so a backlog cannot hold the start path.
+   * @returns how many conversations were moved to the trash.
+   */
+  async sweepBlanks(options: { graceMs?: number; limit?: number } = {}): Promise<number> {
+    // A pass that could not run must not be recorded as one: the caller writes its marker from a
+    // returned number, and a profile swept while its history services were missing would keep the
+    // junk forever.
+    if (!this.available()) throw new HistoryUnavailableError('history-unavailable')
+    if (this.cleaning) throw new Error('history-busy')
+    const now = this.now()
+    const grace = options.graceMs ?? 5 * 60 * 1000
+    const limit = options.limit ?? 60
+    const workspace = resolve(this.deps.workspacePath())
+    const [rows, safety] = await Promise.all([this.deps.listSessions(), this.deps.workspaceSafety()])
+    const pinned = new Set(safety.pinned)
+    const archived = new Set(safety.archived)
+    let swept = 0
+    for (const row of rows) {
+      if (swept >= limit) break
+      if (row.blank !== true || row.running === true) continue
+      if (!isOrbRoot(row, workspace)) continue
+      if (pinned.has(row.sessionId) || archived.has(row.sessionId)) continue
+      if (this.deps.currentSession() === row.sessionId) continue
+      if (this.deps.isAttached(row.sessionId)) continue
+      if (typeof row.updatedAt !== 'number' || !Number.isFinite(row.updatedAt) || row.updatedAt <= 0) continue
+      if (now - row.updatedAt < grace) continue
+      const dir = await this.sessionDirectory(row.sessionId, undefined)
+      if (dir === undefined) {
+        this.log(`blank sweep skipped ${row.sessionId}: its directory could not be located`)
+        continue
+      }
+      // A one-session tree with no children and no images: a blank has neither by definition.
+      const tree: CandidateTree = {
+        root: row,
+        members: [row],
+        sessions: new Map(),
+        dirs: new Map([[row.sessionId, dir]]),
+        images: new Map(),
+        logBytes: 0,
+        newest: row.updatedAt,
+        oldest: row.updatedAt,
+      }
+      try {
+        if ((await this.trashTree(tree, new Map())).ok) swept += 1
+      } catch (error) {
+        this.log(`blank sweep skipped ${row.sessionId}: ${messageOf(error)}`)
+      }
+    }
+    this.phase = ''
+    if (swept > 0) this.log(`blank sweep moved ${swept} empty conversation(s) to the system trash`)
+    return swept
   }
 
   /** Pack one conversation tree into its root directory and hand that directory to the OS trash. */

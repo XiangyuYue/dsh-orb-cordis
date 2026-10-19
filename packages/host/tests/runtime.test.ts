@@ -6,7 +6,7 @@ import { once } from 'node:events'
 import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { OrbRuntime, type OrbContext } from '../src/orb.ts'
+import { OrbRuntime, scheduleBlankSweep, type OrbContext } from '../src/orb.ts'
 import { ProfileStore } from '../src/preferences.ts'
 import type { TccRight, TccStatus } from '../src/tcc.ts'
 import type { UpdateChecker } from '../src/update.ts'
@@ -27,6 +27,8 @@ interface Row {
   cwd: string
   origin: string
   running?: boolean
+  /** Official list mark: the conversation holds no turn yet. */
+  blank?: boolean
   projections?: { values: Record<string, unknown> }
 }
 
@@ -363,6 +365,48 @@ describe('ball control socket', { concurrency: 1 }, () => {
       harness.runtime.halt()
       if (previous === undefined) delete process.env.DSH_ORB_ELECTRON_PATH
       else process.env.DSH_ORB_ELECTRON_PATH = previous
+    }
+  })
+
+  it('keeps New Chat on the current conversation while it is still blank', async () => {
+    const harness = boot()
+    const client = await connect(harness.runtime)
+    try {
+      client.send({ type: 'prompt', text: '你好' })
+      await waitFor(() => harness.calls.prompt.length === 1)
+      const current = harness.calls.prompt[0]?.sessionId
+      assert.ok(current)
+      assert.equal(harness.calls.create.length, 1)
+      const chromeCount = (): number => client.messages.filter((message) => message.type === 'chrome').length
+
+      // The official list marks a never-prompted conversation blank. The main window reuses that
+      // draft instead of minting another, which is why its list never fills with 未命名对话; the
+      // ball used to mint one per press, and this is the alignment.
+      harness.listItems.push({ sessionId: current, cwd: orb, origin: 'user', blank: true, projections: { values: { agentPreset: 'computer-use' } } })
+      let seen = chromeCount()
+      client.send({ type: 'new' })
+      await waitFor(() => chromeCount() > seen)
+      assert.equal(harness.calls.create.length, 1, 'a blank press must not mint another conversation')
+
+      // The selected blank stays in the list (the main window shows exactly that one), while the
+      // other empties are hidden — that is what keeps the panel from filling with 未命名对话.
+      harness.listItems.push({ sessionId: 'session-empty-other', cwd: orb, origin: 'user', blank: true, projections: { values: { agentPreset: 'computer-use' } } })
+      client.send({ type: 'history' })
+      await waitFor(() => client.messages.some((message) => message.type === 'history'))
+      const history = client.messages.filter((message) => message.type === 'history').at(-1) as { items: { sessionId: string }[] }
+      assert.equal(history.items.some((item) => item.sessionId === current), true, 'the current blank stays visible')
+      assert.equal(history.items.some((item) => item.sessionId === 'session-empty-other'), false, 'every other blank is hidden')
+
+      // Once the conversation holds a turn it is no longer blank, and New Chat does start one.
+      const row = harness.listItems[0]
+      assert.ok(row)
+      harness.listItems[0] = { ...row, blank: false }
+      seen = chromeCount()
+      client.send({ type: 'new' })
+      await waitFor(() => chromeCount() > seen)
+      assert.equal(harness.calls.create.length, 2, 'a conversation with a turn gets a fresh one')
+    } finally {
+      client.socket.destroy()
     }
   })
 
@@ -1632,5 +1676,39 @@ describe('ball control socket', { concurrency: 1 }, () => {
       client.socket.destroy()
       harness.runtime.halt()
     }
+  })
+})
+
+describe('blank conversation sweep', () => {
+  it('runs once per profile, and records only a pass that actually ran', async () => {
+    const dir = mkdtempSync(join(home, 'sweep-'))
+    const marker = join(dir, 'blank-sweep.json')
+    let calls = 0
+    const sweep = async (): Promise<number> => {
+      calls += 1
+      return 3
+    }
+    scheduleBlankSweep({ marker, delayMs: 0, sweep, log: () => {} })
+    await waitFor(() => calls === 1 && existsSync(marker))
+    assert.match(readFileSync(marker, 'utf8'), /"swept":3/, 'the pass records what it moved')
+
+    scheduleBlankSweep({ marker, delayMs: 0, sweep, log: () => {} })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(calls, 1, 'a swept profile is not swept again')
+
+    // A pass whose services are missing cannot run: no marker, so the next launch retries.
+    const retry = join(dir, 'retry.json')
+    let attempts = 0
+    scheduleBlankSweep({
+      marker: retry,
+      delayMs: 0,
+      sweep: async () => { attempts += 1; throw new Error('history-unavailable') },
+      log: () => {},
+    })
+    await waitFor(() => attempts === 1)
+    assert.equal(existsSync(retry), false, 'a pass that could not run is not recorded')
+    scheduleBlankSweep({ marker: retry, delayMs: 0, sweep: async () => { attempts += 1; return 0 }, log: () => {} })
+    await waitFor(() => attempts === 2 && existsSync(retry))
+    assert.match(readFileSync(retry, 'utf8'), /"swept":0/, 'a real "nothing to sweep" pass is recorded')
   })
 })
