@@ -321,6 +321,40 @@ export function renderSpeech(
   return { samples, sampleRate: rate }
 }
 
+/**
+ * The same assembly, one awaited sentence at a time.
+ * Electron-as-Node cannot take sherpa's synchronous `generate()` result: the native
+ * addon hands back an external ArrayBuffer, which Electron rejects. The async path
+ * delivers PCM through `onProgress`, and this is what the child uses in production.
+ */
+export async function renderSpeechAsync(
+  text: string,
+  speed: number,
+  synth: (sentence: string, lang: 'zh' | 'en', modelSpeed: number) => Promise<SynthPiece>,
+): Promise<SynthPiece> {
+  const plan = planSpeeds(speed)
+  const parts: Float32Array[] = []
+  let rate = 22050
+  let pendingGap = 0
+  for (const piece of prepare(text)) {
+    const modelSpeed = piece.lang === 'en' ? plan.modelEn : plan.modelZh
+    for (const sentence of splitSentences(piece.text, piece.lang)) {
+      const rendered = await synth(sentence, piece.lang, modelSpeed)
+      if (rendered.samples.length === 0) {
+        pendingGap = Math.max(pendingGap, gapFor(sentence, modelSpeed))
+        continue
+      }
+      rate = rendered.sampleRate
+      if (pendingGap) parts.push(silence(pendingGap, rate))
+      parts.push(trimSilence(rendered.samples, rendered.sampleRate))
+      pendingGap = gapFor(sentence, modelSpeed)
+    }
+  }
+  let samples = concatAudio(parts)
+  if (plan.solaRatio > 1.02 && samples.length > 0) samples = sola(samples, rate, plan.solaRatio)
+  return { samples, sampleRate: rate }
+}
+
 function silence(ms: number, rate: number): Float32Array {
   return new Float32Array(Math.max(0, Math.round((ms / 1000) * rate)))
 }

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { planSpeeds, prepare, renderSpeech, sola } from '../src/speak-text.ts'
+import { planSpeeds, prepare, renderSpeech, renderSpeechAsync, sola } from '../src/speak-text.ts'
 
 describe('speech rendering', () => {
   it('keeps the Chinese model at 1.5 and spends the rest on time stretch', () => {
@@ -32,6 +32,19 @@ describe('speech rendering', () => {
     assert.equal(speeds.length, 2)
     assert.ok(rendered.samples.length > 15_000, 'both sentences survive the stretch')
     assert.ok(rendered.samples.length < 44_000, '3x is shorter than the two raw sentences')
+  })
+
+  it('awaits each sentence and stitches the same buffer in the async path', async () => {
+    const seen: string[] = []
+    const rendered = await renderSpeechAsync('今天晴。明天也晴。', 1.5, async (sentence) => {
+      seen.push(sentence)
+      const samples = new Float32Array(22050)
+      for (let i = 0; i < samples.length; i += 1) samples[i] = 0.2
+      return { samples, sampleRate: 22050 }
+    })
+    assert.deepEqual(seen, ['今天晴。', '明天也晴。'])
+    assert.ok(rendered.samples.length > 15_000)
+    assert.equal(rendered.sampleRate, 22050)
   })
 
   it('shortens audio when the stretch ratio is above 1', () => {
