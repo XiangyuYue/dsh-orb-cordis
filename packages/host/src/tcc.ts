@@ -99,6 +99,14 @@ function loadMacProbe(): Probe {
   }
 }
 
+/** Opens the system page where the user can allow the microphone. */
+export function openMicrophoneSettings(): Promise<void> {
+  const url = process.platform === 'win32'
+    ? 'ms-settings:privacy-microphone'
+    : 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'
+  return openExternal(url)
+}
+
 function openExternal(url: string): Promise<void> {
   const command = process.platform === 'win32' ? 'cmd' : 'open'
   const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url]

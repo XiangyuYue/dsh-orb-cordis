@@ -12,6 +12,7 @@
 import { readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import { parseVoiceSettings, type VoiceSettings } from '@dsh-orb/voice/settings'
 import { isAvatarPresetId } from './avatar-presets.ts'
 
 const PERMISSION_FILE = 'orb-permission.json'
@@ -25,6 +26,7 @@ const AVATAR_META_FILE = 'orb-avatar.json'
 const UPDATE_FILE = 'orb-update.json'
 const HISTORY_FILE = 'orb-history.json'
 const WORKSPACE_FILE = 'orb-workspace.json'
+const VOICE_FILE = 'orb-voice.json'
 
 /** Retention choices shown in the settings select; 0 means forever. */
 export const HISTORY_RETENTION_DAYS = [0, 1, 7, 14, 30, 60] as const
@@ -187,6 +189,7 @@ export class ProfileStore {
   private ballValue: boolean
   private updateValue: UpdateRecord
   private historyValue: HistoryRecord
+  private voiceValue: VoiceSettings
 
   constructor(readonly dir: string) {
     const permission = readPermission(dir)
@@ -201,6 +204,7 @@ export class ProfileStore {
     this.ballValue = readBall(dir)
     this.updateValue = readUpdate(dir)
     this.historyValue = readHistory(dir)
+    this.voiceValue = parseVoiceSettings(readJson(join(dir, VOICE_FILE)))
   }
 
   permission(): PermissionPreset {
@@ -326,6 +330,18 @@ export class ProfileStore {
   setHistoryRecord(patch: Partial<HistoryRecord>): void {
     this.historyValue = { ...this.historyValue, ...patch }
     writeJson(join(this.dir, HISTORY_FILE), this.historyValue)
+  }
+
+  /** Wake, command, and speech settings. A bad file reads back as the factory values. */
+  voice(): VoiceSettings {
+    return this.voiceValue
+  }
+
+  /** Persist a settings object. Out-of-range fields are corrected before they hit disk. */
+  setVoice(value: unknown): VoiceSettings {
+    this.voiceValue = parseVoiceSettings(value)
+    writeJson(join(this.dir, VOICE_FILE), this.voiceValue)
+    return this.voiceValue
   }
 
   /**

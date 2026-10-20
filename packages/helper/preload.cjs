@@ -53,6 +53,12 @@ contextBridge.exposeInMainWorld('dshOrb', {
   stop() {
     ipcRenderer.send('orb:stop')
   },
+  reportPinned(pinned) {
+    ipcRenderer.send('orb:pinned', pinned === true)
+  },
+  reportActivity() {
+    ipcRenderer.send('orb:activity')
+  },
   copy(text) {
     ipcRenderer.send('orb:copy', text)
   },
@@ -115,5 +121,17 @@ contextBridge.exposeInMainWorld('dshOrb', {
   },
   onAppearance(callback) {
     ipcRenderer.on('orb:appearance', (_event, appearance) => callback(appearance))
+  },
+  onPin(callback) {
+    ipcRenderer.on('orb:pin', () => callback())
+  },
+  onUnpin(callback) {
+    ipcRenderer.on('orb:unpin', () => callback())
+  },
+  onVoiceHold(callback) {
+    ipcRenderer.on('orb:voice-hold', (_event, hold) => callback(hold === true))
+  },
+  onVoicePrompt(callback) {
+    ipcRenderer.on('orb:voice-prompt', (_event, text) => callback(text))
   },
 })

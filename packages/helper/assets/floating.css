@@ -1074,7 +1074,7 @@ body.expand-down #stop {
 }
 
 body:not(.expanded) #stop,
-body:not(.running) #stop {
+body:not(.running):not(.voice-hold) #stop {
   display: none;
 }
 

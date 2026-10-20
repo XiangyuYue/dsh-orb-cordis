@@ -76,6 +76,11 @@ let quitting = false
 let buffer = ''
 /** Last bookmark payload, re-sent when the page reloads without a socket reconnect. */
 let lastAgentItems: unknown[] = []
+/**
+ * The page reports its pin as it loads, which can happen before this process has the host
+ * socket. Keep the last value and send it on connect so the host never keeps a stale pin.
+ */
+let lastPinned: boolean | undefined
 
 app.on('before-quit', () => {
   quitting = true
@@ -222,6 +227,17 @@ ipcMain.on('orb:stop', (event) => {
   write({ type: 'stop' })
 })
 
+ipcMain.on('orb:pinned', (event, pinned) => {
+  if (!fromBall(event)) return
+  lastPinned = pinned === true
+  write({ type: 'pinned', pinned: lastPinned })
+})
+
+ipcMain.on('orb:activity', (event) => {
+  if (!fromBall(event)) return
+  write({ type: 'activity' })
+})
+
 // Renderer clipboard APIs need a focused document; the ball rests unfocused,
 // so writes go through the main process, which has no such gate.
 ipcMain.on('orb:copy', (event, text) => {
@@ -329,6 +345,8 @@ function connect(attempt: number): void {
     live = socket
     buffer = ''
     socket.write(`${JSON.stringify({ type: 'hello', token, pid: process.pid })}\n`)
+    // The page may have reported its pin before this socket existed.
+    if (lastPinned !== undefined) write({ type: 'pinned', pinned: lastPinned })
     // The host's observation walk must skip the ball itself, or a click on the ball makes
     // it the window the agent believes the user is working in.
     const ids = chromeWindowIds()
@@ -426,6 +444,22 @@ function deliver(message: unknown): void {
   }
   if (record.type === 'reset') {
     win.webContents.send('orb:reset')
+    return
+  }
+  if (record.type === 'pin') {
+    win.webContents.send('orb:pin')
+    return
+  }
+  if (record.type === 'unpin') {
+    win.webContents.send('orb:unpin')
+    return
+  }
+  if (record.type === 'voice-hold') {
+    win.webContents.send('orb:voice-hold', (record as { hold?: unknown }).hold === true)
+    return
+  }
+  if (record.type === 'voice-prompt' && typeof (record as { text?: unknown }).text === 'string') {
+    win.webContents.send('orb:voice-prompt', (record as { text: string }).text)
     return
   }
   if (record.type === 'chrome') {

@@ -218,7 +218,8 @@ describe('ball page module', () => {
     const shell = readFileSync(join(here, '../assets/shell.js'), 'utf8')
     assert.match(shell, /prompt\.addEventListener\('click', \(\) => \{ pinBall\(\) \}\)/)
     // pinBall is set-only; the toggle (and the unpin) stays on the ball's pointerup.
-    assert.match(shell, /function pinBall\(\) \{\s*\n\s*if \(pinned\) return\s*\n\s*pinned = true/)
-    assert.match(shell, /pinned = !pinned/)
+    assert.match(shell, /function pinBall\(\) \{\s*\n\s*assignPinned\(true\)/)
+    assert.match(shell, /function assignPinned\(next\) \{\s*\n\s*if \(pinned === next\) return/)
+    assert.match(shell, /assignPinned\(!pinned\)/)
   })
 })

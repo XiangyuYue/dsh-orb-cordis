@@ -27,6 +27,9 @@ import { moveToOsTrash, osTrashAvailable } from './os-trash.ts'
 import { refreshModelFallback } from './model-defaults.ts'
 import { openMainWindow } from './open-main.ts'
 import { isDesktopHost, isTccRight, TccMonitor, type TccRight, type TccStatus } from './tcc.ts'
+import { openVoiceChild, VoiceController } from './voice.ts'
+import { officialAsrFrom, VoiceDownloads } from './voice-download.ts'
+import { voicePresence } from './voice-models.ts'
 import {
   defaultWorkspaceDirectory,
   isAgentModelSelection,
@@ -376,6 +379,9 @@ export class OrbRuntime {
     chromeWindowIds: () => this.chromeWindowIds(),
     observationFrameEnabled: () => this.store.observationFrameEnabled(),
   })
+  /** Wake, command, and speech. The child stays down until this install has one. */
+  private readonly voice: VoiceController
+  private readonly voiceDownloads: VoiceDownloads
   /**
    * Windows only. Clicking the ball makes it the system foreground window, so the window
    * the user was actually working in is remembered and handed back on submit.
@@ -427,6 +433,29 @@ export class OrbRuntime {
       log: (message) => console.error(`dsh-orb: ${message}`),
     })
     ctx.provide('computerUseOverlayGuard', this.overlay)
+    this.voice = new VoiceController({
+      settings: () => this.store.voice(),
+      presence: () => voicePresence({
+        kws: dshHomePath('dsh-orb', 'voice', 'kws'),
+        asr: dshHomePath('speech-to-text', 'sensevoice'),
+        tts: dshHomePath('dsh-orb', 'voice', 'tts'),
+      }),
+      now: () => Date.now(),
+      paths: () => ({
+        kws: dshHomePath('dsh-orb', 'voice', 'kws'),
+        asrModel: dshHomePath('speech-to-text', 'sensevoice', 'models', 'sensevoice-onnx', 'model.int8.onnx'),
+        asrTokens: dshHomePath('speech-to-text', 'sensevoice', 'models', 'sensevoice-onnx', 'tokens.txt'),
+        asrVad: dshHomePath('speech-to-text', 'sensevoice', 'models', 'silero', 'silero_vad.onnx'),
+        tts: dshHomePath('dsh-orb', 'voice', 'tts'),
+      }),
+      send: (message) => this.broadcast(message),
+      open: () => openVoiceChild(),
+    })
+    this.voiceDownloads = new VoiceDownloads(() => ({
+      kws: dshHomePath('dsh-orb', 'voice', 'kws'),
+      asr: dshHomePath('speech-to-text', 'sensevoice'),
+      tts: dshHomePath('dsh-orb', 'voice', 'tts'),
+    }), undefined, () => { this.voice.applySettings() }, () => officialAsrFrom(this.ctx.get('speechToText')))
     this.listenAssistantStream()
   }
 
@@ -526,6 +555,26 @@ export class OrbRuntime {
     }
   }
 
+  /** The voice settings file changed. */
+  applyVoiceSettings(): void {
+    this.voice.applySettings()
+  }
+
+  /** What the settings page shows under each download button. */
+  voiceModels() {
+    return this.voiceDownloads.view()
+  }
+
+  /** Start a model download, or say the files are already current. */
+  downloadVoiceModel(kind: 'wake' | 'tts' | 'asr') {
+    return this.voiceDownloads.begin(kind)
+  }
+
+  /** Null until the voice child has reported whether the microphone opened. */
+  voiceMic(): boolean | null {
+    return this.voice.microphone()
+  }
+
   /** Short code the settings page can show after the helper gives up. */
   helperStatus(): string {
     return this.helperError ?? ''
@@ -601,6 +650,12 @@ export class OrbRuntime {
     this.userData = helperDataDirectory(this.store.dir)
     await mkdir(this.userData, { recursive: true })
     this.launch()
+    // The fresh helper page starts unpinned. A turn or a waiting question can already exist
+    // when the ball was switched back on, so hand those to the new voice lifecycle.
+    this.voice.start({
+      agentBusy: this.turnRunning,
+      questionOpen: this.pending !== undefined,
+    })
   }
 
   /**
@@ -637,6 +692,7 @@ export class OrbRuntime {
     this.jumpTarget = undefined
     this.settingsTarget = undefined
     this.selection.stop()
+    this.voice.close()
     this.foreground.stop()
     this.killChild()
     // No ball means no displayed conversation: leaving the owner behind would keep the GUI tools
@@ -718,6 +774,9 @@ export class OrbRuntime {
       this.buffers.delete(socket)
       this.chromeWindows.delete(socket)
       if (this.sockets.size === 0) {
+        // The ball is gone with the page, so its pin is gone too. Otherwise the fresh
+        // page would start unpinned while voice kept listening for commands.
+        this.voice.setPinned(false)
         this.handQuestionBack()
         this.helperPid = undefined
         this.selection.stop()
@@ -754,6 +813,9 @@ export class OrbRuntime {
       }
     }
     this.send(socket, { type: 'turn', running: this.turnRunning })
+    // A closing line or a queued question prompt may still be playing from before a page
+    // reload. The page starts with no hold, so say what the current speaker wants.
+    this.send(socket, { type: 'voice-hold', hold: this.voice.holdState() })
     if (Object.keys(this.appearance).length > 0) this.send(socket, { type: 'appearance', ...this.appearance })
     if (this.pending) this.send(socket, this.questionPayload(this.pending.id))
     void this.publishChrome()
@@ -765,13 +827,14 @@ export class OrbRuntime {
   private async onPrompt(text: string): Promise<void> {
     const trimmed = text.trim()
     if (!trimmed) return
+    this.voice.activity()
     this.turnInterrupted = false
     this.block(`user:${randomUUID()}`, 'user', trimmed, false, 'set')
     this.beginTurn()
     if (this.sessionError && !this.sessionId) {
-      this.turnRunning = false
-      this.selection.setSessionRunning(false)
-      this.broadcast({ type: 'turn', running: false })
+      // beginTurn already told voice the agent is busy. Ending the turn here
+      // is what opens the microphone again; clearing the flag alone leaves it shut.
+      this.finishTurn()
       this.status(this.sessionError)
       return
     }
@@ -1204,6 +1267,7 @@ export class OrbRuntime {
     this.turnRunning = true
     this.selection.setSessionRunning(true)
     this.broadcast({ type: 'turn', running: true })
+    this.voice.beginTurn()
   }
 
   private finishTurn(): void {
@@ -1232,6 +1296,7 @@ export class OrbRuntime {
     }
     const reply = [...this.blockOrder].reverse().map((key) => this.blocks.get(key)).find((item) => item?.kind === 'assistant')
     console.error(`dsh-orb: turn done reply=${reply?.text.length ?? 0}`)
+    this.voice.endTurn()
   }
 
   /** Flip one leftover running block to settled, bypassing the empty-text guard in {@link block}. */
@@ -1302,6 +1367,8 @@ export class OrbRuntime {
       }
     }
     this.blocks.set(key, message)
+    if (!this.replaying && kind === 'assistant') this.voice.noteAssistant(key, next)
+    if (!this.replaying && kind === 'tool' && previous?.kind !== 'tool') this.voice.tool()
     if (running) {
       this.dirty.add(key)
       this.dirtyTimer ??= setTimeout(() => this.flushDirty(), 60)
@@ -1353,6 +1420,7 @@ export class OrbRuntime {
       this.pending = { id, resolve, reject, next }
       this.questionBody = questions
       this.broadcast(this.questionPayload(id))
+      this.voice.questionOpened()
       const signal = request.signal
       const onAbort = () => {
         this.failQuestion('ask_user_question was aborted before the user answered', 'ASK_ABORTED', id)
@@ -1376,6 +1444,7 @@ export class OrbRuntime {
     this.pending = undefined
     this.questionBody = undefined
     this.broadcast({ type: 'question-clear', id })
+    this.voice.questionClosed()
     console.error('dsh-orb: question answered')
     pending.resolve(parsed)
   }
@@ -1391,6 +1460,7 @@ export class OrbRuntime {
     this.pending = undefined
     this.questionBody = undefined
     this.broadcast({ type: 'question-clear', id: pending.id })
+    this.voice.questionClosed()
     console.error('dsh-orb: question returned to the main window')
     void pending.next().then(pending.resolve, pending.reject)
   }
@@ -1401,6 +1471,7 @@ export class OrbRuntime {
     this.pending = undefined
     this.questionBody = undefined
     this.broadcast({ type: 'question-clear', id })
+    this.voice.questionClosed()
     console.error(`dsh-orb: question ${code}`)
     pending.reject(questionError(message, code))
   }
@@ -1827,7 +1898,16 @@ export class OrbRuntime {
       return
     }
     if (record.type === 'stop') {
-      this.run('stop', () => this.stopTurn())
+      this.voice.haltSpeech()
+      if (this.turnRunning) this.run('stop', () => this.stopTurn())
+      return
+    }
+    if (record.type === 'pinned' && typeof record.pinned === 'boolean') {
+      this.voice.setPinned(record.pinned)
+      return
+    }
+    if (record.type === 'activity') {
+      this.voice.activity()
       return
     }
     if (record.type === 'menu') {
@@ -2027,6 +2107,7 @@ export class OrbRuntime {
     // The transcript poll outlives a session switch: keep it running.
     this.broadcast({ type: 'reset' })
     this.broadcast({ type: 'turn', running: false })
+    this.voice.clearSession()
   }
 
   private onSelectionAction(record: Record<string, unknown>): void {

@@ -276,6 +276,8 @@ function main() {
 
   let expanded = false
   let pinned = false
+  let voiceHold = false
+  let pointerInside = false
   let running = false
   let workLocked = false
   let hintTimer
@@ -446,7 +448,7 @@ function main() {
     running = next
     if (pageClosed()) return
     document.body.classList.toggle('running', running)
-    stop.hidden = !expanded || !running
+    stop.hidden = !stopShown()
     setWorkLocked(running)
     syncGif()
     if (next) {
@@ -584,8 +586,7 @@ function main() {
   function startBallDrag() {
     dragging = true
     if (!(running || asking())) {
-      pinned = false
-      document.body.classList.remove('pinned')
+      assignPinned(false)
       void setExpanded(false, true)
     }
     api.dragBegin()
@@ -626,12 +627,12 @@ function main() {
       panel.hidden = false
       expanded = true
       document.body.classList.add('expanded')
-      stop.hidden = !running
+      stop.hidden = !stopShown()
       renderAgentStrip()
       syncGif()
       return
     }
-    if (!force && (pinned || running || asking())) return
+    if (!force && (pinned || running || asking() || voiceHold)) return
     expanded = false
     document.body.classList.remove('expanded')
     renderAgentStrip()
@@ -651,7 +652,7 @@ function main() {
   }
 
   function scheduleCollapse() {
-    if (pinned || running || asking() || dragging) return
+    if (pinned || running || asking() || dragging || voiceHold) return
     if (collapseTimer !== undefined) clearTimeout(collapseTimer)
     collapseTimer = setTimeout(() => {
       collapseTimer = undefined
@@ -713,11 +714,57 @@ function main() {
     pinBall()
   }
 
+  function stopShown() {
+    return expanded && (running || voiceHold)
+  }
+
+  function reportPinned() {
+    if (typeof api.reportPinned === 'function') api.reportPinned(pinned)
+  }
+
+  function assignPinned(next) {
+    if (pinned === next) return
+    pinned = next
+    document.body.classList.toggle('pinned', pinned)
+    reportPinned()
+  }
+
   /** Input clicks only pin; unpinning stays a ball click (or drag). */
   function pinBall() {
-    if (pinned) return
-    pinned = true
-    document.body.classList.add('pinned')
+    assignPinned(true)
+  }
+
+  async function pinFromHost() {
+    assignPinned(true)
+    await setExpanded(true)
+  }
+
+  function unpinFromHost() {
+    assignPinned(false)
+    if (!pointerInside) scheduleCollapse()
+  }
+
+  function applyVoiceHold(hold) {
+    voiceHold = hold === true
+    document.body.classList.toggle('voice-hold', voiceHold)
+    stop.hidden = !stopShown()
+    if (voiceHold) {
+      void setExpanded(true)
+      return
+    }
+    if (!pinned && !running && !asking() && !pointerInside) scheduleCollapse()
+  }
+
+  async function acceptVoicePrompt(text) {
+    if (typeof text !== 'string' || text.trim() === '') return
+    const ready = await refreshTccGate({ forceShow: true })
+    if (!ready) {
+      await setExpanded(true)
+      return
+    }
+    const payload = composeSend(text.trim(), attachedSelection)
+    setAttachedSelection('')
+    api.send(payload)
   }
 
   function draftOverflows() {
@@ -2154,6 +2201,7 @@ function main() {
   }
 
   document.body.addEventListener('pointerenter', (event) => {
+    pointerInside = true
     dockPointerInside = true
     // A dropped pointerup (capture stolen, window hidden mid-gesture) would leave the
     // press flags stuck and the panel permanently unable to expand. Only a reported
@@ -2162,6 +2210,7 @@ function main() {
     syncExpand()
   })
   document.body.addEventListener('pointerleave', () => {
+    pointerInside = false
     dockPointerInside = false
     suppressExpand = false
     if (pointerHeld || dragging) return
@@ -2197,8 +2246,7 @@ function main() {
       skipClick = false
       return
     }
-    pinned = !pinned
-    document.body.classList.toggle('pinned', pinned)
+    assignPinned(!pinned)
     if (pinned) await setExpanded(true)
   })
   ball.addEventListener('pointercancel', () => { void finishGesture() })
@@ -2335,8 +2383,12 @@ function main() {
     setPermissionOpen(false)
     api.send(payload)
   }
-  prompt.addEventListener('input', syncComposerHeight)
+  prompt.addEventListener('input', () => {
+    syncComposerHeight()
+    if (typeof api.reportActivity === 'function') api.reportActivity()
+  })
   prompt.addEventListener('keydown', (event) => {
+    if (typeof api.reportActivity === 'function') api.reportActivity()
     if (event.key !== 'Enter' || event.shiftKey || isComposing(event)) return
     event.preventDefault()
     if (typeof composer.requestSubmit === 'function') composer.requestSubmit()
@@ -2346,6 +2398,7 @@ function main() {
     event.preventDefault()
     insertPlainText(prompt, event.clipboardData?.getData('text/plain') ?? '')
     syncComposerHeight()
+    if (typeof api.reportActivity === 'function') api.reportActivity()
   })
   // Clicking into the input pins the panel, so a draft survives the pointer leaving.
   prompt.addEventListener('click', () => { pinBall() })
@@ -2455,6 +2508,10 @@ function main() {
     renderPermission()
   })
   api.onReset(() => { stage({ type: 'reset' }) })
+  api.onPin?.(() => { void pinFromHost() })
+  api.onUnpin?.(() => { unpinFromHost() })
+  api.onVoiceHold?.((hold) => { applyVoiceHold(hold) })
+  api.onVoicePrompt?.((text) => { void acceptVoicePrompt(text) })
   api.onAttach((text) => {
     if (typeof text !== 'string' || text === '') return
     void setExpanded(true).then(() => {
@@ -2502,6 +2559,9 @@ function main() {
     renderQuestion()
   })
   syncGif()
+  // A fresh page starts unpinned. Say so even when nothing changed here: the host may still
+  // hold the previous page's pin, and a pinned host would listen for commands with no page.
+  reportPinned()
   // A fresh page starts with no expansion or strip classes while the window keeps whatever
   // the host applied: ask for the geometry once, before the first hover, so the panel is
   // placed correctly even if the load raced the state message.

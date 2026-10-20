@@ -163,6 +163,17 @@ describe('dsh-orb install layout', () => {
         'node_modules/@koromix/koffi-darwin-arm64/darwin_arm64/koffi.node',
         'node_modules/@koromix/koffi-darwin-x64/darwin_x64/koffi.node',
         'node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node',
+        'dist/voice/child.js',
+        'dist/voice/decode-worker.mjs',
+        'dist/voice/tts-worker.js',
+        'node_modules/sherpa-onnx-node/package.json',
+        'node_modules/sherpa-onnx-darwin-arm64/sherpa-onnx.node',
+        'node_modules/sherpa-onnx-darwin-x64/sherpa-onnx.node',
+        'node_modules/sherpa-onnx-win-x64/sherpa-onnx.node',
+        'node_modules/node-cpal/bin/darwin-arm64/index.node',
+        'node_modules/node-cpal/bin/darwin-x64/index.node',
+        'node_modules/node-cpal/bin/win32-x64/index.node',
+        'node_modules/pinyin-pro/package.json',
       ]) {
         assert.ok(existsSync(join(root, rel)), rel)
       }

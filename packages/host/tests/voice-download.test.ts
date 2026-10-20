@@ -1,0 +1,99 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { after, describe, it } from 'node:test'
+import assert from 'node:assert/strict'
+import { WAKE_MODEL_URL } from '@dsh-orb/voice/manifest'
+import { VoiceDownloads, modelUrls } from '../src/voice-download.ts'
+
+const root = mkdtempSync(join(tmpdir(), 'orb-voice-download-'))
+after(() => { rmSync(root, { recursive: true, force: true }) })
+
+function kwsFiles(dir: string): void {
+  mkdirSync(dir, { recursive: true })
+  for (const name of ['tokens.txt', 'en.phone']) writeFileSync(join(dir, name), 'x')
+  for (const chunk of [8, 16]) {
+    const tag = `chunk-${chunk}`
+    writeFileSync(join(dir, `encoder-epoch-13-avg-2-${tag}-left-64.int8.onnx`), 'x')
+    writeFileSync(join(dir, `decoder-epoch-13-avg-2-${tag}-left-64.onnx`), 'x')
+    writeFileSync(join(dir, `joiner-epoch-13-avg-2-${tag}-left-64.int8.onnx`), 'x')
+  }
+}
+
+describe('voice model download', () => {
+  it('tries the official GitHub release before the mirrors', () => {
+    const urls = modelUrls('wake')
+    assert.equal(urls[0], WAKE_MODEL_URL)
+    assert.ok(urls.some((url) => url.includes('hf-mirror.com')))
+    assert.ok(urls.some((url) => url.startsWith('https://ghproxy.net/')))
+  })
+
+  it('does not start a second transfer, and reports the model once the files land', async () => {
+    const dir = join(root, 'kws')
+    let calls = 0
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const downloads = new VoiceDownloads(() => ({ kws: dir, asr: join(root, 'asr'), tts: join(root, 'tts') }), async (kind) => {
+      assert.equal(kind, 'wake')
+      calls += 1
+      await gate
+      kwsFiles(dir)
+    })
+    assert.equal(await downloads.begin('wake'), 'started')
+    assert.equal(downloads.view().wake.downloading, true)
+    assert.equal(await downloads.begin('wake'), 'busy')
+    assert.equal(calls, 1)
+    release()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(downloads.view().wake.present, true)
+    assert.equal(downloads.view().wake.downloading, false)
+    assert.equal(await downloads.begin('wake'), 'present')
+  })
+
+  it('explains that ASR is not downloaded by the plugin when the files are missing', async () => {
+    const downloads = new VoiceDownloads(() => ({ kws: join(root, 'no-kws'), asr: join(root, 'no-asr'), tts: join(root, 'no-tts') }))
+    assert.equal(downloads.view().asr.official, false)
+    assert.equal(await downloads.begin('asr'), 'started')
+    assert.match(downloads.view().asr.error, /不会自己另下一份/)
+    assert.equal(downloads.view().asr.downloading, false)
+  })
+
+  it('follows the official SenseVoice preparation instead of downloading a second copy', async () => {
+    const asr = join(root, 'official-asr')
+    let phase = 'unprepared'
+    let completed = 0
+    let prepares = 0
+    const speech = {
+      sources: () => ['https://hf-mirror.com'],
+      prepare() {
+        prepares += 1
+        phase = 'downloading'
+      },
+      state() {
+        if (phase === 'downloading') completed = 20
+        return { phase, completedBytes: completed, totalBytes: 40 }
+      },
+    }
+    let ready = 0
+    const downloads = new VoiceDownloads(
+      () => ({ kws: join(root, 'no-kws-2'), asr, tts: join(root, 'no-tts-2') }),
+      undefined,
+      () => { ready += 1 },
+      () => speech,
+    )
+    assert.equal(downloads.view().asr.official, true)
+    assert.deepEqual(downloads.view().asr.sources, ['https://hf-mirror.com'])
+    assert.equal(await downloads.begin('asr'), 'started')
+    assert.equal(prepares, 1)
+    assert.equal(await downloads.begin('asr'), 'busy')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(downloads.view().asr.progress, 0.5)
+    phase = 'failed'
+    speech.state = () => ({ phase, message: 'download unavailable', completedBytes: 20, totalBytes: 40 })
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    assert.equal(downloads.view().asr.downloading, false)
+    assert.equal(downloads.view().asr.error, 'download unavailable')
+    assert.equal(ready, 0)
+    assert.equal(prepares, 1)
+  })
+})

@@ -139,6 +139,45 @@ window.__ModuleLoader__.load({
       historyRestoring: '正在从系统回收站还原…',
       historyUnavailable: '当前 Harness 或系统回收站不支持清理会话。',
       historyFailed: '清理失败：',
+      voiceTitle: '语音',
+      voiceIntro: '唤醒、语音输入和播报可以单独关掉。模型还没准备好时，对应的一项不会发生。',
+      voiceMicBody: '没有拿到麦克风，唤醒和语音输入都不会发生。球的其他功能照常。',
+      voiceMicOpen: '打开「麦克风」设置',
+      wakeTitle: '语音唤醒',
+      wakeToggle: '语音唤醒',
+      wakeThreshold: '灵敏度',
+      wakeScore: '增强分',
+      wakeChunk: '判定粒度',
+      wakeChunk8: '160 毫秒',
+      wakeChunk16: '320 毫秒',
+      wakeCooldown: '冷却（秒）',
+      wakeWords: '唤醒词',
+      wakeWordsHint: '一行一条',
+      wakeReply: '唤醒后的回复语',
+      downloadWake: '下载语音唤醒模型',
+      commandTitle: '语音输入',
+      commandToggle: '语音输入',
+      dismissPhrases: '退下口令',
+      dismissReply: '退下后的回复语',
+      downloadAsr: '启动 ASR 语音模型',
+      ttsTitle: 'TTS',
+      ttsToggle: 'TTS',
+      questionPrompt: '提问提示语',
+      ttsSpeed: '语速',
+      downloadTts: '下载 TTS 语音播报模型',
+      idleTitle: '空闲后取消固定',
+      idleSeconds: '空闲时长（秒）',
+      modelMissingWake: '要下载语音唤醒模型。',
+      modelMissingTts: '要下载 TTS 模型。',
+      modelMissingAsr: '要启动 ASR 语音模型。',
+      asrService: '当前 DeepSeek Harness 没有官方语音识别服务，插件不会自己另下一份。',
+      modelPresent: '模型已经存在，不需要重新下载',
+      voiceDownload: '下载',
+      voiceCancel: '取消',
+      voiceClose: '确定',
+      voiceSource: '来源',
+      voiceSize: '约 {size} MB',
+      voiceProgress: '已下载 {percent}%',
     }
     const en = {
       nav: 'Floating ball',
@@ -273,6 +312,45 @@ window.__ModuleLoader__.load({
       historyRestoring: 'Restoring from the system trash…',
       historyUnavailable: 'This Harness build or the system trash cannot clean up conversations.',
       historyFailed: 'Cleanup failed: ',
+      voiceTitle: 'Voice',
+      voiceIntro: 'Wake word, voice input, and speech can each be turned off. A column whose model is not ready does not run.',
+      voiceMicBody: 'The microphone is not available, so wake word and voice input do not run. The rest of the ball still works.',
+      voiceMicOpen: 'Open Microphone settings',
+      wakeTitle: 'Wake word',
+      wakeToggle: 'Wake word',
+      wakeThreshold: 'Sensitivity',
+      wakeScore: 'Boost',
+      wakeChunk: 'Chunk',
+      wakeChunk8: '160 ms',
+      wakeChunk16: '320 ms',
+      wakeCooldown: 'Cooldown (seconds)',
+      wakeWords: 'Wake words',
+      wakeWordsHint: 'One per line',
+      wakeReply: 'Reply after wake',
+      downloadWake: 'Download wake-word model',
+      commandTitle: 'Voice input',
+      commandToggle: 'Voice input',
+      dismissPhrases: 'Dismiss phrases',
+      dismissReply: 'Reply after dismiss',
+      downloadAsr: 'Start ASR speech model',
+      ttsTitle: 'TTS',
+      ttsToggle: 'TTS',
+      questionPrompt: 'Question prompt',
+      ttsSpeed: 'Speed',
+      downloadTts: 'Download TTS speech model',
+      idleTitle: 'Unpin after idle',
+      idleSeconds: 'Idle time (seconds)',
+      modelMissingWake: 'Download the wake-word model.',
+      modelMissingTts: 'Download the TTS model.',
+      modelMissingAsr: 'Start the ASR speech model.',
+      asrService: 'This DeepSeek Harness has no official speech service, so the plugin will not download another copy.',
+      modelPresent: 'The model is already present; there is no need to download it again.',
+      voiceDownload: 'Download',
+      voiceCancel: 'Cancel',
+      voiceClose: 'OK',
+      voiceSource: 'Source',
+      voiceSize: 'about {size} MB',
+      voiceProgress: '{percent}% downloaded',
     }
 
     // The community GIF gallery behind the "more animations" tile. It is a plain
@@ -346,12 +424,18 @@ window.__ModuleLoader__.load({
       return h('button', {
         type: 'button',
         role: 'switch',
-        className: `dsh-orb-set-switch${props.checked ? ' is-on' : ''}`,
+        className: `dsh-orb-set-switch${props.checked ? ' is-on' : ''}${props.locked ? ' is-locked' : ''}`,
         'aria-checked': props.checked ? 'true' : 'false',
+        'aria-disabled': props.locked ? 'true' : undefined,
         'aria-label': props.label,
         disabled: props.disabled,
         onClick: () => {
-          if (!props.disabled) props.onChange(!props.checked)
+          if (props.disabled) return
+          if (props.locked) {
+            props.onLocked()
+            return
+          }
+          props.onChange(!props.checked)
         },
       })
     }
@@ -512,6 +596,14 @@ window.__ModuleLoader__.load({
         return () => { clearInterval(timer) }
       }, [preparing])
 
+      const voiceModels = state.snapshot && state.snapshot.voiceModels
+      const voiceDownloading = Boolean(voiceModels && ['wake', 'tts', 'asr'].some((kind) => voiceModels[kind] && voiceModels[kind].downloading))
+      React.useEffect(() => {
+        if (!voiceDownloading) return undefined
+        const timer = setInterval(() => { void refreshSettings() }, 1000)
+        return () => { clearInterval(timer) }
+      }, [voiceDownloading])
+
       async function refreshSettings() {
         const ticket = takeTicket(false)
         try {
@@ -556,6 +648,7 @@ window.__ModuleLoader__.load({
             body: body instanceof ArrayBuffer ? body : JSON.stringify(body),
           })
           settleSave(ticket, (prev) => ({ ...prev, status: 'ready', snapshot, busy: false, avatarError: '', avatarSize: 0 }))
+          return snapshot
         } catch (error) {
           const code = error instanceof Error ? error.message : ''
           settleSave(ticket, (prev) => ({
@@ -565,6 +658,7 @@ window.__ModuleLoader__.load({
             error: code === 'too-large' || code === 'invalid-type' ? '' : code,
             status: code === 'too-large' || code === 'invalid-type' ? prev.status : 'error',
           }))
+          return undefined
         }
       }
 
@@ -680,7 +774,8 @@ window.__ModuleLoader__.load({
               void mutate('/.dsh-orb/observation-frame', { enabled })
             },
           })),
-          snap.tcc && snap.tcc.applicable ? tccCard(text, snap, disabled, mutate) : null),
+          snap.tcc && snap.tcc.applicable ? tccCard(text, snap, disabled, mutate) : null,
+          h(VoiceCard, { text, snap, disabled, mutate })),
         h(WorkspaceCard, { text, snap, refreshSettings }),
         h(HistoryCard, { text, snap, mutate, refreshHistory }))
     }
@@ -1193,6 +1288,384 @@ window.__ModuleLoader__.load({
         retentionDialog())
     }
 
+    // Official sources and sizes. The host snapshot overrides these when it sends them.
+    // Keep the URLs aligned with packages/voice/src/manifest.ts.
+    const VOICE_OFFERS = {
+      wake: {
+        sources: ['https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2'],
+        bytes: 38 * 1024 * 1024,
+      },
+      tts: {
+        sources: [
+          'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-baker.tar.bz2',
+          'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-en_US-ljspeech.tar.bz2',
+          'https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-22khz-univ.onnx',
+        ],
+        bytes: 214 * 1024 * 1024,
+      },
+      asr: {
+        sources: ['https://huggingface.co', 'https://hf-mirror.com'],
+        bytes: 239233841 + 315894 + 1807522,
+      },
+    }
+
+    const VOICE_DEFAULTS = {
+      wakeEnabled: true,
+      wakeWords: ['你好大肥鱼'],
+      wakeThreshold: 0.25,
+      wakeScore: 1,
+      wakeChunk: 8,
+      wakeCooldownMs: 1500,
+      wakeReply: '我在',
+      commandEnabled: true,
+      dismissPhrases: ['你退下吧', '退下吧'],
+      dismissReply: '好的，再见',
+      ttsEnabled: true,
+      questionPrompt: '我有几个问题，你来选一下',
+      ttsSpeed: 1.5,
+      idleMs: 30000,
+    }
+
+    function normalizeVoice(raw) {
+      const item = raw && typeof raw === 'object' ? raw : {}
+      return {
+        wakeEnabled: typeof item.wakeEnabled === 'boolean' ? item.wakeEnabled : VOICE_DEFAULTS.wakeEnabled,
+        wakeWords: Array.isArray(item.wakeWords) ? item.wakeWords : VOICE_DEFAULTS.wakeWords,
+        wakeThreshold: typeof item.wakeThreshold === 'number' ? item.wakeThreshold : VOICE_DEFAULTS.wakeThreshold,
+        wakeScore: typeof item.wakeScore === 'number' ? item.wakeScore : VOICE_DEFAULTS.wakeScore,
+        wakeChunk: item.wakeChunk === 16 ? 16 : 8,
+        wakeCooldownMs: typeof item.wakeCooldownMs === 'number' ? item.wakeCooldownMs : VOICE_DEFAULTS.wakeCooldownMs,
+        wakeReply: typeof item.wakeReply === 'string' ? item.wakeReply : VOICE_DEFAULTS.wakeReply,
+        commandEnabled: typeof item.commandEnabled === 'boolean' ? item.commandEnabled : VOICE_DEFAULTS.commandEnabled,
+        dismissPhrases: Array.isArray(item.dismissPhrases) ? item.dismissPhrases : VOICE_DEFAULTS.dismissPhrases,
+        dismissReply: typeof item.dismissReply === 'string' ? item.dismissReply : VOICE_DEFAULTS.dismissReply,
+        ttsEnabled: typeof item.ttsEnabled === 'boolean' ? item.ttsEnabled : VOICE_DEFAULTS.ttsEnabled,
+        questionPrompt: typeof item.questionPrompt === 'string' ? item.questionPrompt : VOICE_DEFAULTS.questionPrompt,
+        ttsSpeed: typeof item.ttsSpeed === 'number' ? item.ttsSpeed : VOICE_DEFAULTS.ttsSpeed,
+        idleMs: typeof item.idleMs === 'number' ? item.idleMs : VOICE_DEFAULTS.idleMs,
+      }
+    }
+
+    function normalizeModel(raw, offer) {
+      const item = raw && typeof raw === 'object' ? raw : {}
+      const sources = Array.isArray(item.sources) ? item.sources.filter((entry) => typeof entry === 'string' && entry !== '') : []
+      return {
+        present: item.present === true,
+        downloading: item.downloading === true,
+        progress: typeof item.progress === 'number' ? item.progress : 0,
+        sources: sources.length > 0 ? sources : offer.sources,
+        bytes: typeof item.bytes === 'number' ? item.bytes : offer.bytes,
+        error: typeof item.error === 'string' ? item.error : '',
+        notice: item.notice === 'present' ? 'present' : '',
+        official: item.official === false ? false : item.official === true ? true : undefined,
+      }
+    }
+
+    function voiceLocks(control, models) {
+      const missing = []
+      if ((control === 'wake' || control === 'wake-reply') && !models.wake.present) missing.push('wake')
+      if ((control === 'wake-reply' || control === 'dismiss-reply' || control === 'tts') && !models.tts.present) missing.push('tts')
+      if (control === 'command' && !models.asr.present) missing.push('asr')
+      return missing
+    }
+
+    function splitLines(value) {
+      return String(value).split(/\n/).map((line) => line.trim()).filter(Boolean)
+    }
+
+    /**
+     * Voice group on the floating-ball page. A missing model looks unavailable, but the
+     * control still takes a click and explains which model to prepare. Native `disabled`
+     * would swallow that click.
+     */
+    function VoiceCard({ text, snap, disabled, mutate }) {
+      const [dialog, setDialog] = React.useState(null)
+      const draftRef = React.useRef({})
+      const [, bump] = React.useState(0)
+      const voice = normalizeVoice(snap.voice)
+      const models = {
+        wake: normalizeModel(snap.voiceModels && snap.voiceModels.wake, VOICE_OFFERS.wake),
+        tts: normalizeModel(snap.voiceModels && snap.voiceModels.tts, VOICE_OFFERS.tts),
+        asr: normalizeModel(snap.voiceModels && snap.voiceModels.asr, VOICE_OFFERS.asr),
+      }
+      const missingText = {
+        wake: text.modelMissingWake,
+        tts: text.modelMissingTts,
+        asr: text.modelMissingAsr,
+      }
+
+      function shown(key) {
+        return Object.prototype.hasOwnProperty.call(draftRef.current, key) ? draftRef.current[key] : voice[key]
+      }
+
+      function remember(key, value) {
+        draftRef.current = { ...draftRef.current, [key]: value }
+        bump((count) => count + 1)
+      }
+
+      function save(patch) {
+        const merged = { ...voice, ...draftRef.current, ...patch }
+        if (typeof merged.wakeWords === 'string') merged.wakeWords = splitLines(merged.wakeWords)
+        if (typeof merged.dismissPhrases === 'string') merged.dismissPhrases = splitLines(merged.dismissPhrases)
+        void mutate('/.dsh-orb/voice', merged)
+      }
+
+      function openLock(missing) {
+        setDialog({ type: 'locked', missing })
+      }
+
+      async function startDownload(kind) {
+        if (models[kind].downloading) return
+        setDialog(null)
+        const snapshot = await mutate('/.dsh-orb/voice/download', { kind })
+        if (snapshot && snapshot.voiceModels && snapshot.voiceModels[kind] && snapshot.voiceModels[kind].notice === 'present') {
+          setDialog({ type: 'present' })
+        }
+      }
+
+      function onDownload(kind) {
+        if (disabled || models[kind].downloading) return
+        if (kind === 'asr' && models.asr.official === false) {
+          setDialog({ type: 'service' })
+          return
+        }
+        if (!models[kind].present) {
+          setDialog({ type: 'confirm', kind })
+          return
+        }
+        void startDownload(kind)
+      }
+
+      function lockedProps(missing) {
+        return {
+          onMouseDown: (event) => {
+            if (missing.length === 0) return
+            event.preventDefault()
+            openLock(missing)
+          },
+          onClick: () => {
+            if (missing.length === 0) return
+            openLock(missing)
+          },
+        }
+      }
+
+      function textRow(label, key, missing, wide) {
+        const value = shown(key)
+        return h('label', { className: 'dsh-orb-set-voice-row' },
+          h('span', null, label),
+          h('input', {
+            className: `dsh-orb-set-input dsh-orb-set-input-wide${missing.length ? ' is-locked' : ''}`,
+            'aria-label': label,
+            'aria-disabled': missing.length ? 'true' : 'false',
+            value: Array.isArray(value) ? value.join('\n') : String(value ?? ''),
+            onChange: (event) => {
+              if (missing.length) return
+              remember(key, event.target.value)
+            },
+            onBlur: (event) => {
+              if (missing.length) return
+              remember(key, event.target.value)
+              save({})
+            },
+            ...lockedProps(missing),
+            ...(wide ? {} : {}),
+          }))
+      }
+
+      function linesRow(label, key, missing) {
+        return h('label', { className: 'dsh-orb-set-voice-row' },
+          h('span', null, label),
+          h('textarea', {
+            className: `dsh-orb-set-input dsh-orb-set-input-wide${missing.length ? ' is-locked' : ''}`,
+            'aria-label': label,
+            'aria-disabled': missing.length ? 'true' : 'false',
+            rows: 2,
+            value: Array.isArray(shown(key)) ? shown(key).join('\n') : String(shown(key) ?? ''),
+            onChange: (event) => {
+              if (missing.length) return
+              remember(key, event.target.value)
+            },
+            onBlur: (event) => {
+              if (missing.length) return
+              remember(key, splitLines(event.target.value))
+              save({})
+            },
+            ...lockedProps(missing),
+          }))
+      }
+
+      function numberRow(label, key, missing, spec) {
+        const raw = Number(shown(key))
+        const display = spec.scale ? (Number.isFinite(raw) ? raw / spec.scale : '') : raw
+        return h('label', { className: 'dsh-orb-set-voice-row' },
+          h('span', null, label),
+          h('input', {
+            className: `dsh-orb-set-input${missing.length ? ' is-locked' : ''}`,
+            type: 'number',
+            'aria-label': label,
+            'aria-disabled': missing.length ? 'true' : 'false',
+            min: spec.min,
+            max: spec.max,
+            step: spec.step,
+            value: String(display),
+            onChange: (event) => {
+              if (missing.length) return
+              const next = Number(event.target.value)
+              if (!Number.isFinite(next)) return
+              remember(key, spec.scale ? Math.round(next * spec.scale) : next)
+            },
+            onBlur: (event) => {
+              if (missing.length) return
+              const next = Number(event.target.value)
+              if (!Number.isFinite(next)) return
+              remember(key, spec.scale ? Math.round(next * spec.scale) : next)
+              save({})
+            },
+            ...lockedProps(missing),
+          }))
+      }
+
+      function downloadBlock(kind, label) {
+        const model = models[kind]
+        if (kind === 'asr' && model.present) return null
+        const percent = Math.max(0, Math.min(100, Math.round(model.progress * 100)))
+        return h('div', { className: 'dsh-orb-set-voice-download' },
+          h('button', {
+            type: 'button',
+            className: `dsh-orb-set-button${model.present ? ' dsh-orb-set-ghost' : ' dsh-orb-set-primary'}`,
+            onClick: () => onDownload(kind),
+          }, label),
+          model.downloading ? h('div', {
+            className: 'dsh-orb-set-voice-progress',
+            role: 'progressbar',
+            'aria-valuemin': 0,
+            'aria-valuemax': 100,
+            'aria-valuenow': percent,
+            'aria-label': label,
+          },
+            h('span', { style: { width: `${percent}%` } }),
+            h('p', null, text.voiceProgress.replaceAll('{percent}', String(percent)))) : null,
+          model.error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, model.error) : null)
+      }
+
+      const wakeLocks = voiceLocks('wake', models)
+      const wakeReplyLocks = voiceLocks('wake-reply', models)
+      const commandLocks = voiceLocks('command', models)
+      const dismissReplyLocks = voiceLocks('dismiss-reply', models)
+      const ttsLocks = voiceLocks('tts', models)
+      const chunkMissing = wakeLocks
+      const sizeText = (bytes) => text.voiceSize.replaceAll('{size}', String(Math.round(bytes / (1024 * 1024))))
+
+      const dialogNode = dialog === null ? null : h('div', { className: 'dsh-orb-set-dialog-backdrop' },
+        h('div', { className: 'dsh-orb-set-dialog', role: 'dialog' },
+          dialog.type === 'locked' ? [
+            h('h3', { key: 'title' }, text.voiceTitle),
+            ...dialog.missing.map((code) => h('p', { key: code }, missingText[code])),
+            h('div', { key: 'actions', className: 'dsh-orb-set-dialog-actions' },
+              h('button', { type: 'button', className: 'dsh-orb-set-button dsh-orb-set-primary', onClick: () => setDialog(null) }, text.voiceClose)),
+          ] : null,
+          dialog.type === 'present' ? [
+            h('h3', { key: 'title' }, text.voiceTitle),
+            h('p', { key: 'body' }, text.modelPresent),
+            h('div', { key: 'actions', className: 'dsh-orb-set-dialog-actions' },
+              h('button', { type: 'button', className: 'dsh-orb-set-button dsh-orb-set-primary', onClick: () => setDialog(null) }, text.voiceClose)),
+          ] : null,
+          dialog.type === 'service' ? [
+            h('h3', { key: 'title' }, text.downloadAsr),
+            h('p', { key: 'body' }, text.asrService),
+            h('div', { key: 'actions', className: 'dsh-orb-set-dialog-actions' },
+              h('button', { type: 'button', className: 'dsh-orb-set-button dsh-orb-set-primary', onClick: () => setDialog(null) }, text.voiceClose)),
+          ] : null,
+          dialog.type === 'confirm' ? [
+            h('h3', { key: 'title' }, dialog.kind === 'wake' ? text.downloadWake : dialog.kind === 'tts' ? text.downloadTts : text.downloadAsr),
+            h('p', { key: 'source-label' }, text.voiceSource),
+            ...models[dialog.kind].sources.map((source) => h('p', { key: source }, source)),
+            h('p', { key: 'size' }, sizeText(models[dialog.kind].bytes)),
+            h('div', { key: 'actions', className: 'dsh-orb-set-dialog-actions' },
+              h('button', { type: 'button', className: 'dsh-orb-set-button dsh-orb-set-ghost', onClick: () => setDialog(null) }, text.voiceCancel),
+              h('button', { type: 'button', className: 'dsh-orb-set-button dsh-orb-set-primary', onClick: () => { void startDownload(dialog.kind) } }, text.voiceDownload)),
+          ] : null))
+
+      return h('section', { className: 'dsh-orb-set-card dsh-orb-set-voice' },
+        h('h3', null, text.voiceTitle),
+        h('p', null, text.voiceIntro),
+        snap.voiceMic === false ? h('div', { className: 'dsh-orb-set-voice-row' },
+          h('p', null, text.voiceMicBody),
+          h('button', {
+            type: 'button',
+            className: 'dsh-orb-set-button',
+            onClick: () => { void mutate('/.dsh-orb/voice/mic', {}) },
+          }, text.voiceMicOpen)) : null,
+        h('div', { className: 'dsh-orb-set-voice-group' },
+          h('h4', null, text.wakeTitle),
+          h('div', { className: 'dsh-orb-set-voice-row' },
+            h('span', null, text.wakeToggle),
+            h(Toggle, {
+              checked: voice.wakeEnabled === true,
+              label: text.wakeToggle,
+              disabled,
+              locked: wakeLocks.length > 0,
+              onLocked: () => openLock(wakeLocks),
+              onChange: (enabled) => save({ wakeEnabled: enabled }),
+            })),
+          numberRow(text.wakeThreshold, 'wakeThreshold', wakeLocks, { min: 0.05, max: 0.9, step: 0.01 }),
+          numberRow(text.wakeScore, 'wakeScore', wakeLocks, { min: 0.5, max: 4, step: 0.1 }),
+          h('label', { className: 'dsh-orb-set-voice-row' },
+            h('span', null, text.wakeChunk),
+            h('select', {
+              'aria-label': text.wakeChunk,
+              'aria-disabled': chunkMissing.length ? 'true' : 'false',
+              className: chunkMissing.length ? 'is-locked' : undefined,
+              value: String(shown('wakeChunk')),
+              ...lockedProps(chunkMissing),
+              onChange: (event) => {
+                if (chunkMissing.length) return
+                save({ wakeChunk: Number(event.target.value) })
+              },
+            },
+              h('option', { value: '8' }, text.wakeChunk8),
+              h('option', { value: '16' }, text.wakeChunk16))),
+          numberRow(text.wakeCooldown, 'wakeCooldownMs', wakeLocks, { min: 0.5, max: 5, step: 0.1, scale: 1000 }),
+          linesRow(text.wakeWords, 'wakeWords', wakeLocks),
+          textRow(text.wakeReply, 'wakeReply', wakeReplyLocks),
+          downloadBlock('wake', text.downloadWake)),
+        h('div', { className: 'dsh-orb-set-voice-group' },
+          h('h4', null, text.commandTitle),
+          h('div', { className: 'dsh-orb-set-voice-row' },
+            h('span', null, text.commandToggle),
+            h(Toggle, {
+              checked: voice.commandEnabled === true,
+              label: text.commandToggle,
+              disabled,
+              locked: commandLocks.length > 0,
+              onLocked: () => openLock(commandLocks),
+              onChange: (enabled) => save({ commandEnabled: enabled }),
+            })),
+          linesRow(text.dismissPhrases, 'dismissPhrases', commandLocks),
+          textRow(text.dismissReply, 'dismissReply', dismissReplyLocks),
+          downloadBlock('asr', text.downloadAsr)),
+        h('div', { className: 'dsh-orb-set-voice-group' },
+          h('h4', null, text.ttsTitle),
+          h('div', { className: 'dsh-orb-set-voice-row' },
+            h('span', null, text.ttsToggle),
+            h(Toggle, {
+              checked: voice.ttsEnabled === true,
+              label: text.ttsToggle,
+              disabled,
+              locked: ttsLocks.length > 0,
+              onLocked: () => openLock(ttsLocks),
+              onChange: (enabled) => save({ ttsEnabled: enabled }),
+            })),
+          textRow(text.questionPrompt, 'questionPrompt', ttsLocks),
+          numberRow(text.ttsSpeed, 'ttsSpeed', ttsLocks, { min: 1, max: 3, step: 0.1 }),
+          downloadBlock('tts', text.downloadTts)),
+        h('div', { className: 'dsh-orb-set-voice-group' },
+          h('h4', null, text.idleTitle),
+          numberRow(text.idleSeconds, 'idleMs', [], { min: 5, max: 600, step: 1, scale: 1000 })),
+        dialogNode)
+    }
+
     function card(title, description, control) {
       return h('section', { className: 'dsh-orb-set-card dsh-orb-set-row' },
         h('div', null, h('h3', null, title), h('p', null, description)),
@@ -1345,6 +1818,14 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .dsh-orb-set-primary { background: var(--dsw-alias-button-info-fill, #2f6fed); color: var(--dsw-static-neutral-bluish-00, white); border-color: transparent; }
 .dsh-orb-set-muted { color: color-mix(in srgb, currentColor 58%, transparent); }
+.dsh-orb-set-voice-group { margin-top: 16px; padding-top: 12px; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+.dsh-orb-set-voice-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 10px; }
+.dsh-orb-set-voice-row > span { font-size: 13px; }
+.dsh-orb-set .is-locked { opacity: 0.45; }
+.dsh-orb-set-voice-download { margin-top: 12px; }
+.dsh-orb-set-voice-progress { margin-top: 8px; }
+.dsh-orb-set-voice-progress > span { display: block; height: 6px; border-radius: 999px; background: var(--dsw-alias-button-info-fill, #2f6fed); }
+.dsh-orb-set textarea.dsh-orb-set-input { min-height: 52px; resize: vertical; }
 `
 
     /** Settings-section id of this page; the ball's menu row asks the shell to show exactly this one. */

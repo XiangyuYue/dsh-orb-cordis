@@ -76,6 +76,11 @@ await copyFrom('helper', 'assets', join(dist, 'helper', 'assets'))
 await copyFrom('native-selection', 'src', join(dist, 'native-selection', 'src'))
 await copyFrom('native-selection', 'prebuilds/darwin-universal', join(dist, 'native-selection', 'prebuilds', 'darwin-universal'))
 
+// The host forks this beside itself: dist/host/index.js -> ../voice/child.js.
+await copyFrom('voice', 'lib/child.js', join(dist, 'voice', 'child.js'))
+await copyFrom('voice', 'lib/decode-worker.mjs', join(dist, 'voice', 'decode-worker.mjs'))
+await copyFrom('voice', 'lib/tts-worker.js', join(dist, 'voice', 'tts-worker.js'))
+
 await rewrite(join(dist, 'host', 'index.js'), SELECTION_SPECIFIER, SELECTION_RELATIVE, 1)
 
 if (!inPlace) {

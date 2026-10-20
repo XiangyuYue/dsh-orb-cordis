@@ -5,10 +5,12 @@ import { Readable } from 'node:stream'
 import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { absentVoiceModels } from '@dsh-orb/voice/manifest'
 import { normalizeCatalog } from '../src/catalog.ts'
 import { ProfileStore, MAX_AVATAR_BYTES } from '../src/preferences.ts'
 import { orbSupported, registerOrbRoutes, tokensMatch, type OrbControl } from '../src/routes.ts'
 import { TccMonitor } from '../src/tcc.ts'
+import { EMPTY_UPDATE_STATE } from '../src/update.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'orb-routes-'))
 after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -297,7 +299,87 @@ describe('settings routes', () => {
     const missing = response()
     await handler(request('GET', '/.dsh-orb/nope', undefined, { 'x-dsh-user': 'ok' }), missing)
     assert.equal(missing.status, 404)
+
+    const voice = response()
+    await handler(request('POST', '/.dsh-orb/voice', JSON.stringify({
+      wakeEnabled: false,
+      idleMs: 45_000,
+      wakeReply: '在',
+      dismissPhrases: ['退下吧'],
+      questionPrompt: '你来选',
+    }), { 'x-dsh-user': 'ok' }), voice)
+    const voiceBody = JSON.parse(voice.body.toString('utf8')) as { voice: { wakeEnabled: boolean, idleMs: number, wakeReply: string, questionPrompt: string } }
+    assert.equal(voice.status, 200)
+    assert.equal(voiceBody.voice.wakeEnabled, false)
+    assert.equal(voiceBody.voice.idleMs, 45_000)
+    assert.equal(voiceBody.voice.wakeReply, '在')
+    assert.equal(voiceBody.voice.questionPrompt, '你来选')
+    const reloaded = new ProfileStore(profile)
+    assert.equal(reloaded.voice().wakeEnabled, false)
+    assert.equal(reloaded.voice().idleMs, 45_000)
+    assert.deepEqual(reloaded.voice().dismissPhrases, ['退下吧'])
     dispose()
+  })
+
+  it('returns the current voice download instead of starting a second one', async () => {
+    const profile = join(root, 'profile-voice-download')
+    mkdirSync(profile, { recursive: true })
+    const store = new ProfileStore(profile)
+    let starts = 0
+    let downloading = false
+    const control: OrbControl = {
+      helperAuthorized: () => false,
+      takeJump: () => null,
+      confirmJump() {},
+      takeSettingsOpen: () => null,
+      confirmSettingsOpen() {},
+      async publishChrome() {},
+      async setOverlayModel() {},
+      async setBackgroundModel() {},
+      async setSelectionEnabled() {},
+      async setMillifractionEnabled() {},
+      async setObservationFrameEnabled() {},
+      async setBallEnabled() {},
+      updateState: () => EMPTY_UPDATE_STATE,
+      async checkUpdate() {},
+      installUpdate() {},
+      setAutoCheck() {},
+      voiceModels() {
+        const models = absentVoiceModels()
+        return { ...models, wake: { ...models.wake, downloading, progress: downloading ? 0.5 : 0 } }
+      },
+      downloadVoiceModel() {
+        if (downloading) return 'busy'
+        downloading = true
+        starts += 1
+        return 'started'
+      },
+    }
+    let handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | undefined
+    registerOrbRoutes({
+      ctx: {
+        webServer: { register(route) { handler = route.handler; return () => {} } },
+        connection: { admit: () => ({ peer: { id: 'local' } }) },
+        sessionController: { modelCatalog: () => ({ groups: [] }) },
+      },
+      store,
+      tcc: new TccMonitor(),
+      control,
+    })
+    assert.ok(handler)
+    const first = response()
+    await handler(request('POST', '/.dsh-orb/voice/download', JSON.stringify({ kind: 'wake' })), first)
+    const started = JSON.parse(first.body.toString('utf8')) as { voiceModels: { wake: { downloading: boolean, progress: number } } }
+    assert.equal(starts, 1)
+    assert.equal(started.voiceModels.wake.downloading, true)
+    assert.equal(started.voiceModels.wake.progress, 0.5)
+    const second = response()
+    await handler(request('POST', '/.dsh-orb/voice/download', JSON.stringify({ kind: 'wake' })), second)
+    assert.equal(starts, 1)
+    assert.equal(JSON.parse(second.body.toString('utf8')).voiceModels.wake.progress, 0.5)
+    const bad = response()
+    await handler(request('POST', '/.dsh-orb/voice/download', JSON.stringify({ kind: 'nope' })), bad)
+    assert.equal(bad.status, 400)
   })
 
   it('exposes the update state, the manual check, and the install request', async () => {

@@ -272,4 +272,35 @@ describe('profile preferences', () => {
     writeFileSync(join(path, 'orb-workspace.json'), JSON.stringify({ path: 42 }))
     assert.equal(new ProfileStore(path).workspaceDirectory(), defaultWorkspaceDirectory())
   })
+
+  it('keeps voice settings across a new store and falls back when the file is bad', () => {
+    const path = dir('voice')
+    const store = new ProfileStore(path)
+    assert.equal(store.voice().wakeEnabled, true)
+    assert.equal(store.voice().idleMs, 30_000)
+    assert.deepEqual(store.voice().wakeWords, ['你好大肥鱼'])
+    store.setVoice({
+      wakeEnabled: false,
+      commandEnabled: false,
+      ttsEnabled: true,
+      idleMs: 45_000,
+      wakeReply: '在',
+      dismissPhrases: ['退下吧'],
+      questionPrompt: '你来选',
+      ttsSpeed: 2,
+    })
+    const again = new ProfileStore(path)
+    assert.equal(again.voice().wakeEnabled, false)
+    assert.equal(again.voice().commandEnabled, false)
+    assert.equal(again.voice().ttsEnabled, true)
+    assert.equal(again.voice().idleMs, 45_000)
+    assert.equal(again.voice().wakeReply, '在')
+    assert.deepEqual(again.voice().dismissPhrases, ['退下吧'])
+    assert.equal(again.voice().questionPrompt, '你来选')
+    assert.equal(again.voice().ttsSpeed, 2)
+    assert.deepEqual(again.voice().wakeWords, ['你好大肥鱼'])
+    writeFileSync(join(path, 'orb-voice.json'), '{')
+    assert.equal(new ProfileStore(path).voice().wakeEnabled, true)
+    assert.equal(new ProfileStore(path).voice().idleMs, 30_000)
+  })
 })

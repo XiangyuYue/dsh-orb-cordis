@@ -95,7 +95,7 @@ describe('ball page render guards', () => {
     assert.match(code, /async function syncStrip\(\)/)
     assert.match(code, /await api\.syncStrip\?\.\(\)/)
     // Once on startup, so a state message lost across a page load heals before the first hover.
-    assert.match(code, /syncGif\(\)\n(?:\s*\/\/[^\n]*\n)*\s+void syncStrip\(\)\n\}/)
+    assert.match(code, /syncGif\(\)\n(?:\s*(?:\/\/[^\n]*|reportPinned\(\))\n)*\s+void syncStrip\(\)\n\}/)
   })
 
   it('dismisses a finished chip from its own control instead of the chip body', () => {
@@ -141,10 +141,20 @@ describe('agent work keeps the panel on screen', () => {
   it('never collapses or docks while the turn is running', () => {
     // Every collapse path already consults `running`; the dock paths carry it to the main process
     // as `canDock`, which is what stops a release on a screen edge from docking.
-    assert.match(code, /function scheduleCollapse\(\) \{\n\s+if \(pinned \|\| running \|\| asking\(\) \|\| dragging\) return/)
-    assert.match(code, /if \(!force && \(pinned \|\| running \|\| asking\(\)\)\) return/)
+    assert.match(code, /function scheduleCollapse\(\) \{\n\s+if \(pinned \|\| running \|\| asking\(\) \|\| dragging \|\| voiceHold\) return/)
+    assert.match(code, /if \(!force && \(pinned \|\| running \|\| asking\(\) \|\| voiceHold\)\) return/)
     assert.match(code, /api\.dragEnd\(!\(running \|\| asking\(\)\)\)/)
     assert.match(code, /api\.dragMove\(!\(running \|\| asking\(\)\)\)/)
+  })
+
+  it('keeps the panel up for speech, and collapses only when the pointer has left', () => {
+    const css = source('../assets/floating.css')
+    assert.match(code, /function stopShown\(\) \{\n\s+return expanded && \(running \|\| voiceHold\)/)
+    assert.match(code, /function unpinFromHost\(\) \{\n\s+assignPinned\(false\)\n\s+if \(!pointerInside\) scheduleCollapse\(\)/)
+    assert.match(code, /if \(!pinned && !running && !asking\(\) && !pointerInside\) scheduleCollapse\(\)/)
+    assert.match(code, /document\.body\.classList\.toggle\('voice-hold', voiceHold\)/)
+    assert.match(code, /prompt\.addEventListener\('keydown', \(event\) => \{\n\s+if \(typeof api\.reportActivity === 'function'\) api\.reportActivity\(\)/)
+    assert.match(css, /body:not\(\.expanded\) #stop,\nbody:not\(\.running\):not\(\.voice-hold\) #stop \{\n\s+display: none;/)
   })
 
   it('locks only the two conversation-switch controls, and only while running', () => {

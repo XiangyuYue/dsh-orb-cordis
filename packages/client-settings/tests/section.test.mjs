@@ -206,6 +206,16 @@ function loadSection(hooks = {}) {
           : { ...snapshot.update, updating: true }
       }
       if (options.method === 'POST' && path === '/.dsh-orb/update/auto') snapshot.update = { ...snapshot.update, autoCheck: JSON.parse(options.body).enabled }
+      if (options.method === 'POST' && path === '/.dsh-orb/voice') snapshot.voice = JSON.parse(options.body)
+      if (options.method === 'POST' && path === '/.dsh-orb/voice/download') {
+        const kind = JSON.parse(options.body).kind
+        const model = snapshot.voiceModels && snapshot.voiceModels[kind]
+        if (model && model.downloading) return json(snapshot)
+        if (model && model.present) {
+          snapshot.voiceModels = { ...snapshot.voiceModels, [kind]: { ...model, notice: 'present' } }
+          return json(snapshot)
+        }
+      }
       if (options.method === 'POST') return json(snapshot)
       return { ok: false, status: 404, async text() { return JSON.stringify({ error: 'missing' }) } }
     },
@@ -1018,7 +1028,170 @@ describe('settings section', () => {
     await settle()
     assert.equal(fieldset().props.disabled, false, 'the dropped answer must still release the fields')
   })
+
+  it('saves voice settings when the models are present, and hides the ASR button', async () => {
+    const page = loadSection()
+    page.snapshot.voiceModels = readyVoiceModels()
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    assert.equal(find(view, (node) => node.children?.includes('没有拿到麦克风，唤醒和语音输入都不会发生。球的其他功能照常。')).length, 0)
+    page.snapshot.voiceMic = false
+    page.reset()
+    view = page.render()
+    await page.flush()
+    view = page.render()
+    const mic = find(view, (node) => node.type === 'button' && node.children?.includes('打开「麦克风」设置'))[0]
+    assert.ok(mic)
+    mic.props.onClick()
+    await settle()
+    assert.equal(page.calls.some((call) => call.path === '/.dsh-orb/voice/mic'), true)
+    page.snapshot.voiceMic = null
+    page.reset()
+    view = page.render()
+    await page.flush()
+    view = page.render()
+    assert.equal(find(view, (node) => node.type === 'h3' && node.children?.[0] === '语音').length, 1)
+    assert.equal(find(view, (node) => node.type === 'button' && node.children?.includes('启动 ASR 语音模型')).length, 0)
+    const wake = find(view, (node) => node.props?.['aria-label'] === '语音唤醒')[0]
+    assert.equal(wake.props['aria-checked'], 'true')
+    wake.props.onClick()
+    await settle()
+    const saved = page.calls.find((call) => call.path === '/.dsh-orb/voice')
+    assert.equal(JSON.parse(saved.options.body).wakeEnabled, false)
+    assert.equal(JSON.parse(saved.options.body).wakeReply, '我在')
+    view = page.render()
+    const idle = find(view, (node) => node.props?.['aria-label'] === '空闲时长（秒）')[0]
+    idle.props.onBlur({ target: { value: '45' } })
+    await settle()
+    const idleCall = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
+    assert.equal(JSON.parse(idleCall.options.body).idleMs, 45000)
+    const prompt = find(view, (node) => node.props?.['aria-label'] === '提问提示语')[0]
+    prompt.props.onBlur({ target: { value: '你来选' } })
+    await settle()
+    const promptCall = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
+    assert.equal(JSON.parse(promptCall.options.body).questionPrompt, '你来选')
+  })
+
+  it('explains the missing model when a locked voice control is clicked', async () => {
+    const page = loadSection()
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    const before = page.calls.length
+    find(view, (node) => node.props?.['aria-label'] === '语音唤醒')[0].props.onClick()
+    view = page.render()
+    const dialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.ok(dialog)
+    assert.equal(find(dialog, (node) => node.children?.includes('要下载语音唤醒模型。')).length, 1)
+    assert.equal(page.calls.length, before, 'a locked switch does not save')
+    find(dialog, (node) => node.type === 'button' && node.children?.includes('确定'))[0].props.onClick()
+
+    view = page.render()
+    find(view, (node) => node.props?.['aria-label'] === '唤醒后的回复语')[0].props.onClick()
+    view = page.render()
+    const both = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.equal(find(both, (node) => node.children?.includes('要下载语音唤醒模型。')).length, 1)
+    assert.equal(find(both, (node) => node.children?.includes('要下载 TTS 模型。')).length, 1)
+    assert.equal(find(both, (node) => node.children?.includes('要启动 ASR 语音模型。')).length, 0)
+
+    page.snapshot.voiceModels = {
+      wake: { present: true },
+      tts: { present: false },
+      asr: { present: true },
+    }
+    page.reset()
+    view = page.render()
+    await page.flush()
+    view = page.render()
+    find(view, (node) => node.props?.['aria-label'] === '退下后的回复语')[0].props.onClick()
+    view = page.render()
+    const reply = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.equal(find(reply, (node) => node.children?.includes('要下载 TTS 模型。')).length, 1)
+    assert.equal(find(reply, (node) => node.children?.includes('要下载语音唤醒模型。')).length, 0)
+    const idle = find(view, (node) => node.props?.['aria-label'] === '空闲时长（秒）')[0]
+    assert.equal(String(idle.props.className).includes('is-locked'), false)
+    idle.props.onBlur({ target: { value: '12' } })
+    await settle()
+    assert.equal(JSON.parse(page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1).options.body).idleMs, 12000)
+  })
+
+  it('confirms a model download, shows progress, and does not offer ASR once it exists', async () => {
+    const page = loadSection()
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    const button = find(view, (node) => node.type === 'button' && node.children?.includes('下载语音唤醒模型'))[0]
+    assert.match(button.props.className, /dsh-orb-set-primary/)
+    const asr = find(view, (node) => node.type === 'button' && node.children?.includes('启动 ASR 语音模型'))[0]
+    assert.ok(asr)
+    page.snapshot.voiceModels = { wake: { present: false }, tts: { present: false }, asr: { present: false, official: false } }
+    page.reset()
+    view = page.render()
+    await page.flush()
+    view = page.render()
+    const beforeAsr = page.calls.length
+    find(view, (node) => node.type === 'button' && node.children?.includes('启动 ASR 语音模型'))[0].props.onClick()
+    view = page.render()
+    assert.equal(find(view, (node) => node.children?.includes('当前 DeepSeek Harness 没有官方语音识别服务，插件不会自己另下一份。')).length, 1)
+    assert.equal(page.calls.length, beforeAsr)
+    page.snapshot.voiceModels = undefined
+    page.reset()
+    view = page.render()
+    await page.flush()
+    view = page.render()
+    find(view, (node) => node.type === 'button' && node.children?.includes('下载语音唤醒模型'))[0].props.onClick()
+    view = page.render()
+    const dialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.equal(find(dialog, (node) => node.children?.includes('https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2')).length, 1)
+    assert.equal(find(dialog, (node) => node.children?.includes('约 38 MB')).length, 1)
+    const before = page.calls.length
+    find(dialog, (node) => node.type === 'button' && node.children?.includes('取消'))[0].props.onClick()
+    assert.equal(page.calls.length, before)
+    view = page.render()
+    find(view, (node) => node.type === 'button' && node.children?.includes('下载语音唤醒模型'))[0].props.onClick()
+    view = page.render()
+    find(find(view, (node) => node.props?.role === 'dialog')[0], (node) => node.type === 'button' && node.children?.includes('下载'))[0].props.onClick()
+    await settle()
+    const download = page.calls.filter((call) => call.path === '/.dsh-orb/voice/download').at(-1)
+    assert.deepEqual(JSON.parse(download.options.body), { kind: 'wake' })
+
+    page.snapshot.voiceModels = {
+      wake: { present: false, downloading: true, progress: 0.4 },
+      tts: { present: false },
+      asr: { present: true },
+    }
+    page.reset()
+    view = page.render()
+    await page.flush()
+    view = page.render()
+    assert.equal(find(view, (node) => node.type === 'button' && node.children?.includes('启动 ASR 语音模型')).length, 0)
+    const bar = find(view, (node) => node.props?.role === 'progressbar')[0]
+    assert.equal(bar.props['aria-valuenow'], 40)
+    assert.equal(find(view, (node) => node.children?.includes('已下载 40%')).length, 1)
+    const calls = page.calls.length
+    find(view, (node) => node.type === 'button' && node.children?.includes('下载语音唤醒模型'))[0].props.onClick()
+    await settle()
+    assert.equal(page.calls.length, calls, 'a download in progress does not start another')
+
+    page.snapshot.voiceModels = readyVoiceModels()
+    page.reset()
+    view = page.render()
+    await page.flush()
+    view = page.render()
+    const again = find(view, (node) => node.type === 'button' && node.children?.includes('下载语音唤醒模型'))[0]
+    assert.match(again.props.className, /dsh-orb-set-ghost/)
+    again.props.onClick()
+    await settle()
+    view = page.render()
+    assert.equal(find(view, (node) => node.children?.includes('模型已经存在，不需要重新下载')).length, 1)
+  })
 })
+
+function readyVoiceModels() {
+  const model = { present: true, downloading: false, progress: 0 }
+  return { wake: { ...model }, tts: { ...model }, asr: { ...model } }
+}
 
 async function settle() {
   for (let index = 0; index < 8; index += 1) await new Promise((resolve) => setTimeout(resolve, 0))

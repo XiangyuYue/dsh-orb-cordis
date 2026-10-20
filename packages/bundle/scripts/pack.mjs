@@ -1,7 +1,7 @@
 /**
  * Build one installable tarball. The package is self-contained: `assemble.mjs` puts every
- * part inside it, and the runtime dependencies (`koffi`, `zod`) ship inside the tarball's
- * own `node_modules`, so an install fetches nothing from any registry. `@deepseek-ai/*`
+ * part inside it, and the runtime dependencies (`koffi`, `zod`, the voice engines) ship
+ * inside the tarball's own `node_modules`, so an install fetches nothing from any registry. `@deepseek-ai/*`
  * peers stay undeclared-installed: the host resolves them from its own modules.
  *
  * `--version x.y.z` stamps the tarball's version (default: the manifest's own).
@@ -22,6 +22,9 @@ const versionOverride = versionIndex === -1 ? undefined : process.argv[versionIn
 
 /** Platform prebuilds koffi loads as siblings of its own package. */
 const KOFFI_PLATFORMS = ['@koromix/koffi-darwin-arm64', '@koromix/koffi-darwin-x64', '@koromix/koffi-win32-x64']
+
+/** sherpa-onnx-node loads `../sherpa-onnx-<platform>/sherpa-onnx.node`. Linux is not a ball platform. */
+const SHERPA_PLATFORMS = ['sherpa-onnx-darwin-arm64', 'sherpa-onnx-darwin-x64', 'sherpa-onnx-win-x64']
 
 const stage = await mkdtemp(join(tmpdir(), 'dsh-orb-pack-'))
 const pkgDir = join(stage, 'package')
@@ -70,6 +73,7 @@ try {
     // `npm` is `npm.cmd` on Windows: only a shell resolves it (and Node refuses .cmd
     // targets outright). One command string, no spaces in any token, and a relative
     // pack destination so a space in the temp path cannot split the line.
+    await rm(join(fetchDir, 'package'), { recursive: true, force: true })
     const packed = spawnSync(`npm pack ${platform}@${version} --registry ${registry} --pack-destination .`, {
       cwd: fetchDir, stdio: 'pipe', encoding: 'utf8', timeout: 120_000, shell: true,
     })
@@ -86,9 +90,28 @@ try {
     const from = packageRoot(bundleRequire.resolve(name))
     await cp(from, join(pkgDir, 'node_modules', name), { recursive: true, dereference: true })
   }
-  const koffiVersion = JSON.parse(await readFile(join(pkgDir, 'node_modules', 'koffi', 'package.json'), 'utf8')).version
+  const voiceRequire = (await import('node:module')).createRequire(join(repoRoot, 'packages/voice/package.json'))
+  for (const name of ['sherpa-onnx-node', 'node-cpal', 'pinyin-pro']) {
+    const from = packageRoot(voiceRequire.resolve(`${name}/package.json`))
+    await cp(from, join(pkgDir, 'node_modules', name), { recursive: true, dereference: true })
+  }
+  // node-cpal publishes every platform inside one package. The ball does not run on Linux.
+  for (const extra of ['linux-arm64', 'linux-x64', 'backend-pipewire', 'backend-pulseaudio']) {
+    await rm(join(pkgDir, 'node_modules', 'node-cpal', 'bin', extra), { recursive: true, force: true })
+  }
   const fetchDir = join(stage, 'fetch')
   await (await import('node:fs/promises')).mkdir(fetchDir, { recursive: true })
+  for (const name of SHERPA_PLATFORMS) {
+    let from
+    try {
+      from = storeDir(name)
+    } catch {
+      const version = JSON.parse(await readFile(join(pkgDir, 'node_modules', 'sherpa-onnx-node', 'package.json'), 'utf8')).version
+      from = await fetchPlatform(name, version)
+    }
+    await cp(from, join(pkgDir, 'node_modules', name), { recursive: true, dereference: true })
+  }
+  const koffiVersion = JSON.parse(await readFile(join(pkgDir, 'node_modules', 'koffi', 'package.json'), 'utf8')).version
   for (const platform of KOFFI_PLATFORMS) {
     let from
     try {

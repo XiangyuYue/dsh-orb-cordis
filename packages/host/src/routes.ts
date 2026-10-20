@@ -20,8 +20,10 @@ import {
   type WorkspaceState,
 } from './preferences.ts'
 import { selectionRuntimeAvailable } from '@dsh-orb/native-selection'
+import { absentVoiceModels, type VoiceModelKind, type VoiceModels } from '@dsh-orb/voice/manifest'
+import { type VoiceSettings } from '@dsh-orb/voice/settings'
 import { defaultAvatarPath } from './helper-path.ts'
-import { isTccRight, type TccMonitor, type TccStatus } from './tcc.ts'
+import { isTccRight, openMicrophoneSettings, type TccMonitor, type TccStatus } from './tcc.ts'
 import type { UpdateState } from './update.ts'
 
 const PREFIX = '/.dsh-orb'
@@ -85,6 +87,17 @@ export interface OrbControl {
   setWorkspaceDirectory?(path: string): Promise<void>
   /** Opens the Host's native directory picker; null means the operator cancelled. */
   pickWorkspaceDirectory?(signal?: AbortSignal): Promise<string | null>
+  /** Wake, TTS, and official ASR presence. Absent means the factory "not downloaded" view. */
+  voiceModels?(): VoiceModels
+  /**
+   * Start a model download, or report that one is already running / the files are current.
+   * A `busy` result must not start a second transfer.
+   */
+  downloadVoiceModel?(kind: VoiceModelKind): Promise<'started' | 'busy' | 'present'> | 'started' | 'busy' | 'present'
+  /** The profile's voice file changed; the live controller should pick it up. */
+  applyVoiceSettings?(): Promise<void> | void
+  /** Null until the voice child reports. False means the microphone did not open. */
+  voiceMic?(): boolean | null
 }
 
 interface RouteDeps {
@@ -426,6 +439,34 @@ async function handle(deps: RouteDeps, req: IncomingMessage, res: ServerResponse
     sendJson(res, 200, await snapshot(deps))
     return
   }
+  if (method === 'POST' && path === `${PREFIX}/voice/mic`) {
+    await openMicrophoneSettings()
+    sendJson(res, 200, await snapshot(deps))
+    return
+  }
+  if (method === 'POST' && path === `${PREFIX}/voice`) {
+    const saved = deps.store.setVoice(await readJson(req))
+    await deps.control.applyVoiceSettings?.()
+    sendJson(res, 200, await snapshot(deps, saved))
+    return
+  }
+  if (method === 'POST' && path === `${PREFIX}/voice/download`) {
+    const kind = asRecord(await readJson(req))?.kind
+    if (kind !== 'wake' && kind !== 'tts' && kind !== 'asr') {
+      sendJson(res, 400, { error: 'invalid-voice-model' })
+      return
+    }
+    const current = await snapshot(deps)
+    if (current.voiceModels[kind].downloading) {
+      sendJson(res, 200, current)
+      return
+    }
+    const outcome = await deps.control.downloadVoiceModel?.(kind)
+    const body = await snapshot(deps)
+    if (outcome === 'present') body.voiceModels[kind] = { ...body.voiceModels[kind], notice: 'present' }
+    sendJson(res, 200, body)
+    return
+  }
   if (method === 'POST' && path === `${PREFIX}/tcc`) {
     const right = asRecord(await readJson(req))?.right
     if (!isTccRight(right)) {
@@ -440,9 +481,12 @@ async function handle(deps: RouteDeps, req: IncomingMessage, res: ServerResponse
   res.end()
 }
 
-async function snapshot(deps: RouteDeps): Promise<{
+async function snapshot(deps: RouteDeps, voice: VoiceSettings = deps.store.voice()): Promise<{
   supported: boolean
   ballEnabled: boolean
+  voice: VoiceSettings
+  voiceModels: VoiceModels
+  voiceMic: boolean | null
   avatarUrl: string
   avatarPresetId: string | null
   avatarPresets: { id: string; url: string }[]
@@ -466,6 +510,9 @@ async function snapshot(deps: RouteDeps): Promise<{
   return {
     supported: orbSupported(),
     ballEnabled: deps.store.ballEnabled(),
+    voice,
+    voiceModels: deps.control.voiceModels?.() ?? absentVoiceModels(),
+    voiceMic: deps.control.voiceMic?.() ?? null,
     avatarUrl: `${PREFIX}/avatar?v=${version}`,
     avatarPresetId: selection.kind === 'preset' ? selection.id : null,
     // No version on the gallery URLs: the files are the same on every render, and a

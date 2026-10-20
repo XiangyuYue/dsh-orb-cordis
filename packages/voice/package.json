@@ -1,0 +1,30 @@
+{
+  "name": "@dsh-orb/voice",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Floating-ball voice: listen mode, playback queue, and the microphone child process.",
+  "exports": {
+    "./settings": "./src/settings.ts",
+    "./manifest": "./src/manifest.ts",
+    "./listen": "./src/listen.ts",
+    "./queue": "./src/queue.ts",
+    "./dismiss": "./src/dismiss.ts",
+    "./idle": "./src/idle.ts",
+    "./speak-text": "./src/speak-text.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsdown && node --input-type=module -e \"import { copyFileSync } from 'node:fs'; copyFileSync('src/decode-worker.mjs', 'lib/decode-worker.mjs')\""
+  },
+  "dependencies": {
+    "node-cpal": "^1.0.0",
+    "pinyin-pro": "^3.29.5",
+    "sherpa-onnx-node": "1.13.8"
+  },
+  "license": "MIT"
+}
