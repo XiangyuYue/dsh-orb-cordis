@@ -272,11 +272,16 @@ function main() {
   const hint = document.querySelector('#hint')
   const prompt = document.querySelector('#prompt')
   const composer = document.querySelector('#composer')
+  const voiceMeter = document.querySelector('#voice-meter')
   applyStaticText()
 
   let expanded = false
   let pinned = false
   let voiceHold = false
+  /** Which column the host is listening on; the meter is only for `command`. */
+  let voiceMode = 'off'
+  /** Smoothed 0..1 microphone level, already throttled by the child. */
+  let voiceLevel = 0
   let pointerInside = false
   let running = false
   let workLocked = false
@@ -451,6 +456,7 @@ function main() {
     stop.hidden = !stopShown()
     setWorkLocked(running)
     syncGif()
+    renderVoiceMeter()
     if (next) {
       // The conversation on screen is the one that may operate the desktop and the shell, so its
       // work must be visible: a wake turn from a background Code agent used to run behind a
@@ -630,6 +636,7 @@ function main() {
       stop.hidden = !stopShown()
       renderAgentStrip()
       syncGif()
+      renderVoiceMeter()
       return
     }
     if (!force && (pinned || running || asking() || voiceHold)) return
@@ -639,6 +646,7 @@ function main() {
     if (docked !== undefined) dockTab.hidden = false
     stop.hidden = true
     syncGif()
+    renderVoiceMeter()
     if (force) {
       panel.hidden = true
       await api.setExpanded(false)
@@ -716,6 +724,18 @@ function main() {
 
   function stopShown() {
     return expanded && (running || voiceHold)
+  }
+
+  /**
+   * The voice-input meter sits on the composer's top edge. It is shown only while the
+   * host is listening for a command; the level fades out whenever that column stops.
+   */
+  function renderVoiceMeter() {
+    if (voiceMeter === null) return
+    const active = voiceMode === 'command' && expanded && !running && !asking()
+    voiceMeter.classList.toggle('active', active)
+    const level = active ? Math.max(0, Math.min(1, voiceLevel)) : 0
+    voiceMeter.style.setProperty('--voice-level', level.toFixed(3))
   }
 
   function reportPinned() {
@@ -2183,6 +2203,7 @@ function main() {
     pending = { id: payload.id, questions: payload.questions, drafts: emptyDrafts(payload.questions), index: 0, busy: false }
     setHistoryOpen(false)
     syncQuestion()
+    renderVoiceMeter()
     void setExpanded(true)
   }
 
@@ -2190,6 +2211,7 @@ function main() {
     if (pending === undefined || pending.id !== id) return
     pending = undefined
     syncQuestion()
+    renderVoiceMeter()
   }
 
   function isPrimaryButton(event) {
@@ -2511,6 +2533,16 @@ function main() {
   api.onPin?.(() => { void pinFromHost() })
   api.onUnpin?.(() => { unpinFromHost() })
   api.onVoiceHold?.((hold) => { applyVoiceHold(hold) })
+  api.onVoiceMode?.((mode) => {
+    voiceMode = mode === 'command' ? 'command' : 'off'
+    if (voiceMode === 'command') voiceLevel = 0
+    renderVoiceMeter()
+  })
+  api.onVoiceLevel?.((level) => {
+    if (typeof level !== 'number' || !Number.isFinite(level)) return
+    voiceLevel = Math.max(0, Math.min(1, level))
+    if (voiceMode === 'command') renderVoiceMeter()
+  })
   api.onVoicePrompt?.((text) => { void acceptVoicePrompt(text) })
   api.onAttach((text) => {
     if (typeof text !== 'string' || text === '') return

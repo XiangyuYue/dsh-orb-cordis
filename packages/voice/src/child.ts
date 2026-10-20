@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { contextFromFiles, keywordLines } from './keywords.ts'
+import { LevelMeter } from './level.ts'
 import { type VoiceSettings } from './settings.ts'
 
 const require = createRequire(import.meta.url)
@@ -244,6 +245,8 @@ class Engine {
   /** A segment accepted by the synthesizer and not yet handed to the speaker. */
   private armed: { id: string, token: number } | undefined
   private player: { stop(): void } | undefined
+  /** Smoothed microphone level for the input meter. Commands only; never wake or playback. */
+  private readonly meter = new LevelMeter()
 
   constructor(private readonly native: Native) {}
 
@@ -262,6 +265,12 @@ class Engine {
     this.mode = mode
     if (previous === 'command' && mode !== 'command') this.vad?.reset()
     if (mode === 'wake' && previous !== 'wake' && this.kws && this.kwsStream) this.kws.reset(this.kwsStream)
+    if (mode === 'command' && previous !== 'command') {
+      this.meter.reset()
+    } else if (previous === 'command' && mode !== 'command') {
+      // Put the meter down before the page hears the mode change.
+      emit({ type: 'level', value: 0 })
+    }
     if (mode === 'command' && previous !== 'command' && seedMs > 0) this.vad?.seed(this.ring.last(seedMs))
   }
 
@@ -397,8 +406,14 @@ class Engine {
     let mono = toMono(data, this.channels)
     if (this.resampler) mono = this.resampler.resample(mono)
     this.ring.push(mono)
-    if (this.mode === 'wake') this.feedWake(mono)
-    else if (this.mode === 'command') this.vad?.push(mono)
+    if (this.mode === 'wake') {
+      this.feedWake(mono)
+      return
+    }
+    if (this.mode !== 'command') return
+    const level = this.meter.push(mono, Date.now())
+    if (level !== undefined) emit({ type: 'level', value: level })
+    this.vad?.push(mono)
   }
 
   private feedWake(samples: Float32Array): void {

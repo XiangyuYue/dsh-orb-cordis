@@ -588,6 +588,52 @@ body.expand-down #composer {
   top: 0;
 }
 
+/* Voice input meter: a transparent band on the input's top edge. The track says the
+ * microphone is armed; the light-blue bar follows the speaker's level while a command
+ * is being heard. Purely decorative, so it never takes the pointer. */
+#voice-meter {
+  position: absolute;
+  z-index: 3;
+  top: 1px;
+  left: 20px;
+  right: 20px;
+  height: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+#voice-meter.active {
+  opacity: 1;
+}
+
+#voice-meter::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(126, 190, 255, 0.2);
+}
+
+#voice-meter-bar {
+  display: block;
+  width: 100%;
+  height: calc(2px + var(--voice-level, 0) * 3px);
+  border-radius: 999px;
+  background: #8ec5ff;
+  box-shadow: 0 0 7px rgba(126, 190, 255, 0.55);
+  opacity: calc(0.45 + var(--voice-level, 0) * 0.55);
+  transform: scaleX(calc(0.04 + var(--voice-level, 0) * 0.96));
+  transform-origin: center;
+  transition: transform 70ms linear, height 70ms linear, opacity 100ms linear;
+  will-change: transform, height;
+}
+
 body.running #composer,
 body.asking #composer,
 body.tcc-gating #composer,

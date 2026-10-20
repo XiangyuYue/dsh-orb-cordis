@@ -231,6 +231,31 @@ describe('voice lifecycle', () => {
     assert.equal(page.some((message) => message.type === 'unpin'), true)
   })
 
+  it('forwards the microphone level only while a command is being heard', () => {
+    const settings = settingsWith()
+    const child = fakeChild()
+    const page: VoicePageMessage[] = []
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send: (message) => { page.push(message) },
+      open: () => child.link,
+    })
+    voice.start()
+    child.emit({ type: 'mic', open: true })
+    voice.setPinned(true)
+    assert.equal(page.some((message) => message.type === 'voice-mode' && message.mode === 'command'), true)
+    child.emit({ type: 'level', value: 0.42 })
+    assert.equal(page.some((message) => message.type === 'voice-level' && message.value === 0.42), true)
+    child.emit({ type: 'level', value: 2 })
+    assert.equal(page.some((message) => message.type === 'voice-level' && message.value === 1), true)
+    voice.setPinned(false)
+    const before = page.length
+    child.emit({ type: 'level', value: 0.8 })
+    assert.equal(page.slice(before).some((message) => message.type === 'voice-level' && message.value === 0.8), false)
+  })
+
   it('drops the old queue and restarts after a crash, instead of holding the stop button', () => {
     const settings = settingsWith()
     const children = [fakeChild(), fakeChild()]

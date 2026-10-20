@@ -458,6 +458,17 @@ function deliver(message: unknown): void {
     win.webContents.send('orb:voice-hold', (record as { hold?: unknown }).hold === true)
     return
   }
+  if (record.type === 'voice-mode') {
+    const mode = (record as { mode?: unknown }).mode
+    if (mode === 'off' || mode === 'wake' || mode === 'command') {
+      win.webContents.send('orb:voice-mode', mode)
+    }
+    return
+  }
+  if (record.type === 'voice-level' && typeof (record as { value?: unknown }).value === 'number') {
+    win.webContents.send('orb:voice-level', (record as { value: number }).value)
+    return
+  }
   if (record.type === 'voice-prompt' && typeof (record as { text?: unknown }).text === 'string') {
     win.webContents.send('orb:voice-prompt', (record as { text: string }).text)
     return

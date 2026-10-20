@@ -30,9 +30,11 @@ export interface VoicePresence {
 }
 
 export interface VoicePageMessage {
-  readonly type: 'pin' | 'unpin' | 'voice-hold' | 'voice-prompt'
+  readonly type: 'pin' | 'unpin' | 'voice-hold' | 'voice-prompt' | 'voice-mode' | 'voice-level'
   readonly hold?: boolean
   readonly text?: string
+  readonly mode?: ListenMode
+  readonly value?: number
 }
 
 export interface VoiceLink {
@@ -115,6 +117,8 @@ export class VoiceController {
     this.mode = 'off'
     this.hold = false
     this.options.send({ type: 'voice-hold', hold: false })
+    this.options.send({ type: 'voice-mode', mode: 'off' })
+    this.options.send({ type: 'voice-level', value: 0 })
   }
 
   /** Null until the child reports. False means the microphone could not be opened. */
@@ -278,6 +282,15 @@ export class VoiceController {
       this.poll()
       return
     }
+    if (type === 'level' && typeof record?.value === 'number') {
+      // The child measures the same microphone the page is waiting on. Forward it only
+      // while a command is actually being heard; never during wake or playback.
+      if (this.mode === 'command') {
+        const value = Math.max(0, Math.min(1, record.value))
+        this.options.send({ type: 'voice-level', value })
+      }
+      return
+    }
     if (type === 'utterance' && typeof record?.text === 'string') {
       this.onUtterance(record.text)
       return
@@ -337,6 +350,7 @@ export class VoiceController {
     this.resetPlayback()
     this.idle = createIdle()
     this.commandSeed = 300
+    this.options.send({ type: 'voice-mode', mode: 'off' })
     this.restartChild()
   }
 
@@ -359,6 +373,8 @@ export class VoiceController {
     // would make the first block update after a ball toggle replay a whole assistant answer.
     this.queue = createQueue(this.ttsOn())
     this.options.send({ type: 'voice-hold', hold: false })
+    this.options.send({ type: 'voice-mode', mode: 'off' })
+    this.options.send({ type: 'voice-level', value: 0 })
   }
 
   private launchChild(): void {
@@ -469,6 +485,9 @@ export class VoiceController {
     if (entering) this.commandSeed = 300
     this.mode = mode
     this.link?.send({ type: 'listen', mode, seedMs })
+    // The page draws the input meter only while this exact command column is listening.
+    this.options.send({ type: 'voice-mode', mode })
+    if (mode !== 'command') this.options.send({ type: 'voice-level', value: 0 })
   }
 
   private localReply(text: string): string {

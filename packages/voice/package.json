@@ -11,6 +11,7 @@
     "./queue": "./src/queue.ts",
     "./dismiss": "./src/dismiss.ts",
     "./idle": "./src/idle.ts",
+    "./level": "./src/level.ts",
     "./speak-text": "./src/speak-text.ts",
     "./package.json": "./package.json"
   },

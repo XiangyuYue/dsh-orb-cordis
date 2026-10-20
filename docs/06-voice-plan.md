@@ -80,9 +80,11 @@ Host 和页面之间仍走现有的 NDJSON。这一次新增加的消息：
 | Host → 页面 | `{ type: 'pin' }` | 调用 `pinBall()` 并展开 |
 | Host → 页面 | `{ type: 'unpin' }` | 只取消固定 |
 | Host → 页面 | `{ type: 'voice-hold', hold }` | 停止按钮和展开要不要为播报多留 |
+| Host → 页面 | `{ type: 'voice-mode', mode }` | 听的状态变化，页面据此显示或隐藏输入框上沿的语音指示条 |
+| Host → 页面 | `{ type: 'voice-level', value }` | 0–1 的平滑麦克风电平，驱动指示条的浅蓝色长条 |
 | Host → 页面 | `{ type: 'voice-prompt', text }` | 一句要发送的语音指令 |
 | Host → 子进程 | `configure` / `listen` / `speak` / `stop-speak` | 设置、听的模式、播一段、停掉当前声音 |
-| 子进程 → Host | `wake` / `speech` / `utterance` / `playback` / `mic` | 唤醒、开口、整段文本、播放开始或结束、麦克风是否可用 |
+| 子进程 → Host | `wake` / `speech` / `utterance` / `playback` / `mic` / `level` | 唤醒、开口、整段文本、播放开始或结束、麦克风是否可用、语音电平 |
 
 `listen` 带 `mode: 'off' | 'wake' | 'command'`，以及 `seedMs`。切到 `command` 且没有回复语要播时 `seedMs` 为 300，其余为 0。
 
@@ -292,7 +294,7 @@ Agent 空闲时的拖动保持现在的样子：取消固定，并且 `setExpand
 每一块 PCM：
 
 - 模式 `wake`：喂给 KWS。命中后 `reset`，进入冷却，向 Host 发 `wake`。不关闭输入流。
-- 模式 `command`：喂给 VAD。静音判定结束后得到整段文本，向 Host 发 `utterance`。说话过程中发 `speech: true`，段结束发 `speech: false`。没有逐字结果。
+- 模式 `command`：喂给 VAD。静音判定结束后得到整段文本，向 Host 发 `utterance`。说话过程中发 `speech: true`，段结束发 `speech: false`。每 50ms 把平滑后的 0–1 电平作为 `level` 发给 Host，只用于输入框上沿的语音指示条。没有逐字结果。
 - 模式 `off`：这块 PCM 不喂给任何一个解码器。输入流仍然开着。
 
 从 `wake` 切到 `command` 时：
