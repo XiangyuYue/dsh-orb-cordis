@@ -1,21 +1,26 @@
 /**
- * Whole-utterance dismiss phrases.
- * Trailing punctuation is ignored. A phrase inside a longer sentence is not a hit.
+ * Dismiss phrases matched anywhere in the recognized sentence.
+ * Punctuation, spacing, width, and Latin case are ignored on both sides, so
+ *「好的，你给我退下吧。」contains the factory phrase「退下吧」.
  */
 
-const TRAILING_PUNCTUATION = /[。！？!?.,，、]+$/u
+const IGNORED = /[\s\p{P}\p{S}]+/gu
 
-/** Trim and drop ending punctuation so「你退下吧。」matches「你退下吧」. */
+/** Drop punctuation, symbols, and whitespace; normalize width and Latin case. */
 export function normalizeUtterance(text: string): string {
-  return text.trim().replace(TRAILING_PUNCTUATION, '').trim()
+  return text.normalize('NFKC').toLowerCase().replace(IGNORED, '')
 }
 
-/** True when the utterance is exactly one of the configured phrases. An empty list never dismisses. */
+/**
+ * True when the utterance contains one of the configured phrases as a complete
+ * substring. A phrase in the middle of a longer sentence counts. An empty list
+ * never dismisses, and a phrase that normalizes to nothing is ignored.
+ */
 export function isDismiss(text: string, phrases: readonly string[]): boolean {
   const spoken = normalizeUtterance(text)
   if (!spoken) return false
   return phrases.some((phrase) => {
     const command = normalizeUtterance(phrase)
-    return command.length > 0 && spoken === command
+    return command.length > 0 && spoken.includes(command)
   })
 }

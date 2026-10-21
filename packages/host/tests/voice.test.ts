@@ -93,7 +93,7 @@ describe('voice controller with a script child', () => {
     voice.endTurn()
     await until(() => voice.listenMode() === 'command')
 
-    emit({ type: 'utterance', text: '退下吧。' })
+    emit({ type: 'utterance', text: '好的，你给我退下吧。' })
     await until(() => page.some((message) => message.type === 'unpin'))
     assert.equal(page.filter((message) => message.type === 'voice-prompt').length, 1)
     const goodbye = await speakText('好的，再见')
