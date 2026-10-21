@@ -4,7 +4,33 @@
  * and whether each model is switched on and present. The child only applies it.
  */
 
+import { hasWakeWord } from './settings.ts'
+
 export type ListenMode = 'off' | 'wake' | 'command'
+
+export interface MicInput {
+  /** Wake switch is on. */
+  readonly wakeEnabled: boolean
+  /** Wake words; an empty list means the column cannot run. */
+  readonly wakeWords: readonly string[]
+  /** The wake model files are complete. */
+  readonly wakeModel: boolean
+  /** Voice-input switch is on. */
+  readonly commandEnabled: boolean
+  /** The official ASR model files are complete. */
+  readonly asrModel: boolean
+}
+
+/**
+ * Whether the child must hold the microphone at all. TTS never needs it; only a
+ * listening column that is switched on and has a complete model does. When both
+ * columns are off or unready, the device is released so macOS stops showing the
+ * microphone indicator.
+ */
+export function needsMicrophone(input: MicInput): boolean {
+  return (input.wakeEnabled && hasWakeWord(input.wakeWords) && input.wakeModel)
+    || (input.commandEnabled && input.asrModel)
+}
 
 export interface ListenInput {
   /** The panel is pinned. Hover-open does not count. */

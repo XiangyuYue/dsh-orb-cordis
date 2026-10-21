@@ -279,6 +279,21 @@ describe('voice lifecycle', () => {
     assert.equal(opened, 2)
   })
 
+  it('reports no microphone once both listening columns are off', () => {
+    const settings = settingsWith({ wakeEnabled: false, commandEnabled: false, ttsEnabled: true })
+    const child = fakeChild()
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send() {},
+      open: () => child.link,
+    })
+    voice.start()
+    child.emit({ type: 'mic', open: true })
+    assert.equal(voice.microphone(), null)
+  })
+
   it('treats an empty wake list as no wake word', () => {
     const settings = settingsWith({ wakeWords: [] })
     const child = fakeChild()

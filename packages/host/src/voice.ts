@@ -11,7 +11,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { isDismiss } from '@dsh-orb/voice/dismiss'
 import { createIdle, stepIdle, type IdleClock } from '@dsh-orb/voice/idle'
-import { listenMode, type ListenMode } from '@dsh-orb/voice/listen'
+import { listenMode, needsMicrophone, type ListenMode } from '@dsh-orb/voice/listen'
 import {
   createQueue,
   queueView,
@@ -121,10 +121,27 @@ export class VoiceController {
     this.options.send({ type: 'voice-level', value: 0 })
   }
 
-  /** Null until the child reports. False means the microphone could not be opened. */
+  /**
+   * Null until the child reports, or while no listening column needs the device.
+   * False means a column is enabled but the microphone could not be opened.
+   */
   microphone(): boolean | null {
+    if (!this.listeningEnabled()) return null
     if (!this.live || !this.micKnown) return null
     return this.micOpen
+  }
+
+  /** Whether wake or voice input can actually run; TTS does not use the microphone. */
+  private listeningEnabled(): boolean {
+    const settings = this.options.settings()
+    const presence = this.options.presence()
+    return needsMicrophone({
+      wakeEnabled: settings.wakeEnabled,
+      wakeWords: settings.wakeWords,
+      wakeModel: presence.wake,
+      commandEnabled: settings.commandEnabled,
+      asrModel: presence.asr,
+    })
   }
 
   /** Whether the page should keep the panel up and the stop button for a closing line or prompt. */

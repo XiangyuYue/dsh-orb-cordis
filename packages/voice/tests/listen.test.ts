@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { listenMode, type ListenInput, type ListenMode } from '../src/listen.ts'
+import { listenMode, needsMicrophone, type ListenInput, type ListenMode } from '../src/listen.ts'
 
 const ready: ListenInput = {
   pinned: false,
@@ -39,6 +39,18 @@ describe('listen mode', () => {
   it('keeps listening when TTS is off, because playback never becomes busy', () => {
     assert.equal(mode({ pinned: false, playbackBusy: false }), 'wake')
     assert.equal(mode({ pinned: true, playbackBusy: false }), 'command')
+  })
+
+  it('holds the microphone only for a listening column that can actually run', () => {
+    const base = { wakeEnabled: true, wakeWords: ['你好大肥鱼'], wakeModel: true, commandEnabled: true, asrModel: true }
+    assert.equal(needsMicrophone(base), true)
+    assert.equal(needsMicrophone({ ...base, wakeEnabled: false }), true, 'voice input still runs')
+    assert.equal(needsMicrophone({ ...base, commandEnabled: false }), true, 'wake still runs')
+    assert.equal(needsMicrophone({ ...base, wakeEnabled: false, commandEnabled: false }), false)
+    assert.equal(needsMicrophone({ ...base, wakeWords: [] }), true, 'command still needs the mic')
+    assert.equal(needsMicrophone({ ...base, commandEnabled: false, wakeWords: [] }), false)
+    assert.equal(needsMicrophone({ ...base, commandEnabled: false, wakeModel: false }), false)
+    assert.equal(needsMicrophone({ ...base, wakeEnabled: false, asrModel: false }), false)
   })
 
   it('stays off without a microphone, and a busy flag beats a ready column', () => {

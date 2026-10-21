@@ -1,7 +1,8 @@
 /**
  * Voice child process.
- * One microphone stays open. Wake and command only change who receives the samples.
- * SenseVoice decode runs on a worker thread. This thread resamples, mixes, and runs VAD.
+ * One microphone is shared by wake and command; it is released when neither column
+ * can run. SenseVoice decode runs on a worker thread. This thread resamples, mixes,
+ * and runs VAD.
  */
 
 import { createRequire } from 'node:module'
@@ -13,6 +14,7 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { contextFromFiles, keywordLines } from './keywords.ts'
 import { LevelMeter } from './level.ts'
+import { needsMicrophone } from './listen.ts'
 import { type VoiceSettings } from './settings.ts'
 
 const require = createRequire(import.meta.url)
@@ -257,7 +259,9 @@ class Engine {
     // on the audio thread makes CoreAudio drop the stream.
     this.ensureKws()
     this.ensureAsr()
-    this.startMic()
+    // Releasing the device when both listening columns are off is what clears the
+    // macOS microphone indicator. It also stops paying for an open input stream.
+    this.syncMic()
   }
 
   listen(mode: ListenMode, seedMs: number): void {
@@ -325,6 +329,48 @@ class Engine {
     else if (armed) emit({ type: 'playback', id: armed.id, phase: 'end', stopped: true })
   }
 
+  /** Keep the input device only while a listening column is switched on and ready. */
+  private micWanted(): boolean {
+    const settings = this.settings
+    const paths = this.paths
+    if (!settings || !paths) return false
+    const kws = paths.kws ? kwsFiles(paths.kws, settings.wakeChunk) : undefined
+    const wakeModel = kws !== undefined && existsSync(kws.tokens)
+    const asrModel = Boolean(
+      paths.asrModel && paths.asrTokens && paths.asrVad
+      && existsSync(paths.asrModel) && existsSync(paths.asrTokens) && existsSync(paths.asrVad),
+    )
+    return needsMicrophone({
+      wakeEnabled: settings.wakeEnabled,
+      wakeWords: settings.wakeWords,
+      wakeModel,
+      commandEnabled: settings.commandEnabled,
+      asrModel,
+    })
+  }
+
+  private syncMic(): void {
+    if (this.micWanted()) this.startMic()
+    else this.stopMic()
+  }
+
+  private stopMic(): void {
+    const input = this.input
+    this.input = undefined
+    this.resampler = undefined
+    this.channels = 1
+    if (!input) return
+    try {
+      input.close()
+    } catch (error) {
+      // The device may already be gone; the indicator still has to clear.
+      fail(error)
+    }
+    // Releasing the device on purpose is not a microphone failure, so no `mic:
+    // false` goes out. The Host reports "no microphone needed" from the settings
+    // and the models, and only a real failure still reaches the user.
+  }
+
   startMic(): void {
     if (this.input) return
     try {
@@ -351,8 +397,8 @@ class Engine {
 
   close(): void {
     this.stopSpeak()
-    try { this.input?.close() } catch { /* already closed */ }
-    void this.worker?.terminate()
+    this.stopMic()
+    this.stopAsr()
     void this.ttsWorker?.terminate()
   }
 
@@ -499,8 +545,16 @@ class Engine {
     const model = this.paths?.asrModel
     const tokens = this.paths?.asrTokens
     const vadModel = this.paths?.asrVad
-    if (!this.settings?.commandEnabled || !model || !tokens || !vadModel) return
-    if (!existsSync(model) || !existsSync(tokens) || !existsSync(vadModel)) return
+    const enabled = Boolean(
+      this.settings?.commandEnabled && model && tokens && vadModel
+      && existsSync(model) && existsSync(tokens) && existsSync(vadModel),
+    )
+    if (!enabled) {
+      // Switching voice input off should release the recognizer's memory too, not
+      // only stop feeding it.
+      this.stopAsr()
+      return
+    }
     if (!this.vad) {
       try {
         const detector = new this.native.sherpa.Vad({
@@ -533,6 +587,7 @@ class Engine {
       return
     }
     worker.on('message', (message: { ready?: boolean, id?: number, text?: string, error?: string }) => {
+      if (this.worker !== worker) return
       if (message.ready) {
         this.workerReady = true
         this.pump()
@@ -545,8 +600,22 @@ class Engine {
       emit({ type: 'speech', open: false })
       this.pump()
     })
-    worker.on('error', (error) => fail(error))
+    worker.on('error', (error) => {
+      if (this.worker === worker) fail(error)
+    })
     this.worker = worker
+  }
+
+  /** Drop the recognizer and its queued segments; a later enable rebuilds them. */
+  private stopAsr(): void {
+    const worker = this.worker
+    this.worker = undefined
+    this.workerReady = false
+    this.vad = undefined
+    this.jobs = []
+    this.decoding = false
+    this.pending.clear()
+    if (worker) void worker.terminate()
   }
 
   private enqueue(samples: Float32Array): void {
