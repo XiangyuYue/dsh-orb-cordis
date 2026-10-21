@@ -643,6 +643,13 @@ body.tcc-gating #selection-chip {
   visibility: hidden;
 }
 
+/* The meter lives inside the composer's box. While the agent works the composer is
+ * hidden, but transcription is still open, so the meter overrides the inherited
+ * visibility and keeps showing the microphone level. */
+body.running #voice-meter {
+  visibility: visible;
+}
+
 #selection-chip {
   position: absolute;
   z-index: 2;

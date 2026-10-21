@@ -194,6 +194,9 @@ describe('agent work keeps the panel on screen', () => {
     assert.match(css, /#voice-meter\.active \{\n\s+opacity: 1;/)
     assert.match(css, /#voice-meter-bar \{\n\s+display: block;\n\s+width: 100%;/)
     assert.match(css, /background: #8ec5ff;/)
+    // The composer is hidden while the agent works, but the meter inside it must stay
+    // visible: transcription is still open during the turn.
+    assert.match(css, /body\.running #voice-meter \{\n\s+visibility: visible;/)
     assert.match(code, /const listening = voiceMode === 'command' \|\| voiceMode === 'interject'/)
     assert.match(code, /const active = listening && expanded && !asking\(\)/)
     assert.match(code, /const next = mode === 'command' \|\| mode === 'interject' \? mode : 'off'/)
