@@ -3,6 +3,8 @@
  * Mid-turn sentences that miss the speaker are dropped. A closing line and a
  * question prompt each keep one slot and play in the order they first arrived.
  * A later closing replaces the closing text without passing the prompt.
+ * An unfinished opening line still in the buffer is spoken when a tool call
+ * starts, if the speaker is free. If the speaker is busy, that line is dropped.
  */
 
 import { takeReadyPrefix } from './speak-text.ts'
@@ -168,11 +170,20 @@ function acceptSentence(state: QueueState, text: string): { state: QueueState, e
   return { state: { ...state, held: [...state.held, text] }, effects: [] }
 }
 
+/**
+ * A tool call means the text so far was a mid-turn line, not the closing reply.
+ * Parked sentences are dropped. An opening line that has not reached a sentence
+ * boundary yet is spoken now when the speaker is free; otherwise it is dropped
+ * with the rest, and it is not saved for the closing line.
+ */
 function onTool(state: QueueState): { state: QueueState, effects: QueueEffect[] } {
   const playing = state.playing?.kind === 'unclassified'
     ? { ...state.playing, kind: 'mid' as const }
     : state.playing
-  return { state: { ...state, held: [], playing }, effects: [] }
+  const pending = state.buffer.trim()
+  const cleared: QueueState = { ...state, held: [], buffer: '', playing }
+  if (!pending || cleared.playing !== null || hasQueue(cleared)) return { state: cleared, effects: [] }
+  return startPlay(cleared, 'mid', pending)
 }
 
 function onTurnEnd(state: QueueState): { state: QueueState, effects: QueueEffect[] } {

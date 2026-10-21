@@ -112,6 +112,7 @@ describe('background capability policy', () => {
     expect(text).toContain('code_agent')
     expect(text).toContain('ask_user_question')
     expect(text).toContain('web_search')
+    expect(text).toContain('one short sentence of normal reply text')
   })
 
   it('is the full policy with exactly the coordinate paragraph swapped', () => {

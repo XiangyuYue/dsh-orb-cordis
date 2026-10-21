@@ -78,6 +78,15 @@ describe('computer-use overlay and extra root', () => {
     expect(built).not.toContain('computer-use-preset-root')
   })
 
+  it('tells the agent to answer in reply text before the first tool call', async () => {
+    for (const file of [BUILT_OVERLAY, COMPOSITION]) {
+      const text = await readFile(file, 'utf8')
+      expect(text).toContain('one short sentence of normal reply text')
+      expect(text).toContain('Never start that work with tools alone')
+      expect(text).toContain('not reasoning')
+    }
+  })
+
   it('keeps the slim Computer Use composition beside the preset patch', async () => {
     const composition = await readFile(COMPOSITION, 'utf8')
     expect(composition).toContain('name: \'../../src/index.ts\'')

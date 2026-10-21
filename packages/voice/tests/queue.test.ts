@@ -39,6 +39,43 @@ describe('playback queue', () => {
     assert.equal(queueView(freed.state).playbackBusy, false)
   })
 
+  it('speaks an unfinished opening line when the tool call starts and the speaker is free', () => {
+    let state = createQueue(true)
+    const typed = apply(state, { type: 'text', text: '我去查一下今天的天气' })
+    assert.deepEqual(typed.effects, [], 'no sentence boundary yet, so nothing plays')
+    const started = apply(typed.state, { type: 'tool' })
+    assert.deepEqual(playText(started.effects), ['我去查一下今天的天气'])
+    assert.equal(started.effects[0]?.type === 'play' && started.effects[0].kind, 'mid')
+    assert.equal(started.state.buffer, '')
+    state = apply(started.state, { type: 'text', text: '今天晴。' }).state
+    const ended = apply(state, { type: 'turn-end' })
+    assert.equal(queueView(ended.state).playing?.text, '我去查一下今天的天气')
+    assert.deepEqual(queueView(ended.state).queued.map((item) => item.text), ['今天晴。'])
+  })
+
+  it('drops an unfinished opening line when the speaker is busy', () => {
+    let state = createQueue(true)
+    state = apply(state, { type: 'local', text: '我在' }).state
+    state = apply(state, { type: 'text', text: '我去查一下今天的天气' }).state
+    const dropped = apply(state, { type: 'tool' })
+    assert.deepEqual(dropped.effects, [])
+    assert.equal(dropped.state.buffer, '')
+    assert.equal(queueView(dropped.state).playing?.text, '我在')
+    const ended = apply(dropped.state, { type: 'turn-end' })
+    assert.deepEqual(queueView(ended.state).queued, [], 'the missed opening line is not saved for the close')
+  })
+
+  it('does not speak the unfinished tail once a sentence is already playing', () => {
+    let state = createQueue(true)
+    state = apply(state, { type: 'text', text: '我去查一下。还没说完' }).state
+    assert.equal(queueView(state).playing?.text, '我去查一下。')
+    const tool = apply(state, { type: 'tool' })
+    assert.deepEqual(tool.effects, [])
+    assert.equal(tool.state.buffer, '')
+    assert.equal(queueView(tool.state).playing?.kind, 'mid')
+    assert.equal(queueView(tool.state).playing?.text, '我去查一下。')
+  })
+
   it('drops a sentence that arrived while the speaker was already busy', () => {
     let state = createQueue(true)
     const occupy = apply(state, { type: 'local', text: '我在' })
