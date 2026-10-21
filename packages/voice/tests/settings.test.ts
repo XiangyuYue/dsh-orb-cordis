@@ -49,6 +49,15 @@ describe('voice settings', () => {
     assert.equal(parseVoiceSettings({ idleMs: 600_000 }).idleMs, 600_000)
   })
 
+  it('keeps the interject keyword separate from the wake word', () => {
+    assert.equal(parseVoiceSettings({}).interjectKeyword, '大肥鱼')
+    assert.equal(parseVoiceSettings({ interjectKeyword: '  ' }).interjectKeyword, '')
+    assert.equal(parseVoiceSettings({ interjectKeyword: '鱼'.repeat(41) }).interjectKeyword, '鱼'.repeat(40))
+    assert.equal(parseVoiceSettings({ interjectKeyword: 1 }).interjectKeyword, '大肥鱼')
+    assert.equal(parseVoiceSettings({ wakeWords: ['别的'] }).interjectKeyword, '大肥鱼')
+    assert.deepEqual(parseVoiceSettings({ interjectKeyword: '小鱼' }).wakeWords, ['你好大肥鱼'])
+  })
+
   it('reads an empty or blank wake list as no wake word', () => {
     assert.equal(hasWakeWord(['你好大肥鱼']), true)
     assert.equal(hasWakeWord([]), false)

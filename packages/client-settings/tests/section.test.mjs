@@ -1071,6 +1071,22 @@ describe('settings section', () => {
     await settle()
     const promptCall = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
     assert.equal(JSON.parse(promptCall.options.body).questionPrompt, '你来选')
+    const keyword = find(view, (node) => node.props?.['aria-label'] === '插话关键词')[0]
+    assert.equal(String(keyword.props.className).includes('is-locked'), false)
+    keyword.props.onBlur({ target: { value: '小肥鱼' } })
+    await settle()
+    const keywordCall = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
+    assert.equal(JSON.parse(keywordCall.options.body).interjectKeyword, '小肥鱼')
+    find(page.render(), (node) => node.props?.['aria-label'] === '语音输入' && node.props.role === 'switch')[0].props.onClick()
+    await settle()
+    view = page.render()
+    const stillOpen = find(view, (node) => node.props?.['aria-label'] === '插话关键词')[0]
+    assert.equal(String(stillOpen.props.className).includes('is-locked'), false)
+    stillOpen.props.onBlur({ target: { value: '再插一句' } })
+    await settle()
+    const afterOff = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
+    assert.equal(JSON.parse(afterOff.options.body).interjectKeyword, '再插一句')
+    assert.equal(JSON.parse(afterOff.options.body).commandEnabled, false)
   })
 
   it('explains the missing model when a locked voice control is clicked', async () => {
@@ -1086,6 +1102,17 @@ describe('settings section', () => {
     assert.equal(find(dialog, (node) => node.children?.includes('要下载语音唤醒模型。')).length, 1)
     assert.equal(page.calls.length, before, 'a locked switch does not save')
     find(dialog, (node) => node.type === 'button' && node.children?.includes('确定'))[0].props.onClick()
+
+    view = page.render()
+    const keyword = find(view, (node) => node.props?.['aria-label'] === '插话关键词')[0]
+    assert.equal(String(keyword.props.className).includes('is-locked'), true)
+    const beforeKeyword = page.calls.length
+    keyword.props.onClick()
+    view = page.render()
+    const keywordDialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.equal(find(keywordDialog, (node) => node.children?.includes('要启动 ASR 语音模型。')).length, 1)
+    assert.equal(page.calls.length, beforeKeyword, 'a locked interject keyword does not save')
+    find(keywordDialog, (node) => node.type === 'button' && node.children?.includes('确定'))[0].props.onClick()
 
     view = page.render()
     find(view, (node) => node.props?.['aria-label'] === '唤醒后的回复语')[0].props.onClick()

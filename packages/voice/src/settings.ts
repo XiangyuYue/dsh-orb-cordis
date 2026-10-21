@@ -19,6 +19,8 @@ export interface VoiceSettings {
   /** Spoken after a wake. Empty means silence. */
   wakeReply: string
   commandEnabled: boolean
+  /** 执行和正文播报期间，整句带出这个词就算插话。空字符串表示执行和播报期间不听。 */
+  interjectKeyword: string
   /** Whole-utterance dismiss phrases. Empty means dismiss is off. */
   dismissPhrases: string[]
   /** Spoken after dismiss. Empty means silence. */
@@ -41,6 +43,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   wakeCooldownMs: 1500,
   wakeReply: '我在',
   commandEnabled: true,
+  interjectKeyword: '大肥鱼',
   dismissPhrases: ['你退下吧', '退下吧'],
   dismissReply: '好的，再见',
   ttsEnabled: true,
@@ -71,6 +74,7 @@ export function parseVoiceSettings(value: unknown): VoiceSettings {
     wakeCooldownMs: numberIn(item.wakeCooldownMs, 500, 5000, DEFAULT_VOICE_SETTINGS.wakeCooldownMs, 0),
     wakeReply: text(item.wakeReply, DEFAULT_VOICE_SETTINGS.wakeReply, REPLY_CHARS),
     commandEnabled: flag(item.commandEnabled, DEFAULT_VOICE_SETTINGS.commandEnabled),
+    interjectKeyword: text(item.interjectKeyword, DEFAULT_VOICE_SETTINGS.interjectKeyword, PHRASE_CHARS),
     dismissPhrases: phrases(item.dismissPhrases, DEFAULT_VOICE_SETTINGS.dismissPhrases),
     dismissReply: text(item.dismissReply, DEFAULT_VOICE_SETTINGS.dismissReply, REPLY_CHARS),
     ttsEnabled: flag(item.ttsEnabled, DEFAULT_VOICE_SETTINGS.ttsEnabled),

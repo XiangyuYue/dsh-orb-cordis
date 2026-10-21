@@ -307,6 +307,7 @@ describe('settings routes', () => {
       wakeReply: '在',
       dismissPhrases: ['退下吧'],
       questionPrompt: '你来选',
+      interjectKeyword: '小肥鱼',
     }), { 'x-dsh-user': 'ok' }), voice)
     const voiceBody = JSON.parse(voice.body.toString('utf8')) as { voice: { wakeEnabled: boolean, idleMs: number, wakeReply: string, questionPrompt: string } }
     assert.equal(voice.status, 200)
@@ -314,10 +315,16 @@ describe('settings routes', () => {
     assert.equal(voiceBody.voice.idleMs, 45_000)
     assert.equal(voiceBody.voice.wakeReply, '在')
     assert.equal(voiceBody.voice.questionPrompt, '你来选')
+    const savedVoice = response()
+    await handler(request('GET', '/.dsh-orb/settings', undefined, { 'x-dsh-user': 'ok' }), savedVoice)
+    const savedSnapshot = JSON.parse(savedVoice.body.toString('utf8')) as { voice: { interjectKeyword: string } }
+    assert.equal(savedVoice.status, 200)
+    assert.equal(savedSnapshot.voice.interjectKeyword, '小肥鱼')
     const reloaded = new ProfileStore(profile)
     assert.equal(reloaded.voice().wakeEnabled, false)
     assert.equal(reloaded.voice().idleMs, 45_000)
     assert.deepEqual(reloaded.voice().dismissPhrases, ['退下吧'])
+    assert.equal(reloaded.voice().interjectKeyword, '小肥鱼')
     dispose()
   })
 
