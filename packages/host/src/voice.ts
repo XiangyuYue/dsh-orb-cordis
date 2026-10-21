@@ -9,9 +9,9 @@ import { fork, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { isDismiss, normalizeUtterance } from '@dsh-orb/voice/dismiss'
+import { isDismiss, isInterject, normalizeUtterance } from '@dsh-orb/voice/dismiss'
 import { createIdle, stepIdle, type IdleClock } from '@dsh-orb/voice/idle'
-import { listenMode, needsMicrophone, type ListenMode } from '@dsh-orb/voice/listen'
+import { holdsDevice, listenMode, needsMicrophone, transcribing, type ListenMode } from '@dsh-orb/voice/listen'
 import {
   bodyBusy,
   createQueue,
@@ -56,6 +56,10 @@ export interface VoiceControllerOptions {
   send(message: VoicePageMessage): void
   /** Fork the voice child. Undefined means this host has no voice runtime. */
   open(): VoiceLink | undefined
+  /** 插话原话。orb 决定发 steer 还是交给页面走打字发送。 */
+  interject?(text: string): void
+  /** 和点「停止」相同的执行停止。没有在执行时不做事。 */
+  stopTurn?(): void
 }
 
 const RESTART_LIMIT = 3
@@ -76,6 +80,16 @@ export class VoiceController {
   private micOpen = false
   private micKnown = false
   private mode: ListenMode = 'off'
+  /** 子进程最近一次采集带不带回声消除。还没收到 mic 时按没有算。 */
+  private echoCancel = false
+  /** 上次发给子进程的设备占用。提问卡关掉后重新打开时用来把种子清零。 */
+  private device = false
+  /** 停止或退下之后，被停的那一轮剩下的正文都不播，直到下一轮开始。 */
+  private muted = false
+  /** 停止或退下已经发出、执行还没真正停下。这段时间不听。 */
+  private stopping = false
+  /** 插话那一刻正在进行的步（`b:${turn}:${step}`）。这些步里的正文只上屏，不出声。 */
+  private readonly silencedSteps = new Set<string>()
   /**
    * Audio from just before a command starts, kept so the first syllable survives the switch.
    * Factory 300; one wake with a spoken reply uses zero so that reply is not echoed.
@@ -116,6 +130,8 @@ export class VoiceController {
     this.resetPlayback()
     this.micOpen = false
     this.micKnown = false
+    this.echoCancel = false
+    this.device = false
     this.mode = 'off'
     this.hold = false
     this.options.send({ type: 'voice-hold', hold: false })
@@ -179,6 +195,8 @@ export class VoiceController {
 
   beginTurn(): void {
     this.agentBusy = true
+    this.muted = false
+    this.stopping = false
     this.pushListen(false)
     this.poll()
   }
@@ -186,6 +204,7 @@ export class VoiceController {
   /** The turn's assistant text is already in the queue. Fold the tail into a closing line. */
   endTurn(): void {
     this.agentBusy = false
+    this.stopping = false
     // With no live child there is no speaker to drain; queueing here would leave a
     // `playing` item that never ends after the restart.
     if (!this.live) {
@@ -203,6 +222,7 @@ export class VoiceController {
     // Track text even while the child is restarting; otherwise the first update after the
     // restart would feed the whole block to the speaker again.
     this.seen.set(key, text)
+    if (this.muted || this.silencedSteps.has(stepOf(key))) return
     const delta = text.slice(previous.length)
     if (delta && this.live) this.apply({ type: 'text', text: delta })
   }
@@ -237,6 +257,12 @@ export class VoiceController {
 
   /** Stop button: drop speech. The caller stops the agent turn separately when one is running. */
   haltSpeech(): void {
+    // Remember the mute before the liveness check. A child that is restarting must not
+    // speak the rest of the stopped turn once it comes back.
+    if (this.agentBusy) {
+      this.muted = true
+      this.stopping = true
+    }
     if (!this.live) return
     this.apply({ type: 'stop' })
     this.poll()
@@ -245,6 +271,9 @@ export class VoiceController {
   /** The panel moved to another conversation. */
   clearSession(): void {
     this.seen.clear()
+    this.muted = false
+    this.stopping = false
+    this.silencedSteps.clear()
     this.questionOpen = false
     this.agentBusy = false
     if (!this.live) {
@@ -287,6 +316,7 @@ export class VoiceController {
     if (type === 'mic') {
       this.micKnown = true
       this.micOpen = record?.open === true
+      this.echoCancel = record?.aec === true
       this.pushListen(false)
       return
     }
@@ -295,23 +325,26 @@ export class VoiceController {
       return
     }
     if (type === 'speech') {
-      // A late `speech: true` from a command mode that has already ended must not pause
-      // the idle clock forever.
-      this.speechOpen = record?.open === true && this.mode === 'command'
+      // A late `speech: true` from a transcription mode that has already ended must not
+      // pause the idle clock forever. A falling edge is what releases a listen change
+      // that waited out the rest of the sentence.
+      const open = record?.open === true
+      this.speechOpen = open && transcribing(this.mode)
+      if (!open) this.pushListen(false)
       this.poll()
       return
     }
     if (type === 'level' && typeof record?.value === 'number') {
       // The child measures the same microphone the page is waiting on. Forward it only
-      // while a command is actually being heard; never during wake or playback.
-      if (this.mode === 'command') {
+      // while transcription is open; never during wake or playback.
+      if (transcribing(this.mode)) {
         const value = Math.max(0, Math.min(1, record.value))
         this.options.send({ type: 'voice-level', value })
       }
       return
     }
     if (type === 'utterance' && typeof record?.text === 'string') {
-      this.onUtterance(record.text)
+      this.onUtterance(record.text, record.mode)
       return
     }
     if (type === 'playback' && typeof record?.id === 'string' && record.phase === 'end') {
@@ -332,24 +365,59 @@ export class VoiceController {
     this.poll()
   }
 
-  private onUtterance(text: string): void {
-    if (this.mode !== 'command') return
+  private onUtterance(text: string, tagged: unknown): void {
+    const mode: ListenMode = tagged === 'command' || tagged === 'interject' ? tagged : this.mode
     this.speechOpen = false
+    if (mode !== 'command' && mode !== 'interject') return this.poll()
+    if (!this.canFinish(mode)) return this.poll()
     const settings = this.options.settings()
-    const spoken = stripWakePrefix(text, settings.wakeWords)
-    if (!spoken) {
-      this.poll()
-      return
+    if (mode === 'command') {
+      const spoken = stripWakePrefix(text, settings.wakeWords)
+      if (!spoken) return this.poll()
+      if (isDismiss(spoken, settings.dismissPhrases)) return this.dismiss()
+      this.options.send({ type: 'voice-prompt', text: spoken })
+      this.activity()
+      return this.poll()
     }
-    if (settings.commandEnabled && isDismiss(spoken, settings.dismissPhrases)) {
-      this.requestUnpin()
-      const reply = this.localReply(settings.dismissReply)
-      if (reply) this.apply({ type: 'local', text: reply })
-      this.poll()
-      return
+    // interject：用原话判，不去唤醒词前缀。否则「你好大肥鱼，……」会被剥掉关键词。
+    const spoken = text.trim()
+    if (isDismiss(spoken, settings.dismissPhrases)) return this.dismiss()
+    if (isInterject(spoken, settings.interjectKeyword)) return this.interject(spoken)
+    this.poll()
+  }
+
+  /** 开口之后出现了「硬性关掉」的情况，这句就不要了。只是执行结束、正文播完这种变化不算。 */
+  private canFinish(mode: 'command' | 'interject'): boolean {
+    if (this.questionOpen || this.stopping || localBusy(this.queue) || !this.micOpen) return false
+    return mode === 'command' ? this.commandEnabled() : this.interjectEnabled()
+  }
+
+  private commandEnabled(): boolean {
+    const settings = this.options.settings()
+    return settings.commandEnabled && this.options.presence().asr
+  }
+
+  private interjectEnabled(): boolean {
+    return this.commandEnabled() && normalizeUtterance(this.options.settings().interjectKeyword) !== ''
+  }
+
+  private dismiss(): void {
+    if (this.agentBusy) {
+      this.muted = true
+      this.stopping = true
+      this.options.stopTurn?.()
     }
-    this.options.send({ type: 'voice-prompt', text: spoken })
-    this.activity()
+    this.apply({ type: 'stop' })
+    const reply = this.localReply(this.options.settings().dismissReply)
+    if (reply) this.apply({ type: 'local', text: reply })
+    this.requestUnpin()
+    this.poll()
+  }
+
+  private interject(text: string): void {
+    for (const key of this.seen.keys()) this.silencedSteps.add(stepOf(key))
+    this.apply({ type: 'stop' })
+    this.options.interject?.(text)
     this.poll()
   }
 
@@ -360,6 +428,8 @@ export class VoiceController {
     this.live = false
     this.micOpen = false
     this.micKnown = false
+    this.echoCancel = false
+    this.device = false
     this.speechOpen = false
     if (this.timer) clearInterval(this.timer)
     this.timer = undefined
@@ -384,6 +454,8 @@ export class VoiceController {
     this.speechOpen = false
     this.micOpen = false
     this.micKnown = false
+    this.echoCancel = false
+    this.device = false
     this.mode = 'off'
     this.commandSeed = 300
     this.hold = false
@@ -484,38 +556,46 @@ export class VoiceController {
   private pushListen(force: boolean): void {
     const settings = this.options.settings()
     const presence = this.options.presence()
-    const commandEnabled = settings.commandEnabled && presence.asr
     const mode = listenMode({
       pinned: this.pinned,
       agentBusy: this.agentBusy,
       questionOpen: this.questionOpen,
       bodyBusy: bodyBusy(this.queue),
       localBusy: localBusy(this.queue),
-      // The stopping flag arrives with dismiss and the stop button. Until then a turn is not stopping.
-      stopping: false,
+      stopping: this.stopping,
       // An empty wake list means there is no wake word, even when the switch and the model are ready.
       wakeEnabled: settings.wakeEnabled && hasWakeWord(settings.wakeWords) && presence.wake,
-      commandEnabled,
-      // Punctuation alone never matches, so it must not keep transcription open during a turn.
-      interjectEnabled: commandEnabled && normalizeUtterance(settings.interjectKeyword) !== '',
-      // Echo cancellation is reported by a later mic message. Without it, body audio stays quiet.
-      echoCancel: false,
+      commandEnabled: this.commandEnabled(),
+      interjectEnabled: this.interjectEnabled(),
+      echoCancel: this.echoCancel,
       micOpen: this.micOpen,
     })
-    if (!force && mode === this.mode) return
-    // Leaving command mode ends any half-heard utterance: nothing is sent for it and
-    // the idle clock must not stay paused on an edge the dead command mode never closes.
-    if (this.mode === 'command' && mode !== 'command') this.speechOpen = false
-    const entering = mode === 'command' && this.mode !== 'command'
-    const seedMs = entering ? this.commandSeed : 0
+    // The user is mid-sentence. Leaving transcription now would drop it, so wait until
+    // the child reports the edge closed. A hard close (question, reply, stop, mic, setting)
+    // still switches immediately because canFinish is false.
+    if ((this.mode === 'command' || this.mode === 'interject') && !transcribing(mode) && this.speechOpen && this.canFinish(this.mode)) return
+    const device = holdsDevice({
+      wakeEnabled: settings.wakeEnabled,
+      wakeWords: settings.wakeWords,
+      wakeModel: presence.wake,
+      commandEnabled: settings.commandEnabled,
+      asrModel: presence.asr,
+      questionOpen: this.questionOpen,
+    })
+    if (!force && mode === this.mode && device === this.device) return
+    if (transcribing(this.mode) && !transcribing(mode)) this.speechOpen = false
+    const entering = transcribing(mode) && !transcribing(this.mode)
+    let seedMs = entering ? this.commandSeed : 0
     // Only the switch right after a spoken reply uses zero. Later entries get the normal
     // pre-roll back, so the first syllable after an agent turn is not clipped.
     if (entering) this.commandSeed = 300
+    // Audio buffered before a question card must not prefix the first sentence after it.
+    if (!this.device && device) seedMs = 0
     this.mode = mode
-    this.link?.send({ type: 'listen', mode, seedMs })
-    // The page draws the input meter only while this exact command column is listening.
+    this.device = device
+    this.link?.send({ type: 'listen', mode, seedMs, device })
     this.options.send({ type: 'voice-mode', mode })
-    if (mode !== 'command') this.options.send({ type: 'voice-level', value: 0 })
+    if (!transcribing(mode)) this.options.send({ type: 'voice-level', value: 0 })
   }
 
   private localReply(text: string): string {
@@ -539,6 +619,11 @@ export class VoiceController {
       idleMs: this.options.settings().idleMs,
     }
   }
+}
+
+/** `b:${turn}:${step}:${index}` → `b:${turn}:${step}`. Any other key is returned unchanged. */
+function stepOf(key: string): string {
+  return /^b:\d+:\d+:\d+$/.test(key) ? key.slice(0, key.lastIndexOf(':')) : key
 }
 
 /** A leading wake word is not a command. An empty remainder is dropped by the caller. */

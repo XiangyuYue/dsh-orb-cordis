@@ -32,9 +32,13 @@ function speaks(file: string): { id: string, text: string }[] {
 }
 
 function listenModes(file: string): string[] {
+  return listens(file).flatMap((item) => item.mode ? [item.mode] : [])
+}
+
+function listens(file: string): { mode?: string, seedMs?: number, device?: boolean }[] {
   return traceOf(file).flatMap((item) => {
-    const record = item as { type?: string, mode?: string }
-    return record.type === 'listen' && record.mode ? [record.mode] : []
+    const record = item as { type?: string, mode?: string, seedMs?: number, device?: boolean }
+    return record.type === 'listen' ? [record] : []
   })
 }
 
@@ -207,7 +211,7 @@ describe('voice lifecycle', () => {
     assert.equal(voice.listenMode(), 'wake')
   })
 
-  it('closes the speech edge when command mode ends, so the idle clock can run again', () => {
+  it('keeps the speech edge until the sentence ends, so the idle clock can run again', () => {
     const settings = settingsWith()
     const child = fakeChild()
     const page: VoicePageMessage[] = []
@@ -225,13 +229,17 @@ describe('voice lifecycle', () => {
     assert.equal(voice.listenMode(), 'command')
     child.emit({ type: 'speech', open: true })
     voice.setPinned(false)
+    assert.equal(voice.listenMode(), 'command', 'an open sentence stays in transcription')
+    child.emit({ type: 'speech', open: false })
+    assert.equal(voice.listenMode(), 'wake')
+    now = 0
     voice.setPinned(true)
     now = 30_000
     voice.poll()
     assert.equal(page.some((message) => message.type === 'unpin'), true)
   })
 
-  it('forwards the microphone level only while a command is being heard', () => {
+  it('forwards the microphone level only while transcription is open', () => {
     const settings = settingsWith()
     const child = fakeChild()
     const page: VoicePageMessage[] = []
@@ -254,6 +262,10 @@ describe('voice lifecycle', () => {
     const before = page.length
     child.emit({ type: 'level', value: 0.8 })
     assert.equal(page.slice(before).some((message) => message.type === 'voice-level' && message.value === 0.8), false)
+    voice.beginTurn()
+    assert.equal(voice.listenMode(), 'interject')
+    child.emit({ type: 'level', value: 0.3 })
+    assert.equal(page.some((message) => message.type === 'voice-level' && message.value === 0.3), true)
   })
 
   it('drops the old queue and restarts after a crash, instead of holding the stop button', () => {
@@ -307,5 +319,235 @@ describe('voice lifecycle', () => {
     voice.start()
     child.emit({ type: 'mic', open: true })
     assert.equal(voice.listenMode(), 'off')
+  })
+})
+
+describe('utterance judging', () => {
+  it('follows the listen mode from when the sentence started', async () => {
+    const dir = join(root, 'judge')
+    const inject = join(dir, 'inject.ndjson')
+    const trace = join(dir, 'trace.ndjson')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(inject, '')
+    writeFileSync(trace, '')
+    const page: VoicePageMessage[] = []
+    const heard: string[] = []
+    let stops = 0
+    const settings = settingsWith()
+    const child = spawn(process.execPath, [script], {
+      env: { ...process.env, VOICE_INJECT: inject, VOICE_TRACE: trace },
+      stdio: ['pipe', 'pipe', 'inherit'],
+    })
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send: (message) => { page.push(message) },
+      open: () => linkProcess(child),
+      interject: (text) => { heard.push(text) },
+      stopTurn: () => { stops += 1 },
+    })
+    const emit = (message: unknown) => { appendFileSync(inject, `${JSON.stringify(message)}\n`) }
+    const prompts = () => page.filter((message) => message.type === 'voice-prompt')
+    const speakText = async (text: string) => {
+      await until(() => speaks(trace).some((item) => item.text === text), () => readFileSync(trace, 'utf8'))
+      const spoken = speaks(trace).findLast((item) => item.text === text)
+      assert.ok(spoken)
+      return spoken
+    }
+    voice.start()
+    try {
+      await until(() => listenModes(trace).includes('wake'), () => readFileSync(trace, 'utf8'))
+      emit({ type: 'wake' })
+      const greeting = await speakText('我在')
+      emit({ type: 'playback', id: greeting.id, phase: 'end' })
+      await until(() => {
+        const last = listens(trace).at(-1)
+        return last?.mode === 'command' && last.device === true
+      }, () => readFileSync(trace, 'utf8'))
+
+      emit({ type: 'utterance', text: '查一下今天的天气', mode: 'command' })
+      await until(() => prompts().some((message) => message.text === '查一下今天的天气'))
+      voice.beginTurn()
+      assert.equal(page.some((message) => message.type === 'voice-mode' && message.mode === 'interject'), true)
+      await until(() => {
+        const last = listens(trace).at(-1)
+        return last?.mode === 'interject' && !(last.seedMs && last.seedMs > 0)
+      }, () => readFileSync(trace, 'utf8'))
+
+      voice.noteAssistant('b:1:0:0', '我去查一下今天的天气。')
+      await speakText('我去查一下今天的天气。')
+      const promptsBeforeAside = prompts().length
+      const heardBeforeAside = heard.length
+      emit({ type: 'utterance', text: '等一下', mode: 'interject' })
+      emit({ type: 'level', value: 0.11 })
+      await until(() => page.some((message) => message.type === 'voice-level' && message.value === 0.11))
+      assert.equal(prompts().length, promptsBeforeAside)
+      assert.equal(heard.length, heardBeforeAside)
+
+      voice.noteAssistant('b:1:0:0', '我去查一下今天的天气。明天')
+      emit({ type: 'utterance', text: '大肥鱼，把明天的也查一下', mode: 'interject' })
+      await until(() => heard.at(-1) === '大肥鱼，把明天的也查一下')
+      await until(() => traceOf(trace).some((item) => (item as { type?: string }).type === 'stop-speak'), () => readFileSync(trace, 'utf8'))
+      const speaksBeforeSilence = speaks(trace).length
+      voice.noteAssistant('b:1:0:0', '我去查一下今天的天气。明天会下雨。后天晴。')
+      voice.noteAssistant('b:1:0:2', '我先查一下。')
+      assert.equal(speaks(trace).length, speaksBeforeSilence)
+      voice.noteAssistant('b:1:1:0', '明天多云。')
+      await speakText('明天多云。')
+
+      voice.questionOpened()
+      await until(() => {
+        const last = listens(trace).at(-1)
+        return last?.mode === 'off' && last.device === false
+      }, () => readFileSync(trace, 'utf8'))
+      voice.questionClosed()
+      await until(() => {
+        const last = listens(trace).at(-1)
+        return last?.mode === 'interject' && last.device === true && last.seedMs === 0
+      }, () => readFileSync(trace, 'utf8'))
+
+      const stopsBefore = stops
+      const heardBeforeDismiss = heard.length
+      emit({ type: 'utterance', text: '大肥鱼退下吧', mode: 'interject' })
+      await until(() => page.some((message) => message.type === 'unpin') && stops === stopsBefore + 1)
+      assert.equal(heard.length, heardBeforeDismiss)
+      const goodbye = await speakText('好的，再见')
+      const lines = traceOf(trace) as { type?: string, text?: string }[]
+      const goodbyeAt = lines.findIndex((item) => item.type === 'speak' && item.text === '好的，再见')
+      const stopAt = lines.findLastIndex((item, index) => index < goodbyeAt && item.type === 'stop-speak')
+      assert.ok(stopAt >= 0 && stopAt < goodbyeAt)
+      assert.equal(voice.listenMode(), 'off')
+      emit({ type: 'playback', id: goodbye.id, phase: 'end' })
+      await until(() => !voice.snapshot().queued.includes('好的，再见'))
+      assert.equal(voice.listenMode(), 'off')
+      voice.endTurn()
+      assert.equal(voice.listenMode(), 'wake')
+
+      voice.beginTurn()
+      voice.noteAssistant('b:2:0:0', '今天晴。')
+      voice.endTurn()
+      await speakText('今天晴。')
+      assert.equal(voice.listenMode(), 'interject')
+      emit({ type: 'utterance', text: '大肥鱼，再查一次', mode: 'interject' })
+      await until(() => heard.at(-1) === '大肥鱼，再查一次')
+      await until(() => {
+        const again = traceOf(trace) as { type?: string }[]
+        return again.filter((item) => item.type === 'stop-speak').length >= 2
+      }, () => readFileSync(trace, 'utf8'))
+
+      voice.beginTurn()
+      voice.noteAssistant('b:3:0:0', '后天也晴。')
+      voice.endTurn()
+      await speakText('后天也晴。')
+      assert.equal(voice.snapshot().pinned, false)
+      assert.equal(voice.listenMode(), 'interject')
+      emit({ type: 'speech', open: true })
+      emit({ type: 'playback', id: speaks(trace).findLast((item) => item.text === '后天也晴。')?.id, phase: 'end' })
+      await until(() => page.some((message) => message.type === 'voice-hold' && message.hold === false))
+      assert.equal(voice.listenMode(), 'interject')
+      assert.equal(listens(trace).at(-1)?.mode, 'interject')
+      emit({ type: 'speech', open: false })
+      await until(() => listens(trace).at(-1)?.mode === 'wake', () => readFileSync(trace, 'utf8'))
+      emit({ type: 'utterance', text: '大肥鱼，再查一次', mode: 'interject' })
+      await until(() => heard.filter((text) => text === '大肥鱼，再查一次').length >= 2)
+
+      voice.setPinned(true)
+      voice.beginTurn()
+      voice.noteAssistant('b:4:0:0', '大后天晴。')
+      voice.endTurn()
+      const pinnedClosing = await speakText('大后天晴。')
+      assert.equal(voice.listenMode(), 'interject')
+      const promptsBeforeDrop = prompts().length
+      const heardBeforeDrop = heard.length
+      emit({ type: 'speech', open: true })
+      emit({ type: 'playback', id: pinnedClosing.id, phase: 'end' })
+      await until(() => !voice.snapshot().queued.includes('大后天晴。'))
+      assert.equal(voice.listenMode(), 'command')
+      emit({ type: 'speech', open: false })
+      await until(() => voice.listenMode() === 'command')
+      emit({ type: 'utterance', text: '等一下', mode: 'interject' })
+      emit({ type: 'level', value: 0.12 })
+      await until(() => page.some((message) => message.type === 'voice-level' && message.value === 0.12))
+      assert.equal(prompts().length, promptsBeforeDrop)
+      assert.equal(heard.length, heardBeforeDrop)
+
+      settings.interjectKeyword = ''
+      voice.applySettings()
+      voice.beginTurn()
+      assert.equal(voice.listenMode(), 'off')
+      settings.interjectKeyword = '，。'
+      voice.applySettings()
+      assert.equal(voice.listenMode(), 'off')
+    } finally {
+      voice.close()
+      child.kill()
+    }
+
+    const quietDir = join(root, 'no-aec')
+    const quietInject = join(quietDir, 'inject.ndjson')
+    const quietTrace = join(quietDir, 'trace.ndjson')
+    mkdirSync(quietDir, { recursive: true })
+    writeFileSync(quietInject, '')
+    writeFileSync(quietTrace, '')
+    const quietChild = spawn(process.execPath, [script], {
+      env: { ...process.env, VOICE_INJECT: quietInject, VOICE_TRACE: quietTrace, VOICE_AEC: '0' },
+      stdio: ['pipe', 'pipe', 'inherit'],
+    })
+    const quiet = new VoiceController({
+      settings: () => settingsWith(),
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send() {},
+      open: () => linkProcess(quietChild),
+    })
+    quiet.start()
+    try {
+      await until(() => listenModes(quietTrace).includes('wake'), () => readFileSync(quietTrace, 'utf8'))
+      quiet.beginTurn()
+      assert.equal(quiet.listenMode(), 'interject')
+      quiet.noteAssistant('b:5:0:0', '今天晴。')
+      quiet.endTurn()
+      await until(() => speaks(quietTrace).some((item) => item.text === '今天晴。'), () => readFileSync(quietTrace, 'utf8'))
+      assert.equal(quiet.listenMode(), 'off')
+    } finally {
+      quiet.close()
+      quietChild.kill()
+    }
+
+    const children = [fakeChild(), fakeChild()]
+    let opened = 0
+    let halted: VoiceController
+    halted = new VoiceController({
+      settings: () => settingsWith(),
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send() {},
+      open: () => {
+        const next = children[opened++]
+        if (opened === 2) halted.haltSpeech()
+        return next?.link
+      },
+    })
+    halted.start()
+    children[0]?.emit({ type: 'mic', open: true })
+    halted.setPinned(true)
+    halted.beginTurn()
+    halted.haltSpeech()
+    assert.equal(halted.listenMode(), 'off')
+    const speaksBefore = children[0]?.sent.filter((item) => item.type === 'speak').length ?? 0
+    halted.noteAssistant('b:9:0:0', '今天晴。')
+    assert.equal(children[0]?.sent.filter((item) => item.type === 'speak').length, speaksBefore)
+    halted.endTurn()
+    assert.equal(children[0]?.sent.filter((item) => item.type === 'speak').length, speaksBefore)
+    assert.equal(halted.listenMode(), 'command')
+    halted.beginTurn()
+    halted.noteAssistant('b:9:1:0', '明天多云。')
+    assert.equal(children[0]?.sent.some((item) => item.type === 'speak' && item.text === '明天多云。'), true)
+    children[0]?.die()
+    assert.equal(opened, 2)
+    children[1]?.emit({ type: 'mic', open: true })
+    halted.noteAssistant('b:9:2:0', '后天晴。')
+    assert.equal(children[1]?.sent.some((item) => item.type === 'speak'), false)
   })
 })

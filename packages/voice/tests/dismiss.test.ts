@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { isDismiss } from '../src/dismiss.ts'
+import { isDismiss, isInterject } from '../src/dismiss.ts'
 
 const phrases = ['你退下吧', '退下吧']
 
@@ -32,5 +32,13 @@ describe('dismiss phrases', () => {
     assert.equal(isDismiss('你退下吧', []), false)
     assert.equal(isDismiss('。', ['。']), false)
     assert.equal(isDismiss('你退下吧。', ['  你退下吧。 ']), true)
+  })
+
+  it('matches an interject keyword anywhere in the sentence', () => {
+    assert.equal(isInterject('大肥鱼，你给我把明天的也查一下', '大肥鱼'), true)
+    assert.equal(isInterject('大 肥 鱼。', '大肥鱼'), true)
+    assert.equal(isInterject('肥鱼把明天的也查一下', '大肥鱼'), false)
+    assert.equal(isInterject('大肥', '大肥鱼'), false)
+    assert.equal(isInterject('大肥鱼，再查一次', ''), false)
   })
 })

@@ -30,7 +30,7 @@ function pull() {
 }
 
 setInterval(pull, 15)
-process.stdout.write(`${JSON.stringify({ type: 'mic', open: true })}\n`)
+process.stdout.write(`${JSON.stringify({ type: 'mic', open: true, aec: process.env.VOICE_AEC !== '0' })}\n`)
 
 const lines = createInterface({ input: process.stdin })
 lines.on('close', () => process.exit(0))
