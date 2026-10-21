@@ -144,6 +144,84 @@ describe('voice controller with a script child', () => {
       child.kill()
     }
   })
+
+  it('releases the microphone for a question card and restores the column that fits afterwards', async () => {
+    const dir = join(root, 'question')
+    const inject = join(dir, 'inject.ndjson')
+    const trace = join(dir, 'trace.ndjson')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(inject, '')
+    writeFileSync(trace, '')
+    const settings = settingsWith()
+    let asr = true
+    const child = spawn(process.execPath, [script], {
+      env: { ...process.env, VOICE_INJECT: inject, VOICE_TRACE: trace },
+      stdio: ['pipe', 'pipe', 'inherit'],
+    })
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr, tts: true }),
+      now: () => 0,
+      send() {},
+      open: () => linkProcess(child),
+    })
+    const lastAfter = async (before: number, match: (item: { mode?: string, device?: boolean }) => boolean) => {
+      await until(() => listens(trace).length > before && match(listens(trace).at(-1) ?? {}), () => readFileSync(trace, 'utf8'))
+    }
+    voice.start()
+    try {
+      await until(() => listenModes(trace).includes('wake'), () => readFileSync(trace, 'utf8'))
+      voice.beginTurn()
+      let mark = listens(trace).length
+      voice.questionOpened()
+      await lastAfter(mark, (item) => item.mode === 'off' && item.device === false)
+      mark = listens(trace).length
+      voice.questionClosed()
+      await lastAfter(mark, (item) => item.mode === 'interject' && item.device === true)
+      voice.endTurn()
+
+      voice.setPinned(true)
+      mark = listens(trace).length
+      voice.questionOpened()
+      await lastAfter(mark, (item) => item.mode === 'off' && item.device === false)
+      mark = listens(trace).length
+      voice.questionClosed()
+      await lastAfter(mark, (item) => item.mode === 'command' && item.device === true)
+
+      voice.setPinned(false)
+      mark = listens(trace).length
+      voice.questionOpened()
+      await lastAfter(mark, (item) => item.mode === 'off' && item.device === false)
+      mark = listens(trace).length
+      voice.questionClosed()
+      await lastAfter(mark, (item) => item.mode === 'wake' && item.device === true)
+
+      settings.commandEnabled = false
+      voice.applySettings()
+      voice.setPinned(true)
+      mark = listens(trace).length
+      voice.questionOpened()
+      await lastAfter(mark, (item) => item.mode === 'off' && item.device === false)
+      mark = listens(trace).length
+      voice.questionClosed()
+      await lastAfter(mark, (item) => item.mode === 'off' && item.device === true)
+      assert.equal(voice.listenMode(), 'off')
+
+      asr = false
+      settings.commandEnabled = true
+      voice.setPinned(false)
+      voice.applySettings()
+      mark = listens(trace).length
+      voice.questionOpened()
+      await lastAfter(mark, (item) => item.mode === 'off' && item.device === false)
+      mark = listens(trace).length
+      voice.questionClosed()
+      await lastAfter(mark, (item) => item.mode === 'wake' && item.device === true)
+    } finally {
+      voice.close()
+      child.kill()
+    }
+  })
 })
 
 function settingsWith(patch: Partial<typeof DEFAULT_VOICE_SETTINGS> = {}): typeof DEFAULT_VOICE_SETTINGS {

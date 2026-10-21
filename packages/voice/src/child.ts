@@ -14,7 +14,9 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { contextFromFiles, keywordLines } from './keywords.ts'
 import { LevelMeter } from './level.ts'
-import { needsMicrophone } from './listen.ts'
+import { needsMicrophone, transcribing, type ListenMode } from './listen.ts'
+import { isEcho, type SpokenLine } from './echo.ts'
+import { captureBinary, CpalCapture, NativeCapture, type CaptureSource } from './capture.ts'
 import { type VoiceSettings } from './settings.ts'
 
 const require = createRequire(import.meta.url)
@@ -32,8 +34,6 @@ interface ConfigureMessage {
     readonly tts?: string
   }
 }
-
-type ListenMode = 'off' | 'wake' | 'command'
 
 const emit = (message: unknown) => {
   // A pipe buffers process.stdout, so the host would not see a wake or a
@@ -194,18 +194,6 @@ function concat(...parts: Float32Array[]): Float32Array {
   return out
 }
 
-function toMono(data: Float32Array, channels: number): Float32Array {
-  if (channels <= 1) return data
-  const frames = Math.floor(data.length / channels)
-  const out = new Float32Array(frames)
-  for (let frame = 0; frame < frames; frame += 1) {
-    let sum = 0
-    for (let channel = 0; channel < channels; channel += 1) sum += data[frame * channels + channel] ?? 0
-    out[frame] = sum / channels
-  }
-  return out
-}
-
 interface Native {
   sherpa: any
   cpal: any
@@ -232,13 +220,21 @@ class Engine {
   private vad: VadEar | undefined
   private worker: Worker | undefined
   private workerReady = false
-  private jobs: Float32Array[] = []
+  private jobs: { samples: Float32Array, mode: ListenMode, from: number, to: number }[] = []
   private decoding = false
   private jobId = 0
-  private readonly pending = new Map<number, true>()
-  private input: { close(): void, play(): void } | undefined
-  private resampler: { resample(samples: Float32Array): Float32Array } | undefined
-  private channels = 1
+  private readonly pending = new Map<number, { mode: ListenMode, from: number, to: number }>()
+  /** The mode at the moment this utterance opened. command and interject share one segment. */
+  private segmentMode: ListenMode = 'off'
+  private capture: CaptureSource | undefined
+  /** False until the host's first listen, so a restart during a question card does not flash the mic. */
+  private hostDevice = false
+  /** Once native capture cannot be used, this process stays on node-cpal. */
+  private useCpal = false
+  private sawReady = false
+  private captureFailures: number[] = []
+  private relaunchTimer: ReturnType<typeof setTimeout> | undefined
+  private spoken: SpokenLine[] = []
   private audioHost: any
   private ttsWorker: Worker | undefined
   private readonly ttsWait = new Map<number, (message: { samples?: ArrayBuffer, sampleRate?: number, error?: string }) => void>()
@@ -264,18 +260,22 @@ class Engine {
     this.syncMic()
   }
 
-  listen(mode: ListenMode, seedMs: number): void {
+  listen(mode: ListenMode, seedMs: number, device = true): void {
     const previous = this.mode
     this.mode = mode
-    if (previous === 'command' && mode !== 'command') this.vad?.reset()
-    if (mode === 'wake' && previous !== 'wake' && this.kws && this.kwsStream) this.kws.reset(this.kwsStream)
-    if (mode === 'command' && previous !== 'command') {
-      this.meter.reset()
-    } else if (previous === 'command' && mode !== 'command') {
-      // Put the meter down before the page hears the mode change.
+    const wasTranscribing = transcribing(previous)
+    const nowTranscribing = transcribing(mode)
+    if (wasTranscribing && !nowTranscribing) {
+      this.vad?.reset()
       emit({ type: 'level', value: 0 })
     }
-    if (mode === 'command' && previous !== 'command' && seedMs > 0) this.vad?.seed(this.ring.last(seedMs))
+    if (mode === 'wake' && previous !== 'wake' && this.kws && this.kwsStream) this.kws.reset(this.kwsStream)
+    if (!wasTranscribing && nowTranscribing) {
+      this.meter.reset()
+      if (seedMs > 0) this.vad?.seed(this.ring.last(seedMs))
+    }
+    this.hostDevice = device
+    this.syncMic()
   }
 
   speak(id: string, text: string): void {
@@ -303,8 +303,11 @@ class Engine {
       }
       emit({ type: 'playback', id, phase: 'start' })
       try {
+        const line = { text, startedAt: Date.now(), endedAt: undefined as number | undefined }
+        this.noteSpoken(line)
         this.player = playPcm(this.native.cpal, this.ensureHost(), samples, sampleRate, (stopped) => {
           this.player = undefined
+          line.endedAt = Date.now()
           // The command that follows must not seed the recognizer with the speaker's own tail.
           this.ring.clear()
           if (token !== this.speakToken && !stopped) return
@@ -329,8 +332,9 @@ class Engine {
     else if (armed) emit({ type: 'playback', id: armed.id, phase: 'end', stopped: true })
   }
 
-  /** Keep the input device only while a listening column is switched on and ready. */
+  /** Keep the input device only while the host asked for it and a listening column can run. */
   private micWanted(): boolean {
+    if (!this.hostDevice) return false
     const settings = this.settings
     const paths = this.paths
     if (!settings || !paths) return false
@@ -355,44 +359,78 @@ class Engine {
   }
 
   private stopMic(): void {
-    const input = this.input
-    this.input = undefined
-    this.resampler = undefined
-    this.channels = 1
-    if (!input) return
-    try {
-      input.close()
-    } catch (error) {
-      // The device may already be gone; the indicator still has to clear.
-      fail(error)
-    }
-    // Releasing the device on purpose is not a microphone failure, so no `mic:
-    // false` goes out. The Host reports "no microphone needed" from the settings
-    // and the models, and only a real failure still reaches the user.
+    if (this.relaunchTimer) clearTimeout(this.relaunchTimer)
+    this.relaunchTimer = undefined
+    const capture = this.capture
+    this.capture = undefined
+    this.sawReady = false
+    this.ring.clear()
+    try { capture?.close() } catch (error) { fail(error) }
   }
 
   startMic(): void {
-    if (this.input) return
-    try {
-      const { cpal, sherpa } = this.native
-      const device = this.ensureHost().defaultInputDevice()
-      if (!device) throw new Error('no input device')
-      const capture = pickCapture(cpal, device)
-      this.channels = capture.channels
-      this.resampler = capture.needsResample ? new sherpa.LinearResampler(capture.rate, TARGET_RATE) : undefined
-      const stream = device.buildInputStream(
-        capture.config,
-        cpal.SampleFormat.F32,
-        (data: Float32Array) => this.onAudio(data),
-        (error: unknown) => this.onInputError(error),
-      )
-      stream.play()
-      this.input = stream
-      emit({ type: 'mic', open: true })
-    } catch (error) {
-      fail(error)
-      emit({ type: 'mic', open: false })
+    if (this.capture) return
+    const binary = this.useCpal ? undefined : captureBinary()
+    if (!binary) {
+      this.useCpal = true
+      this.openCpal()
+      return
     }
+    this.openNative(binary)
+  }
+
+  private openNative(binary: string): void {
+    const source = new NativeCapture(binary)
+    this.capture = source
+    source.start({
+      onPcm: (samples) => this.onAudio(samples),
+      onReady: ({ aec }) => {
+        this.sawReady = true
+        emit({ type: 'mic', open: true, aec })
+      },
+      onFailure: (reason, detail) => this.onCaptureFailure(reason, detail),
+    })
+  }
+
+  private openCpal(): void {
+    const source = new CpalCapture(this.native)
+    this.capture = source
+    source.start({
+      onPcm: (samples) => this.onAudio(samples),
+      onReady: ({ aec }) => {
+        this.sawReady = true
+        emit({ type: 'mic', open: true, aec })
+      },
+      onFailure: (reason, detail) => this.onCaptureFailure(reason, detail),
+    })
+  }
+
+  private onCaptureFailure(reason: 'mic-denied' | 'no-device' | 'unavailable' | 'failed' | 'crashed', detail: string): void {
+    const capture = this.capture
+    this.capture = undefined
+    try { capture?.close() } catch { /* already closing */ }
+    if (reason === 'mic-denied') {
+      emit({ type: 'mic', open: false })
+      return
+    }
+    if (this.useCpal) {
+      emit({ type: 'mic', open: false })
+      return
+    }
+    const now = Date.now()
+    this.captureFailures = this.captureFailures.filter((at) => now - at < 60_000)
+    this.captureFailures.push(now)
+    if (!this.sawReady || this.captureFailures.length >= 3) {
+      this.useCpal = true
+      this.sawReady = false
+      fail(new Error(`capture fallback: ${reason} ${detail}`))
+      if (this.micWanted()) this.startMic()
+      return
+    }
+    this.relaunchTimer = setTimeout(() => {
+      this.relaunchTimer = undefined
+      if (this.micWanted()) this.startMic()
+    }, 1000)
   }
 
   close(): void {
@@ -400,17 +438,6 @@ class Engine {
     this.stopMic()
     this.stopAsr()
     void this.ttsWorker?.terminate()
-  }
-
-  /** A late callback is not a missing microphone. Permission and device failures are. */
-  private onInputError(error: unknown): void {
-    const message = error instanceof Error ? error.message : String(error)
-    fail(error)
-    if (message.includes('underrun') || message.includes('overrun')) {
-      try { this.input?.play() } catch (playError) { fail(playError) }
-      return
-    }
-    emit({ type: 'mic', open: false })
   }
 
   private ensureHost(): any {
@@ -448,18 +475,17 @@ class Engine {
     return worker
   }
 
-  private onAudio(data: Float32Array): void {
-    let mono = toMono(data, this.channels)
-    if (this.resampler) mono = this.resampler.resample(mono)
-    this.ring.push(mono)
+  /** 16 kHz mono PCM from the capture source. */
+  private onAudio(samples: Float32Array): void {
+    this.ring.push(samples)
     if (this.mode === 'wake') {
-      this.feedWake(mono)
+      this.feedWake(samples)
       return
     }
-    if (this.mode !== 'command') return
-    const level = this.meter.push(mono, Date.now())
+    if (!transcribing(this.mode)) return
+    const level = this.meter.push(samples, Date.now())
     if (level !== undefined) emit({ type: 'level', value: level })
-    this.vad?.push(mono)
+    this.vad?.push(samples)
   }
 
   private feedWake(samples: Float32Array): void {
@@ -572,6 +598,7 @@ class Engine {
           debug: 0,
         }, 31.5)
         this.vad = new VadEar(detector, 0.3, 0.5, (open) => {
+          if (open) this.segmentMode = this.mode
           emit({ type: 'speech', open })
         }, (samples) => this.enqueue(samples))
       } catch (error) {
@@ -594,9 +621,17 @@ class Engine {
         return
       }
       this.decoding = false
+      const meta = typeof message.id === 'number' ? this.pending.get(message.id) : undefined
       if (typeof message.id === 'number') this.pending.delete(message.id)
       if (message.error) fail(message.error)
-      else if (message.text) emit({ type: 'utterance', text: message.text })
+      else if (message.text) {
+        const echo = meta !== undefined && isEcho(message.text, this.spoken, { from: meta.from, to: meta.to }, [
+          this.settings?.interjectKeyword ?? '',
+          ...(this.settings?.dismissPhrases ?? []),
+        ])
+        if (echo) process.stderr.write('echo dropped\n')
+        else emit({ type: 'utterance', text: message.text, ...(meta ? { mode: meta.mode } : {}) })
+      }
       emit({ type: 'speech', open: false })
       this.pump()
     })
@@ -620,20 +655,32 @@ class Engine {
 
   private enqueue(samples: Float32Array): void {
     const copy = new Float32Array(samples)
-    this.jobs.push(copy)
+    const mode = transcribing(this.segmentMode) ? this.segmentMode : this.mode
+    this.jobs.push({
+      samples: copy,
+      mode,
+      from: Date.now() - samples.length / 16 - 500,
+      to: Date.now(),
+    })
     this.pump()
   }
 
   private pump(): void {
     if (!this.workerReady || this.decoding || this.jobs.length === 0 || !this.worker) return
-    const samples = this.jobs.shift()
-    if (!samples) return
+    const job = this.jobs.shift()
+    if (!job) return
     this.decoding = true
     const id = ++this.jobId
-    this.pending.set(id, true)
-    const bytes = new ArrayBuffer(samples.byteLength)
-    new Uint8Array(bytes).set(new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength))
+    this.pending.set(id, { mode: job.mode, from: job.from, to: job.to })
+    const bytes = new ArrayBuffer(job.samples.byteLength)
+    new Uint8Array(bytes).set(new Uint8Array(job.samples.buffer, job.samples.byteOffset, job.samples.byteLength))
     this.worker.postMessage({ id, samples: bytes }, [bytes])
+  }
+
+  private noteSpoken(line: SpokenLine): void {
+    const cutoff = Date.now() - 30_000
+    this.spoken = this.spoken.filter((item) => item.endedAt === undefined || item.endedAt >= cutoff)
+    this.spoken.push(line)
   }
 }
 
@@ -727,24 +774,6 @@ function resampleLinear(samples: Float32Array, from: number, to: number): Float3
   return out
 }
 
-function pickCapture(cpal: any, device: any): { config: unknown, channels: number, rate: number, needsResample: boolean } {
-  const ranges = [...device.supportedInputConfigs()]
-  const f32 = ranges.filter((range: any) => range.sampleFormat() === cpal.SampleFormat.F32)
-  const exact = f32.find((range: any) => range.channels() === 1 && range.containsRate(TARGET_RATE))
-    ?? f32.find((range: any) => range.containsRate(TARGET_RATE))
-  if (exact) {
-    return {
-      config: new cpal.StreamConfig({ channels: exact.channels(), sampleRate: TARGET_RATE, bufferSize: cpal.BufferSize.Default }),
-      channels: exact.channels(),
-      rate: TARGET_RATE,
-      needsResample: false,
-    }
-  }
-  const fallback = device.defaultInputConfig()
-  const config = fallback.config()
-  return { config, channels: config.channels, rate: config.sampleRate, needsResample: config.sampleRate !== TARGET_RATE }
-}
-
 function main(): void {
   const native = loadNative()
   const engine = native ? new Engine(native) : undefined
@@ -763,8 +792,9 @@ function main(): void {
         engine?.configure(message as ConfigureMessage)
         return
       }
-      if (message.type === 'listen' && (message.mode === 'off' || message.mode === 'wake' || message.mode === 'command')) {
-        engine?.listen(message.mode, message.seedMs ?? 0)
+      if (message.type === 'listen' && (message.mode === 'off' || message.mode === 'wake' || message.mode === 'command' || message.mode === 'interject')) {
+        const device = (message as { device?: unknown }).device
+        engine?.listen(message.mode, message.seedMs ?? 0, device === false ? false : true)
         return
       }
       if (message.type === 'speak' && typeof message.id === 'string') {
