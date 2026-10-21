@@ -41,4 +41,12 @@ describe('dismiss phrases', () => {
     assert.equal(isInterject('大肥', '大肥鱼'), false)
     assert.equal(isInterject('大肥鱼，再查一次', ''), false)
   })
+
+  it('accepts the ASR homophone of an interject keyword but not a different sound', () => {
+    assert.equal(isInterject('大飞鱼，把明天的也查一下', '大肥鱼'), true)
+    assert.equal(isInterject('大飞鱼打开抖音。', '大肥鱼'), true)
+    assert.equal(isInterject('大肥鱼', '大飞鱼'), true)
+    assert.equal(isInterject('大飞机，把明天的也查一下', '大肥鱼'), false)
+    assert.equal(isInterject('肥鱼', '大飞鱼'), false)
+  })
 })
