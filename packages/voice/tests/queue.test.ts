@@ -1,7 +1,9 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  bodyBusy,
   createQueue,
+  localBusy,
   queueView,
   reduceQueue,
   type QueueEffect,
@@ -236,6 +238,38 @@ describe('playback queue', () => {
     const again = apply(state, { type: 'question', text: '另一句' })
     assert.deepEqual(again.effects, [])
     assert.equal(queueView(again.state).playing?.text, '我有几个问题，你来选一下')
+  })
+
+  it('counts agent body text as busy, and not a local reply or a question prompt', () => {
+    const unclassified = apply(createQueue(true), { type: 'text', text: '我去查一下今天的天气。' })
+    assert.equal(unclassified.state.playing?.kind, 'unclassified')
+    assert.equal(bodyBusy(unclassified.state), true)
+    assert.equal(localBusy(unclassified.state), false)
+
+    const mid = apply(unclassified.state, { type: 'tool' })
+    assert.equal(mid.state.playing?.kind, 'mid')
+    assert.equal(bodyBusy(mid.state), true)
+
+    const closing = apply(createQueue(true), { type: 'text', text: '今天晴。' })
+    const ended = apply(closing.state, { type: 'turn-end' })
+    assert.equal(ended.state.playing?.kind, 'closing')
+    assert.equal(bodyBusy(ended.state), true)
+
+    let queued = apply(createQueue(true), { type: 'local', text: '我在' }).state
+    queued = apply(queued, { type: 'text', text: '今天晴。' }).state
+    queued = apply(queued, { type: 'turn-end' }).state
+    assert.equal(queued.playing?.kind, 'local')
+    assert.equal(queued.closing !== null, true)
+    assert.equal(bodyBusy(queued), true)
+
+    const local = apply(createQueue(true), { type: 'local', text: '我在' })
+    assert.equal(localBusy(local.state), true)
+    assert.equal(bodyBusy(local.state), false)
+
+    const prompt = apply(createQueue(true), { type: 'question', text: '我有几个问题，你来选一下' })
+    assert.equal(prompt.state.playing?.kind, 'question')
+    assert.equal(bodyBusy(prompt.state), false)
+    assert.equal(localBusy(prompt.state), false)
   })
 })
 

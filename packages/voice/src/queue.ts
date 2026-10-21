@@ -75,6 +75,18 @@ export function playbackBusy(state: QueueState): boolean {
   return state.playing !== null || state.closing !== null || state.question !== null
 }
 
+/** Agent 正文正在播，或收尾还在队列里。途中句、未归类句、收尾都算；提问提示语、本地短句不算。 */
+export function bodyBusy(state: QueueState): boolean {
+  if (state.closing !== null) return true
+  const kind = state.playing?.kind
+  return kind === 'unclassified' || kind === 'mid' || kind === 'closing'
+}
+
+/** 唤醒回复语或退下回复语正在播。 */
+export function localBusy(state: QueueState): boolean {
+  return state.playing?.kind === 'local'
+}
+
 /**
  * The stop button stays up for a closing line or a question prompt only.
  * A wake reply, a dismiss reply, and a mid-turn sentence do not hold it.

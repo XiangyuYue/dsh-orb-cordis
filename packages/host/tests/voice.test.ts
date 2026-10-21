@@ -89,7 +89,7 @@ describe('voice controller with a script child', () => {
     emit({ type: 'utterance', text: '查一下今天的天气' })
     await until(() => page.some((message) => message.type === 'voice-prompt' && message.text === '查一下今天的天气'))
     voice.beginTurn()
-    assert.equal(voice.listenMode(), 'off')
+    assert.equal(voice.listenMode(), 'interject')
     voice.endTurn()
     await until(() => voice.listenMode() === 'command')
 
@@ -113,7 +113,7 @@ describe('voice controller with a script child', () => {
     voice.setPinned(true)
     voice.beginTurn()
     voice.setPinned(false)
-    assert.equal(voice.listenMode(), 'off')
+    assert.equal(voice.listenMode(), 'interject')
     voice.endTurn()
     assert.equal(voice.listenMode(), 'wake')
 

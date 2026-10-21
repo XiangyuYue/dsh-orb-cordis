@@ -6,7 +6,12 @@
 
 import { hasWakeWord } from './settings.ts'
 
-export type ListenMode = 'off' | 'wake' | 'command'
+export type ListenMode = 'off' | 'wake' | 'command' | 'interject'
+
+/** command 和 interject 都是「转写开着」。 */
+export function transcribing(mode: ListenMode): boolean {
+  return mode === 'command' || mode === 'interject'
+}
 
 export interface MicInput {
   /** Wake switch is on. */
@@ -39,31 +44,47 @@ export interface ListenInput {
   readonly agentBusy: boolean
   /** A question card is waiting for a click. */
   readonly questionOpen: boolean
-  /**
-   * The speaker has audio, or the queue still holds a closing line, a question
-   * prompt, a wake reply, or a dismiss reply. TTS being off never sets this.
-   */
-  readonly playbackBusy: boolean
-  /** Wake switch is on and the wake model files are complete. */
+  /** queue.bodyBusy */
+  readonly bodyBusy: boolean
+  /** queue.localBusy */
+  readonly localBusy: boolean
+  /** 停止或退下已经发出、执行还没真正停下 */
+  readonly stopping: boolean
+  /** Wake switch is on, the wake word is not empty, and the wake model files are complete. */
   readonly wakeEnabled: boolean
   /** Voice-input switch is on and the official ASR model files are complete. */
   readonly commandEnabled: boolean
+  /** commandEnabled, and the interject keyword is not empty. */
+  readonly interjectEnabled: boolean
+  /** This capture of the child process includes echo cancellation. */
+  readonly echoCancel: boolean
   /** The child process has the microphone. */
   readonly micOpen: boolean
 }
 
 /**
- * `off`, `wake`, or `command`.
+ * `off`, `wake`, `command`, or `interject`.
  *
- * A busy agent, an open question card, or playback wins and closes both ears.
- * Otherwise an unpinned ball listens for the wake word, and a pinned ball
- * listens for a command. A column whose switch is off or whose model is missing
- * does not happen. A closed microphone closes both.
+ * A question card, a local reply, a stop that has not settled, or a closed
+ * microphone wins. A busy agent or agent body audio listens for an interjection
+ * when that column is on and, while body audio is playing, echo cancellation is
+ * present. Otherwise an unpinned ball listens for the wake word, and a pinned
+ * ball listens for a command.
  */
 export function listenMode(input: ListenInput): ListenMode {
-  if (input.agentBusy || input.questionOpen || input.playbackBusy) return 'off'
-  if (!input.micOpen) return 'off'
+  if (input.questionOpen || input.localBusy || input.stopping || !input.micOpen) return 'off'
+  if (input.agentBusy || input.bodyBusy) {
+    if (!input.interjectEnabled) return 'off'
+    // 没有回声消除时，自己的播报会被转写进去。降级成正文播报期间不听。
+    if (input.bodyBusy && !input.echoCancel) return 'off'
+    return 'interject'
+  }
   if (!input.pinned && input.wakeEnabled) return 'wake'
   if (input.pinned && input.commandEnabled) return 'command'
   return 'off'
+}
+
+/** 子进程要不要占着麦克风设备。提问卡在等时一律放开。 */
+export function holdsDevice(input: MicInput & { readonly questionOpen: boolean }): boolean {
+  return !input.questionOpen && needsMicrophone(input)
 }

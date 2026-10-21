@@ -9,11 +9,13 @@ import { fork, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
-import { isDismiss } from '@dsh-orb/voice/dismiss'
+import { isDismiss, normalizeUtterance } from '@dsh-orb/voice/dismiss'
 import { createIdle, stepIdle, type IdleClock } from '@dsh-orb/voice/idle'
 import { listenMode, needsMicrophone, type ListenMode } from '@dsh-orb/voice/listen'
 import {
+  bodyBusy,
   createQueue,
+  localBusy,
   queueView,
   reduceQueue,
   voiceHold,
@@ -481,14 +483,23 @@ export class VoiceController {
 
   private pushListen(force: boolean): void {
     const settings = this.options.settings()
+    const presence = this.options.presence()
+    const commandEnabled = settings.commandEnabled && presence.asr
     const mode = listenMode({
       pinned: this.pinned,
       agentBusy: this.agentBusy,
       questionOpen: this.questionOpen,
-      playbackBusy: queueView(this.queue).playbackBusy,
+      bodyBusy: bodyBusy(this.queue),
+      localBusy: localBusy(this.queue),
+      // The stopping flag arrives with dismiss and the stop button. Until then a turn is not stopping.
+      stopping: false,
       // An empty wake list means there is no wake word, even when the switch and the model are ready.
-      wakeEnabled: settings.wakeEnabled && hasWakeWord(settings.wakeWords) && this.options.presence().wake,
-      commandEnabled: settings.commandEnabled && this.options.presence().asr,
+      wakeEnabled: settings.wakeEnabled && hasWakeWord(settings.wakeWords) && presence.wake,
+      commandEnabled,
+      // Punctuation alone never matches, so it must not keep transcription open during a turn.
+      interjectEnabled: commandEnabled && normalizeUtterance(settings.interjectKeyword) !== '',
+      // Echo cancellation is reported by a later mic message. Without it, body audio stays quiet.
+      echoCancel: false,
       micOpen: this.micOpen,
     })
     if (!force && mode === this.mode) return
