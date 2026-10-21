@@ -488,6 +488,7 @@ function main() {
       setProcessOpen(processGroup, false)
       refreshProcessLabel(processGroup)
     }
+    if (!pinned && !pointerInside) scheduleCollapse()
   }
 
   function applyDirection(state) {
@@ -727,12 +728,13 @@ function main() {
   }
 
   /**
-   * The voice-input meter sits on the composer's top edge. It is shown only while the
-   * host is listening for a command; the level fades out whenever that column stops.
+   * The voice-input meter sits on the composer's top edge. It stays up whenever
+   * transcription is open, including while the agent is still working.
    */
   function renderVoiceMeter() {
     if (voiceMeter === null) return
-    const active = voiceMode === 'command' && expanded && !running && !asking()
+    const listening = voiceMode === 'command' || voiceMode === 'interject'
+    const active = listening && expanded && !asking()
     voiceMeter.classList.toggle('active', active)
     const level = active ? Math.max(0, Math.min(1, voiceLevel)) : 0
     voiceMeter.style.setProperty('--voice-level', level.toFixed(3))
@@ -2534,14 +2536,16 @@ function main() {
   api.onUnpin?.(() => { unpinFromHost() })
   api.onVoiceHold?.((hold) => { applyVoiceHold(hold) })
   api.onVoiceMode?.((mode) => {
-    voiceMode = mode === 'command' ? 'command' : 'off'
-    if (voiceMode === 'command') voiceLevel = 0
+    const next = mode === 'command' || mode === 'interject' ? mode : 'off'
+    if (voiceMode === 'off' && next !== 'off') voiceLevel = 0
+    voiceMode = next
     renderVoiceMeter()
   })
   api.onVoiceLevel?.((level) => {
     if (typeof level !== 'number' || !Number.isFinite(level)) return
     voiceLevel = Math.max(0, Math.min(1, level))
-    if (voiceMode === 'command') renderVoiceMeter()
+    const listening = voiceMode === 'command' || voiceMode === 'interject'
+    if (listening) renderVoiceMeter()
   })
   api.onVoicePrompt?.((text) => { void acceptVoicePrompt(text) })
   api.onAttach((text) => {

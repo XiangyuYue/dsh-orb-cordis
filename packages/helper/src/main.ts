@@ -460,7 +460,7 @@ function deliver(message: unknown): void {
   }
   if (record.type === 'voice-mode') {
     const mode = (record as { mode?: unknown }).mode
-    if (mode === 'off' || mode === 'wake' || mode === 'command') {
+    if (mode === 'off' || mode === 'wake' || mode === 'command' || mode === 'interject') {
       win.webContents.send('orb:voice-mode', mode)
     }
     return
