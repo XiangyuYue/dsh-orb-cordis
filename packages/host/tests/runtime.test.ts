@@ -45,7 +45,7 @@ interface Harness {
   calls: {
     create: { workspaceId?: string; sessionId?: string; agentPreset?: string }[]
     resolve: string[]
-    prompt: { sessionId?: string; content?: { text?: string }[] }[]
+    prompt: { sessionId?: string; mode?: string; content?: { text?: string }[] }[]
     cancel: { sessionId?: string }[]
     selectModel: { sessionId?: string; model?: string; reasoningEffort?: string; saveAsDefault?: boolean }[]
     workspace?: { path?: string }
@@ -69,6 +69,8 @@ interface Harness {
   holdCancel: () => void
   releaseCancel: () => void
   failCancel: (error: Error) => void
+  /** The next `prompt` calls throw, after they are recorded. */
+  failPrompt: (error: Error) => void
   provided: Map<string, unknown>
 }
 
@@ -102,6 +104,7 @@ function boot(extra: {
   let cancelGate: Promise<void> | undefined
   let releaseCancel = () => {}
   let cancelError: Error | undefined
+  let promptError: Error | undefined
   let question: Harness['question'] = async (_request, next) => next()
   let streamListener: ((payload: unknown) => void) | undefined
   const provided = new Map<string, unknown>()
@@ -168,9 +171,10 @@ function boot(extra: {
         seedSession(sessionId)
         return { agent: { session: { id: sessionId } } }
       },
-      async prompt(request: { sessionId?: string; content?: { text?: string }[] }) {
+      async prompt(request: { sessionId?: string; mode?: string; content?: { text?: string }[] }) {
         calls.prompt.push(request)
         await promptGate
+        if (promptError !== undefined) throw promptError
         return { accepted: true as const }
       },
       async list() {
@@ -260,6 +264,7 @@ function boot(extra: {
     },
     releaseCancel() { releaseCancel() },
     failCancel(error: Error) { cancelError = error },
+    failPrompt(error: Error) { promptError = error },
     provided,
   }
 }
@@ -405,6 +410,45 @@ describe('ball control socket', { concurrency: 1 }, () => {
       client.send({ type: 'new' })
       await waitFor(() => chromeCount() > seen)
       assert.equal(harness.calls.create.length, 2, 'a conversation with a turn gets a fresh one')
+    } finally {
+      client.socket.destroy()
+    }
+  })
+
+  it('steers an interjection during a turn and queues one after the turn ends', async () => {
+    const harness = boot()
+    const client = await connect(harness.runtime)
+    const interject = (text: string) => (harness.runtime as unknown as { onInterject(text: string): Promise<void> }).onInterject(text)
+    try {
+      client.send({ type: 'prompt', text: '查一下今天的天气' })
+      await waitFor(() => harness.calls.prompt.length === 1)
+      const running = liveTurnCount(client.messages)
+      await interject('大肥鱼，把明天的也查一下')
+      await waitFor(() => harness.calls.prompt.length === 2)
+      const steered = harness.calls.prompt.at(-1)
+      assert.equal(steered?.mode, 'steer')
+      assert.equal(steered?.content?.[0]?.text, '大肥鱼，把明天的也查一下')
+      await waitFor(() => client.messages.some((message) => message.type === 'block' && message.kind === 'user' && message.text === '大肥鱼，把明天的也查一下'))
+      assert.equal(liveTurnCount(client.messages), running, 'an interjection stays inside the running turn')
+
+      const sessionId = steered?.sessionId
+      assert.ok(sessionId)
+      const beforeEnd = client.messages.length
+      harness.inject(sessionId, { type: 'turn/end', seq: 1, data: {} })
+      await waitFor(() => client.messages.slice(beforeEnd).some((message) => message.type === 'turn' && message.running === false))
+      const beforeIdle = harness.calls.prompt.length
+      await interject('大肥鱼，再查一次')
+      assert.equal(harness.calls.prompt.length, beforeIdle)
+      await waitFor(() => client.messages.some((message) => message.type === 'voice-prompt' && message.text === '大肥鱼，再查一次'))
+      client.send({ type: 'prompt', text: '大肥鱼，再查一次' })
+      await waitFor(() => harness.calls.prompt.length === beforeIdle + 1)
+      assert.equal(harness.calls.prompt.at(-1)?.mode, 'queue')
+
+      harness.failPrompt(new Error('session missing'))
+      await interject('大肥鱼，这次发不出去')
+      await waitFor(() => client.messages.some((message) => message.type === 'block' && message.kind === 'user' && message.text === '大肥鱼，这次发不出去'))
+      await waitFor(() => client.messages.some((message) => message.type === 'block-drop'))
+      await waitFor(() => client.messages.some((message) => message.type === 'status' && message.text === 'session missing'))
     } finally {
       client.socket.destroy()
     }

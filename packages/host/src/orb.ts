@@ -450,6 +450,8 @@ export class OrbRuntime {
       }),
       send: (message) => this.broadcast(message),
       open: () => openVoiceChild(),
+      interject: (text) => { void this.onInterject(text) },
+      stopTurn: () => { if (this.turnRunning) this.run('stop', () => this.stopTurn()) },
     })
     this.voiceDownloads = new VoiceDownloads(() => ({
       kws: dshHomePath('dsh-orb', 'voice', 'kws'),
@@ -861,6 +863,38 @@ export class OrbRuntime {
       this.finishTurn()
       const message = error instanceof Error ? error.message : String(error)
       console.error(`dsh-orb: prompt failed: ${message}`)
+      this.status(message)
+    }
+  }
+
+  /**
+   * 一句插话。执行中走官方 steer：当前这一步的工具做完，下一步按这句继续，不中断这一轮。
+   * 只剩收尾在播时 steer 发不出去，原话交给页面，走和打字一样的发送路径，另起一轮。
+   */
+  private async onInterject(text: string): Promise<void> {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    const sessionId = this.sessionId
+    if (!this.turnRunning || sessionId === undefined) {
+      this.broadcast({ type: 'voice-prompt', text: trimmed })
+      return
+    }
+    const key = `user:${randomUUID()}`
+    this.block(key, 'user', trimmed, false, 'set')
+    try {
+      await this.ctx.sessionController.prompt({
+        requestId: randomUUID(),
+        sessionId,
+        mode: 'steer',
+        content: [{ type: 'text', text: trimmed }],
+        clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }, new AbortController().signal)
+      this.drain()
+    } catch (error) {
+      // 气泡已经画出来了，没发出去就不能留着，否则看上去像发成功了
+      this.dropBlock(key)
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`dsh-orb: interject failed: ${message}`)
       this.status(message)
     }
   }
