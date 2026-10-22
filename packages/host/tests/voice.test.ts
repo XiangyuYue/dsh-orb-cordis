@@ -373,6 +373,28 @@ describe('voice lifecycle', () => {
     voice.close()
   })
 
+  it('speaks the part of a settled message that rewrites the streamed text', () => {
+    const settings = settingsWith()
+    const child = fakeChild()
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send() {},
+      open: () => child.link,
+    })
+    voice.start()
+    voice.beginTurn()
+    voice.noteAssistant('b:1:0:0', '今天晴')
+    voice.noteAssistant('b:1:0:0', '今天多云。明天有雨。')
+    assert.equal(
+      child.sent.some((message) => message.type === 'speak' && String(message.text).includes('多云')),
+      true,
+      'a settled rewrite must not be dropped just because it no longer starts with the stream',
+    )
+    voice.close()
+  })
+
   it('drops the old queue and restarts after a crash, instead of holding the stop button', () => {
     const settings = settingsWith()
     const children = [fakeChild(), fakeChild()]

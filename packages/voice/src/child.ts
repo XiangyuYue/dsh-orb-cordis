@@ -8,7 +8,7 @@
 import { createRequire } from 'node:module'
 import { createInterface } from 'node:readline'
 import { Worker } from 'node:worker_threads'
-import { existsSync, writeFileSync, writeSync } from 'node:fs'
+import { appendFileSync, existsSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -25,6 +25,19 @@ import { type VoiceSettings } from './settings.ts'
 const require = createRequire(import.meta.url)
 const TARGET_RATE = 16000
 const RING_SAMPLES = TARGET_RATE / 2
+
+const VOICE_DEBUG_MARKER = join(tmpdir(), 'dsh-orb-voice-debug.on')
+const VOICE_DEBUG_LOG = join(tmpdir(), 'dsh-orb-voice-debug.log')
+
+/** Opt-in tracing shared with the host; inert unless the marker file exists. */
+function debug(message: string): void {
+  if (!existsSync(VOICE_DEBUG_MARKER)) return
+  try {
+    appendFileSync(VOICE_DEBUG_LOG, `${new Date().toISOString()} child ${message}\n`)
+  } catch {
+    // Diagnostics must never take speech down.
+  }
+}
 
 interface ConfigureMessage {
   readonly type: 'configure'
@@ -256,6 +269,7 @@ class Engine {
   configure(message: ConfigureMessage): void {
     this.settings = message.settings
     this.paths = message.paths
+    debug(`configure backend=${this.settings?.ttsBackend ?? 'local'} key=${this.settings?.qwenApiKey?.trim() ? 'yes' : 'no'} voice=${this.settings?.qwenVoice ?? ''} speed=${this.settings?.qwenSpeed ?? ''} tts=${this.settings?.ttsEnabled === true}`)
     // Build the recognizers before the microphone callback starts. Loading them
     // on the audio thread makes CoreAudio drop the stream.
     this.ensureKws()
@@ -285,6 +299,7 @@ class Engine {
 
   speak(id: string, text: string): void {
     const token = ++this.speakToken
+    debug(`speak id=${id} backend=${this.settings?.ttsBackend ?? 'local'} chars=${text.length}`)
     this.cancelQwen()
     if (this.settings?.ttsBackend === 'qwen') {
       this.speakWithQwen(id, text, token)
@@ -293,6 +308,7 @@ class Engine {
     const speed = this.settings?.ttsSpeed ?? 1.5
     const worker = this.ensureTts()
     if (!worker) {
+      debug(`local id=${id} no-worker`)
       emit({ type: 'playback', id, phase: 'start' })
       emit({ type: 'playback', id, phase: 'end' })
       return
@@ -306,12 +322,14 @@ class Engine {
       const samples = message.samples ? new Float32Array(message.samples) : new Float32Array(0)
       const sampleRate = message.sampleRate ?? 22050
       if (message.error || samples.length === 0) {
+        debug(`local id=${id} error=${String(message.error ?? 'empty')} samples=${samples.length}`)
         if (message.error) fail(new Error(message.error))
         emit({ type: 'playback', id, phase: 'start' })
         emit({ type: 'playback', id, phase: 'end' })
         return
       }
       emit({ type: 'playback', id, phase: 'start' })
+      debug(`local id=${id} play samples=${samples.length} rate=${sampleRate}`)
       try {
         const line = { text, startedAt: Date.now(), endedAt: undefined as number | undefined }
         this.noteSpoken(line)
@@ -337,7 +355,9 @@ class Engine {
    */
   private speakWithQwen(id: string, text: string, token: number): void {
     const apiKey = this.settings?.qwenApiKey ?? ''
+    debug(`qwen id=${id} key=${apiKey.trim() ? 'yes' : 'no'} chars=${text.length}`)
     if (!apiKey.trim() || !text.trim()) {
+      debug(`qwen id=${id} skipped empty`)
       emit({ type: 'playback', id, phase: 'end' })
       return
     }
@@ -351,6 +371,7 @@ class Engine {
 
     const finish = (stopped: boolean): void => {
       settled = true
+      debug(`qwen id=${id} finish stopped=${stopped} player=${player !== undefined}`)
       if (player && this.player === player) this.player = undefined
       if (this.qwen === job) this.qwen = undefined
       if (line) line.endedAt = Date.now()
@@ -378,6 +399,7 @@ class Engine {
             return
           }
           this.player = player
+          debug(`qwen id=${id} first-audio rate=${sampleRate} first=${samples.length}`)
           const started = { text, startedAt: Date.now(), endedAt: undefined as number | undefined }
           line = started
           this.noteSpoken(started)
@@ -387,6 +409,7 @@ class Engine {
       },
       onDone: () => {
         if (token !== this.speakToken) return
+        debug(`qwen id=${id} done player=${player !== undefined}`)
         settled = true
         this.qwen = undefined
         if (this.armed?.id === id) this.armed = undefined
@@ -395,6 +418,7 @@ class Engine {
       },
       onError: (message) => {
         if (token !== this.speakToken) return
+        debug(`qwen id=${id} error ${message.slice(0, 120)}`)
         settled = true
         this.qwen = undefined
         if (this.armed?.id === id) this.armed = undefined
@@ -417,6 +441,7 @@ class Engine {
   }
 
   stopSpeak(): void {
+    debug(`stop-speak armed=${this.armed?.id ?? 'none'} player=${this.player !== undefined}`)
     this.speakToken += 1
     this.cancelQwen()
     const armed = this.armed
@@ -1012,6 +1037,7 @@ function main(): void {
       }
       if (message.type === 'speak' && typeof message.id === 'string') {
         const spoken = typeof (message as { text?: unknown }).text === 'string' ? (message as { text: string }).text : ''
+        debug(`stdin speak id=${message.id} chars=${spoken.length}`)
         if (engine) engine.speak(message.id, spoken)
         else {
           emit({ type: 'playback', id: message.id, phase: 'start' })

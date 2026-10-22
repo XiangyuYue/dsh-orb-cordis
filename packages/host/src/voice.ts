@@ -6,7 +6,9 @@
  */
 
 import { fork, type ChildProcess } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { appendFileSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { isDismiss, isInterject, normalizeUtterance } from '@dsh-orb/voice/dismiss'
@@ -63,6 +65,19 @@ export interface VoiceControllerOptions {
 }
 
 const RESTART_LIMIT = 3
+
+const VOICE_DEBUG_MARKER = join(tmpdir(), 'dsh-orb-voice-debug.on')
+const VOICE_DEBUG_LOG = join(tmpdir(), 'dsh-orb-voice-debug.log')
+
+/** Opt-in tracing for "the answer is on screen but nothing is spoken" reports. */
+function debug(message: string): void {
+  if (!existsSync(VOICE_DEBUG_MARKER)) return
+  try {
+    appendFileSync(VOICE_DEBUG_LOG, `${new Date().toISOString()} host ${message}\n`)
+  } catch {
+    // Diagnostics must never take speech down.
+  }
+}
 
 export class VoiceController {
   private queue: QueueState = createQueue(false)
@@ -169,6 +184,7 @@ export class VoiceController {
 
   /** The settings file changed. Switches take effect without reloading a model. */
   applySettings(): void {
+    debug(`apply-settings live=${this.live} tts=${this.ttsOn()} enabled=${this.queue.enabled}`)
     if (!this.live) return
     const enabled = this.ttsOn()
     if (enabled !== this.queue.enabled) this.apply({ type: 'enabled', enabled })
@@ -194,6 +210,7 @@ export class VoiceController {
   }
 
   beginTurn(): void {
+    debug('beginTurn')
     this.agentBusy = true
     this.muted = false
     this.stopping = false
@@ -203,6 +220,7 @@ export class VoiceController {
 
   /** The turn's assistant text is already in the queue. Fold the tail into a closing line. */
   endTurn(): void {
+    debug(`endTurn live=${this.live} agentBusy=${this.agentBusy}`)
     this.agentBusy = false
     this.stopping = false
     // With no live child there is no speaker to drain; queueing here would leave a
@@ -218,12 +236,25 @@ export class VoiceController {
   /** Full assistant text for one block. Only the newly arrived suffix is spoken. */
   noteAssistant(key: string, text: string): void {
     const previous = this.seen.get(key) ?? ''
-    if (!text.startsWith(previous)) return
+    const starts = text.startsWith(previous)
     // Track text even while the child is restarting; otherwise the first update after the
     // restart would feed the whole block to the speaker again.
     this.seen.set(key, text)
-    if (this.muted || this.silencedSteps.has(stepOf(key))) return
-    const delta = text.slice(previous.length)
+    const silenced = this.silencedSteps.has(stepOf(key))
+    debug(`note key=${key} prev=${previous.length} next=${text.length} starts=${starts} muted=${this.muted} silenced=${silenced} live=${this.live} enabled=${this.queue.enabled}`)
+    if (this.muted || silenced) return
+    // A settled message may rewrite what was streamed (formatting, a trimmed prefix, a
+    // retry). Requiring startsWith used to drop the whole final answer with no sound.
+    let delta = ''
+    if (starts) {
+      delta = text.slice(previous.length)
+    } else {
+      let common = 0
+      const limit = Math.min(previous.length, text.length)
+      while (common < limit && previous[common] === text[common]) common += 1
+      delta = text.slice(common)
+      debug(`rewrite common=${common} speak=${delta.length}`)
+    }
     if (delta && this.live) this.apply({ type: 'text', text: delta })
   }
 
@@ -257,6 +288,7 @@ export class VoiceController {
 
   /** Stop button: drop speech. The caller stops the agent turn separately when one is running. */
   haltSpeech(): void {
+    debug(`haltSpeech live=${this.live} busy=${this.agentBusy}`)
     // Remember the mute before the liveness check. A child that is restarting must not
     // speak the rest of the stopped turn once it comes back.
     if (this.agentBusy) {
@@ -348,6 +380,7 @@ export class VoiceController {
       return
     }
     if (type === 'playback' && typeof record?.id === 'string' && record.phase === 'end') {
+      debug(`playback-end id=${record.id}`)
       this.apply({ type: 'playback-ended', id: record.id })
       this.poll()
     }
@@ -402,6 +435,7 @@ export class VoiceController {
   }
 
   private dismiss(): void {
+    debug(`dismiss busy=${this.agentBusy} live=${this.live}`)
     if (this.agentBusy) {
       this.muted = true
       this.stopping = true
@@ -415,6 +449,7 @@ export class VoiceController {
   }
 
   private interject(text: string): void {
+    debug(`interject busy=${this.agentBusy} live=${this.live}`)
     // The old turn is about to be cancelled. Re-entering transcription must not seed the
     // speaker tail of the task that is being stopped.
     this.commandSeed = 0
@@ -445,6 +480,7 @@ export class VoiceController {
   private onChildExit(link?: VoiceLink): void {
     // A replaced lifecycle closed this link; its late exit must not take the new one down.
     if (link !== undefined && link !== this.link) return
+    debug(`child-exit closing=${this.closing} restarts=${this.restarts}`)
     this.link = undefined
     this.live = false
     this.micOpen = false
@@ -498,12 +534,14 @@ export class VoiceController {
       link = undefined
     }
     if (link === undefined) {
+      debug('launch failed: no link')
       this.failed = true
       this.mode = 'off'
       return
     }
     this.live = true
     this.link = link
+    debug(`launch ok tts=${this.ttsOn()}`)
     // A settings edit during a crash/restart may have changed whether speech is allowed.
     const enabled = this.ttsOn()
     if (enabled !== this.queue.enabled) this.queue = createQueue(enabled)
@@ -554,6 +592,7 @@ export class VoiceController {
 
   private dispatch(effects: readonly QueueEffect[]): void {
     for (const effect of effects) {
+      debug(`dispatch ${effect.type} id=${effect.id}${effect.type === 'play' ? ` text=${effect.text.length}` : ''} link=${this.link !== undefined} live=${this.live}`)
       if (effect.type === 'play') this.link?.send({ type: 'speak', id: effect.id, text: effect.text })
       else this.link?.send({ type: 'stop-speak', id: effect.id })
     }
