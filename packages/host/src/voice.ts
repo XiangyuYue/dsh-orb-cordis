@@ -79,6 +79,19 @@ function debug(message: string): void {
   }
 }
 
+type BlockOrder = readonly [turn: number, step: number, index: number]
+
+/** `b:turn:step:index` is the orb's assistant block key. Test-only keys parse to undefined. */
+function blockOrder(key: string): BlockOrder | undefined {
+  const match = /^b:(\d+):(\d+):(\d+)$/.exec(key)
+  if (!match) return undefined
+  return [Number(match[1]), Number(match[2]), Number(match[3])]
+}
+
+function compareBlockOrder(left: BlockOrder, right: BlockOrder): number {
+  return left[0] - right[0] || left[1] - right[1] || left[2] - right[2]
+}
+
 export class VoiceController {
   private queue: QueueState = createQueue(false)
   private idle: IdleClock = createIdle()
@@ -268,6 +281,14 @@ export class VoiceController {
       return
     }
     if (this.assistantKey !== undefined && this.assistantKey !== key) {
+      const previous = blockOrder(this.assistantKey)
+      const next = blockOrder(key)
+      if (previous !== undefined && next !== undefined && compareBlockOrder(next, previous) <= 0) {
+        // Settled blocks can arrive out of order at turn end. An old block must not clear
+        // the newest block's held tail; only a strictly newer block starts a new segment.
+        debug(`skip-old key=${key} newest=${this.assistantKey}`)
+        return
+      }
       // A new assistant block supersedes anything the previous block left in the holding
       // area. The sentence already playing caught the speaker and keeps going.
       this.apply({ type: 'block' })

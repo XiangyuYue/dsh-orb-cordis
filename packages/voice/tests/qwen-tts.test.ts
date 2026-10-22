@@ -217,6 +217,32 @@ describe('qwen session protocol', () => {
     assert.equal(run.done(), 1)
   })
 
+  it('retries twice by default', async () => {
+    const run = harness('你好。', { connectTimeoutMs: 200, firstAudioTimeoutMs: 20 })
+    const first = run.sockets[0]
+    assert.ok(first)
+    first.open()
+    first.message({ type: 'session.updated' })
+    for (let attempt = 0; attempt < 100 && run.sockets.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const second = run.sockets[1]
+    assert.ok(second, 'the first retry opens a fresh socket')
+    second.open()
+    second.message({ type: 'session.updated' })
+    for (let attempt = 0; attempt < 100 && run.sockets.length < 3; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const third = run.sockets[2]
+    assert.ok(third, 'the second retry opens another fresh socket')
+    third.open()
+    third.message({ type: 'session.updated' })
+    third.message({ type: 'response.audio.delta', delta: pcm([9]) })
+    third.message({ type: 'session.finished' })
+    assert.deepEqual(run.errors, [])
+    assert.equal(run.done(), 1)
+  })
+
   it('does not retry after audio has started', async () => {
     const run = harness('你好。', { firstAudioTimeoutMs: 50, idleTimeoutMs: 5, retries: 1 })
     const socket = run.sockets[0]

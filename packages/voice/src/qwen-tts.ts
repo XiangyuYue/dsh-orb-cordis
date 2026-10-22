@@ -42,7 +42,7 @@ export interface QwenSpeechOptions {
   /** How long to wait for the first PCM after the session is ready. */
   readonly firstAudioTimeoutMs?: number
   readonly idleTimeoutMs?: number
-  /** Extra attempts after a timeout with no audio. Factory 1. */
+  /** Extra attempts after a timeout with no audio. Factory 2. */
   readonly retries?: number
   /** Test seam; production uses the runtime's global WebSocket. */
   readonly socket?: (url: string, init: QwenSocketInit) => QwenSocket
@@ -56,7 +56,9 @@ export interface QwenSpeech {
 export const QWEN_TEXT_LIMIT = 4000
 
 const CONNECT_TIMEOUT_MS = 10_000
-const FIRST_AUDIO_TIMEOUT_MS = 8_000
+// A healthy first packet lands in ~0.3–0.5s. Three seconds is six times that and keeps
+// a stalled request from leaving the ball silent for the old eight-second wait.
+const FIRST_AUDIO_TIMEOUT_MS = 3_000
 const IDLE_TIMEOUT_MS = 30_000
 const RETRY_DELAY_MS = 300
 
@@ -142,7 +144,7 @@ export function speakQwen(options: QwenSpeechOptions): QwenSpeech {
   const connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS
   const firstAudioTimeoutMs = options.firstAudioTimeoutMs ?? FIRST_AUDIO_TIMEOUT_MS
   const idleTimeoutMs = options.idleTimeoutMs ?? IDLE_TIMEOUT_MS
-  const retries = Math.max(0, Math.floor(options.retries ?? 1))
+  const retries = Math.max(0, Math.floor(options.retries ?? 2))
   let settled = false
   let current: { close(): void } | undefined
 

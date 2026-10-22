@@ -745,6 +745,35 @@ describe('new turn speech reset', () => {
     voice.close()
   })
 
+  it('keeps the final block tail when an older block settles late', () => {
+    const child = fakeChild()
+    const voice = controller(child)
+    voice.start()
+    child.emit({ type: 'mic', open: true })
+    voice.beginTurn()
+    voice.noteAssistant('b:2:3:1', '第一句。')
+    const first = child.sent.find((message) => message.type === 'speak')
+    assert.ok(first)
+
+    // Settled blocks can arrive out of order at turn end. The older block must not clear
+    // the newest block's held tail.
+    voice.noteAssistant('b:2:3:1', '第一句。剩余的收尾。')
+    voice.noteAssistant('b:2:2:1', '旧块。')
+    voice.noteAssistant('b:2:3:1', '第一句。剩余的收尾。')
+    voice.endTurn()
+    child.emit({ type: 'playback', id: first.id, phase: 'end' })
+
+    assert.equal(
+      child.sent.some((message) => message.type === 'speak' && message.text === '剩余的收尾。'),
+      true,
+    )
+    assert.equal(
+      child.sent.some((message) => message.type === 'speak' && message.text === '旧块。'),
+      false,
+    )
+    voice.close()
+  })
+
   it('mutes the old turn and ignores its late key after the new turn starts', () => {
     const child = fakeChild()
     const voice = controller(child)
