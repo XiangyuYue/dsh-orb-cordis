@@ -60,7 +60,7 @@ describe('qwen voice settings', () => {
     assert.equal(parsed.ttsBackend, 'local')
     assert.equal(parsed.qwenApiKey, '')
     assert.equal(parsed.qwenVoice, 'Cherry')
-    assert.equal(parsed.qwenSpeed, 1.5)
+    assert.equal(parsed.qwenSpeed, 1.4)
     assert.equal(parsed.ttsSpeed, 1.5)
     assert.deepEqual(parsed, DEFAULT_VOICE_SETTINGS)
   })

@@ -17,6 +17,7 @@ import { LevelMeter } from './level.ts'
 import { needsMicrophone, transcribing, type ListenMode } from './listen.ts'
 import { isEcho, type SpokenLine } from './echo.ts'
 import { speakQwen as startQwenSpeech, type QwenSpeech } from './qwen-tts.ts'
+import { DEFAULT_QWEN_SPEED, DEFAULT_QWEN_VOICE } from './qwen.ts'
 import { isRecoverableSpeakerError } from './speaker.ts'
 import { captureBinary, CpalCapture, NativeCapture, type CaptureSource } from './capture.ts'
 import { type VoiceSettings } from './settings.ts'
@@ -340,8 +341,8 @@ class Engine {
       emit({ type: 'playback', id, phase: 'end' })
       return
     }
-    const voice = this.settings?.qwenVoice ?? 'Cherry'
-    const speed = this.settings?.qwenSpeed ?? 1.5
+    const voice = this.settings?.qwenVoice ?? DEFAULT_QWEN_VOICE
+    const speed = this.settings?.qwenSpeed ?? DEFAULT_QWEN_SPEED
     let player: StreamPlayer | undefined
     let line: { text: string, startedAt: number, endedAt: number | undefined } | undefined
     let job: QwenSpeech | undefined

@@ -1345,7 +1345,7 @@ window.__ModuleLoader__.load({
       ttsBackend: 'local',
       qwenApiKey: '',
       qwenVoice: 'Cherry',
-      qwenSpeed: 1.5,
+      qwenSpeed: 1.4,
       questionPrompt: '我有几个问题，你来选一下',
       ttsSpeed: 1.5,
       idleMs: 30000,

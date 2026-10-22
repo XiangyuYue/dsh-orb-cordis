@@ -28,7 +28,7 @@ export const QWEN_SPEED_MIN = 0.5
 export const QWEN_SPEED_MAX = 2
 
 export const DEFAULT_QWEN_VOICE = 'Cherry'
-export const DEFAULT_QWEN_SPEED = 1.5
+export const DEFAULT_QWEN_SPEED = 1.4
 
 /** 普通话与多语种. */
 const STANDARD: readonly QwenVoice[] = [

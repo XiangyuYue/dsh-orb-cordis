@@ -41,7 +41,7 @@ export interface VoiceSettings {
   qwenApiKey: string
   /** 千问音色，存 voice 原文（区分大小写，内部空格保留）。出厂 Cherry。 */
   qwenVoice: string
-  /** 千问语速 0.5–2.0，步进 0.1。出厂 1.5，1.0 是原速。 */
+  /** 千问语速 0.5–2.0，步进 0.1。出厂 1.4，1.0 是原速。 */
   qwenSpeed: number
   /** Spoken when a question card opens. Empty means silence. */
   questionPrompt: string
