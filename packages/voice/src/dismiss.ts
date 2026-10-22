@@ -50,18 +50,24 @@ export function containsPhonetic(text: string, phrase: string): boolean {
  * True when the utterance contains one of the configured phrases as a complete
  * substring. A phrase in the middle of a longer sentence counts. An empty list
  * never dismisses, and a phrase that normalizes to nothing is ignored.
+ *
+ * A three-syllable-or-longer phrase also matches its toneless pinyin homophone
+ * (「推下吧」 for 「退下吧」). Shorter phrases stay exact: their homophone space
+ * is wide enough that a false dismissal would end a turn the user wanted.
  */
 export function isDismiss(text: string, phrases: readonly string[]): boolean {
-  return containsAny(text, phrases)
+  if (containsAny(text, phrases)) return true
+  return phrases.some((phrase) => syllables(phrase).length >= 3 && containsPhonetic(text, phrase))
 }
 
 /**
- * True when the utterance contains the interject keyword, including a toneless
- * pinyin homophone of it. An empty keyword never matches. Dismiss phrases stay
- * exact: a misheard homophone must not end the turn.
+ * True when the utterance contains any interject keyword, including a toneless
+ * pinyin homophone of it. Aliases are extra spellings for the same keyword, so a
+ * near-miss such as 「大灰鱼」 can be added without changing the spoken name.
  */
-export function isInterject(text: string, keyword: string): boolean {
-  return containsAny(text, [keyword]) || containsPhonetic(text, keyword)
+export function isInterject(text: string, keywords: string | readonly string[]): boolean {
+  const list = typeof keywords === 'string' ? [keywords] : keywords
+  return list.some((keyword) => containsAny(text, [keyword]) || containsPhonetic(text, keyword))
 }
 
 function syllables(text: string): string[] {

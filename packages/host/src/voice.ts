@@ -382,8 +382,15 @@ export class VoiceController {
     // interject：用原话判，不去唤醒词前缀。否则「你好大肥鱼，……」会被剥掉关键词。
     const spoken = text.trim()
     if (isDismiss(spoken, settings.dismissPhrases)) return this.dismiss()
-    if (isInterject(spoken, settings.interjectKeyword)) return this.interject(spoken)
+    if (isInterject(spoken, this.interjectWords())) return this.interject(spoken)
     this.poll()
+  }
+
+  /** 插话关键词和它的误识别别名，去掉空白项。 */
+  private interjectWords(): string[] {
+    const settings = this.options.settings()
+    return [settings.interjectKeyword, ...settings.interjectAliases]
+      .filter((word) => normalizeUtterance(word) !== '')
   }
 
   /** 开口之后出现了「硬性关掉」的情况，这句就不要了。只是执行结束、正文播完这种变化不算。 */
@@ -398,7 +405,7 @@ export class VoiceController {
   }
 
   private interjectEnabled(): boolean {
-    return this.commandEnabled() && normalizeUtterance(this.options.settings().interjectKeyword) !== ''
+    return this.commandEnabled() && this.interjectWords().length > 0
   }
 
   private dismiss(): void {

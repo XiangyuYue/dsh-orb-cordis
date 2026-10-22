@@ -58,6 +58,18 @@ describe('voice settings', () => {
     assert.deepEqual(parseVoiceSettings({ interjectKeyword: '小鱼' }).wakeWords, ['你好大肥鱼'])
   })
 
+  it('keeps interject aliases trimmed, unique, and bounded', () => {
+    assert.deepEqual(parseVoiceSettings({}).interjectAliases, [])
+    assert.deepEqual(
+      parseVoiceSettings({ interjectAliases: [' 大灰鱼 ', '大灰鱼', '', 7] }).interjectAliases,
+      ['大灰鱼'],
+    )
+    assert.deepEqual(parseVoiceSettings({ interjectAliases: '大灰鱼' }).interjectAliases, [])
+    assert.equal(parseVoiceSettings({
+      interjectAliases: Array.from({ length: 12 }, (_item, index) => `别名${index}`),
+    }).interjectAliases.length, 8)
+  })
+
   it('reads an empty or blank wake list as no wake word', () => {
     assert.equal(hasWakeWord(['你好大肥鱼']), true)
     assert.equal(hasWakeWord([]), false)

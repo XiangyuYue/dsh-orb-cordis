@@ -158,7 +158,10 @@ window.__ModuleLoader__.load({
       commandTitle: '语音输入',
       commandToggle: '语音输入',
       interjectKeyword: '插话关键词',
+      interjectAliases: '插话别名',
+      interjectAliasesHint: '一行一条；把常被识别错的写法加进来，同样算插话。',
       dismissPhrases: '退下口令',
+      dismissPhrasesHint: '一行一条；把常被识别错的写法也加进来，同样会触发退下。',
       dismissReply: '退下后的回复语',
       downloadAsr: '启动 ASR 语音模型',
       ttsTitle: 'TTS',
@@ -341,7 +344,10 @@ window.__ModuleLoader__.load({
       commandTitle: 'Voice input',
       commandToggle: 'Voice input',
       interjectKeyword: 'Interjection keyword',
+      interjectAliases: 'Interjection aliases',
+      interjectAliasesHint: 'One per line. Common misrecognitions work too.',
       dismissPhrases: 'Dismiss phrases',
+      dismissPhrasesHint: 'One per line. Common misrecognitions work too.',
       dismissReply: 'Reply after dismiss',
       downloadAsr: 'Start ASR speech model',
       ttsTitle: 'TTS',
@@ -1339,6 +1345,7 @@ window.__ModuleLoader__.load({
       wakeReply: '我在',
       commandEnabled: true,
       interjectKeyword: '大肥鱼',
+      interjectAliases: [],
       dismissPhrases: ['你退下吧', '退下吧'],
       dismissReply: '好的，再见',
       ttsEnabled: true,
@@ -1363,6 +1370,7 @@ window.__ModuleLoader__.load({
         wakeReply: typeof item.wakeReply === 'string' ? item.wakeReply : VOICE_DEFAULTS.wakeReply,
         commandEnabled: typeof item.commandEnabled === 'boolean' ? item.commandEnabled : VOICE_DEFAULTS.commandEnabled,
         interjectKeyword: typeof item.interjectKeyword === 'string' ? item.interjectKeyword : VOICE_DEFAULTS.interjectKeyword,
+        interjectAliases: Array.isArray(item.interjectAliases) ? item.interjectAliases : VOICE_DEFAULTS.interjectAliases,
         dismissPhrases: Array.isArray(item.dismissPhrases) ? item.dismissPhrases : VOICE_DEFAULTS.dismissPhrases,
         dismissReply: typeof item.dismissReply === 'string' ? item.dismissReply : VOICE_DEFAULTS.dismissReply,
         ttsEnabled: typeof item.ttsEnabled === 'boolean' ? item.ttsEnabled : VOICE_DEFAULTS.ttsEnabled,
@@ -1439,6 +1447,7 @@ window.__ModuleLoader__.load({
       function save(patch) {
         const merged = { ...voice, ...draftRef.current, ...patch }
         if (typeof merged.wakeWords === 'string') merged.wakeWords = splitLines(merged.wakeWords)
+        if (typeof merged.interjectAliases === 'string') merged.interjectAliases = splitLines(merged.interjectAliases)
         if (typeof merged.dismissPhrases === 'string') merged.dismissPhrases = splitLines(merged.dismissPhrases)
         void mutate('/.dsh-orb/voice', merged)
       }
@@ -1737,7 +1746,10 @@ window.__ModuleLoader__.load({
               onChange: (enabled) => save({ commandEnabled: enabled }),
             })),
           textRow(text.interjectKeyword, 'interjectKeyword', commandLocks),
+          linesRow(text.interjectAliases, 'interjectAliases', commandLocks),
+          h('p', { className: 'dsh-orb-set-muted' }, text.interjectAliasesHint),
           linesRow(text.dismissPhrases, 'dismissPhrases', commandLocks),
+          h('p', { className: 'dsh-orb-set-muted' }, text.dismissPhrasesHint),
           textRow(text.dismissReply, 'dismissReply', dismissReplyLocks),
           downloadBlock('asr', text.downloadAsr)),
         h('div', { className: 'dsh-orb-set-voice-group' },

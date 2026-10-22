@@ -30,6 +30,8 @@ export interface VoiceSettings {
   commandEnabled: boolean
   /** 执行和正文播报期间，整句带出这个词就算插话。空字符串表示执行和播报期间不听。 */
   interjectKeyword: string
+  /** 插话关键词的别名，用来补常见的 ASR 误识别；和关键词一样参与包含/同音匹配。 */
+  interjectAliases: string[]
   /** Whole-utterance dismiss phrases. Empty means dismiss is off. */
   dismissPhrases: string[]
   /** Spoken after dismiss. Empty means silence. */
@@ -61,6 +63,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   wakeReply: '我在',
   commandEnabled: true,
   interjectKeyword: '大肥鱼',
+  interjectAliases: [],
   dismissPhrases: ['你退下吧', '退下吧'],
   dismissReply: '好的，再见',
   ttsEnabled: true,
@@ -109,6 +112,7 @@ export function parseVoiceSettings(value: unknown): VoiceSettings {
     wakeReply: text(item.wakeReply, DEFAULT_VOICE_SETTINGS.wakeReply, REPLY_CHARS),
     commandEnabled: flag(item.commandEnabled, DEFAULT_VOICE_SETTINGS.commandEnabled),
     interjectKeyword: text(item.interjectKeyword, DEFAULT_VOICE_SETTINGS.interjectKeyword, PHRASE_CHARS),
+    interjectAliases: phrases(item.interjectAliases, DEFAULT_VOICE_SETTINGS.interjectAliases),
     dismissPhrases: phrases(item.dismissPhrases, DEFAULT_VOICE_SETTINGS.dismissPhrases),
     dismissReply: text(item.dismissReply, DEFAULT_VOICE_SETTINGS.dismissReply, REPLY_CHARS),
     ttsEnabled: flag(item.ttsEnabled, DEFAULT_VOICE_SETTINGS.ttsEnabled),
@@ -126,6 +130,7 @@ function clone(settings: VoiceSettings): VoiceSettings {
   return {
     ...settings,
     wakeWords: [...settings.wakeWords],
+    interjectAliases: [...settings.interjectAliases],
     dismissPhrases: [...settings.dismissPhrases],
   }
 }

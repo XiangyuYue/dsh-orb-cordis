@@ -1079,6 +1079,12 @@ describe('settings section', () => {
     await settle()
     const keywordCall = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
     assert.equal(JSON.parse(keywordCall.options.body).interjectKeyword, '小肥鱼')
+    const aliases = find(view, (node) => node.props?.['aria-label'] === '插话别名')[0]
+    assert.ok(aliases)
+    aliases.props.onBlur({ target: { value: '大灰鱼\n小灰鱼' } })
+    await settle()
+    const aliasCall = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
+    assert.deepEqual(JSON.parse(aliasCall.options.body).interjectAliases, ['大灰鱼', '小灰鱼'])
     find(page.render(), (node) => node.props?.['aria-label'] === '语音输入' && node.props.role === 'switch')[0].props.onClick()
     await settle()
     view = page.render()
@@ -1108,6 +1114,8 @@ describe('settings section', () => {
     view = page.render()
     const keyword = find(view, (node) => node.props?.['aria-label'] === '插话关键词')[0]
     assert.equal(String(keyword.props.className).includes('is-locked'), true)
+    const aliases = find(view, (node) => node.props?.['aria-label'] === '插话别名')[0]
+    assert.equal(String(aliases.props.className).includes('is-locked'), true)
     const beforeKeyword = page.calls.length
     keyword.props.onClick()
     view = page.render()
