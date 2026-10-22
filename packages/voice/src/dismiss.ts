@@ -51,13 +51,13 @@ export function containsPhonetic(text: string, phrase: string): boolean {
  * substring. A phrase in the middle of a longer sentence counts. An empty list
  * never dismisses, and a phrase that normalizes to nothing is ignored.
  *
- * A three-syllable-or-longer phrase also matches its toneless pinyin homophone
- * (「推下吧」 for 「退下吧」). Shorter phrases stay exact: their homophone space
- * is wide enough that a false dismissal would end a turn the user wanted.
+ * A two-syllable-or-longer phrase also matches its toneless pinyin homophone
+ * (「推下吧」 for 「退下吧」). One-syllable phrases stay exact: every homophone
+ * would match them, which is too broad for a command that ends the turn.
  */
 export function isDismiss(text: string, phrases: readonly string[]): boolean {
   if (containsAny(text, phrases)) return true
-  return phrases.some((phrase) => syllables(phrase).length >= 3 && containsPhonetic(text, phrase))
+  return phrases.some((phrase) => syllables(phrase).length >= 2 && containsPhonetic(text, phrase))
 }
 
 /**

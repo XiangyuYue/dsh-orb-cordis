@@ -748,25 +748,3 @@ describe('qwen speech readiness', () => {
   })
 })
 
-describe('interject aliases', () => {
-  it('matches an alias during a turn, even when the main keyword is empty', () => {
-    const settings = settingsWith({ interjectKeyword: '', interjectAliases: ['大灰鱼'] })
-    const heard: string[] = []
-    const child = fakeChild()
-    const voice = new VoiceController({
-      settings: () => settings,
-      presence: () => ({ wake: true, asr: true, tts: true }),
-      now: () => 0,
-      send() {},
-      open: () => child.link,
-      interject: (text) => { heard.push(text) },
-    })
-    voice.start()
-    child.emit({ type: 'mic', open: true })
-    voice.beginTurn()
-    assert.equal(voice.listenMode(), 'interject')
-    child.emit({ type: 'utterance', text: '大灰鱼，把明天的也查一下', mode: 'interject' })
-    assert.deepEqual(heard, ['大灰鱼，把明天的也查一下'])
-    voice.close()
-  })
-})

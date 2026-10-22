@@ -723,7 +723,6 @@ class Engine {
       else if (message.text) {
         const echo = meta !== undefined && isEcho(message.text, this.spoken, { from: meta.from, to: meta.to }, [
           this.settings?.interjectKeyword ?? '',
-          ...(this.settings?.interjectAliases ?? []),
           ...(this.settings?.dismissPhrases ?? []),
         ])
         if (echo) process.stderr.write('echo dropped\n')

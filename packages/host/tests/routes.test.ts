@@ -308,14 +308,13 @@ describe('settings routes', () => {
       dismissPhrases: ['退下吧'],
       questionPrompt: '你来选',
       interjectKeyword: '小肥鱼',
-      interjectAliases: [' 大灰鱼 ', '大灰鱼', '小灰鱼'],
       ttsBackend: 'qwen',
       qwenApiKey: '  sk-test  ',
       qwenVoice: 'Eldric Sage',
       qwenSpeed: 1.84,
     }), { 'x-dsh-user': 'ok' }), voice)
     const voiceBody = JSON.parse(voice.body.toString('utf8')) as {
-      voice: { wakeEnabled: boolean, idleMs: number, wakeReply: string, questionPrompt: string, interjectAliases: string[], ttsBackend: string, qwenApiKey: string, qwenVoice: string, qwenSpeed: number }
+      voice: { wakeEnabled: boolean, idleMs: number, wakeReply: string, questionPrompt: string, ttsBackend: string, qwenApiKey: string, qwenVoice: string, qwenSpeed: number }
       qwenVoices: { voice: string, label: string, group: string }[]
     }
     assert.equal(voice.status, 200)
@@ -323,7 +322,6 @@ describe('settings routes', () => {
     assert.equal(voiceBody.voice.idleMs, 45_000)
     assert.equal(voiceBody.voice.wakeReply, '在')
     assert.equal(voiceBody.voice.questionPrompt, '你来选')
-    assert.deepEqual(voiceBody.voice.interjectAliases, ['大灰鱼', '小灰鱼'])
     assert.equal(voiceBody.voice.ttsBackend, 'qwen')
     assert.equal(voiceBody.voice.qwenApiKey, 'sk-test')
     assert.equal(voiceBody.voice.qwenVoice, 'Eldric Sage')
@@ -334,17 +332,15 @@ describe('settings routes', () => {
     assert.equal(voiceBody.qwenVoices.some((item) => item.voice === 'Jada' && item.group === 'dialect'), true)
     const savedVoice = response()
     await handler(request('GET', '/.dsh-orb/settings', undefined, { 'x-dsh-user': 'ok' }), savedVoice)
-    const savedSnapshot = JSON.parse(savedVoice.body.toString('utf8')) as { voice: { interjectKeyword: string, interjectAliases: string[], qwenApiKey: string } }
+    const savedSnapshot = JSON.parse(savedVoice.body.toString('utf8')) as { voice: { interjectKeyword: string, qwenApiKey: string } }
     assert.equal(savedVoice.status, 200)
     assert.equal(savedSnapshot.voice.interjectKeyword, '小肥鱼')
-    assert.deepEqual(savedSnapshot.voice.interjectAliases, ['大灰鱼', '小灰鱼'])
     assert.equal(savedSnapshot.voice.qwenApiKey, 'sk-test')
     const reloaded = new ProfileStore(profile)
     assert.equal(reloaded.voice().wakeEnabled, false)
     assert.equal(reloaded.voice().idleMs, 45_000)
     assert.deepEqual(reloaded.voice().dismissPhrases, ['退下吧'])
     assert.equal(reloaded.voice().interjectKeyword, '小肥鱼')
-    assert.deepEqual(reloaded.voice().interjectAliases, ['大灰鱼', '小灰鱼'])
     assert.equal(reloaded.voice().ttsBackend, 'qwen')
     assert.equal(reloaded.voice().qwenVoice, 'Eldric Sage')
     assert.equal(reloaded.voice().qwenSpeed, 1.8)

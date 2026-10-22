@@ -50,19 +50,13 @@ describe('dismiss phrases', () => {
     assert.equal(isInterject('肥鱼', '大飞鱼'), false)
   })
 
-  it('accepts a toneless homophone of a three-syllable dismiss phrase', () => {
+  it('accepts a toneless homophone of a two-syllable-or-longer dismiss phrase', () => {
     assert.equal(isDismiss('推下吧', ['退下吧']), true)
     assert.equal(isDismiss('腿下吧', ['退下吧']), true)
+    assert.equal(isDismiss('推下', ['退下']), true)
     assert.equal(isDismiss('好的，你退下吧。', ['退下吧']), true)
     assert.equal(isDismiss('坐下吧', ['退下吧']), false)
     assert.equal(isDismiss('飞下吧', ['退下吧']), false)
     assert.equal(isDismiss('走吧', ['走吧']), true, 'short phrases still match exactly')
-  })
-
-  it('matches any configured interject alias, including its homophones', () => {
-    assert.equal(isInterject('大灰鱼，把明天的也查一下', ['大肥鱼', '大灰鱼']), true)
-    assert.equal(isInterject('打灰鱼，把明天的也查一下', ['大肥鱼', '大灰鱼']), true)
-    assert.equal(isInterject('大飞机，把明天的也查一下', ['大肥鱼', '大灰鱼']), false)
-    assert.equal(isInterject('大灰鱼', ['大肥鱼']), false)
   })
 })
