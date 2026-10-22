@@ -163,6 +163,15 @@ window.__ModuleLoader__.load({
       downloadAsr: '启动 ASR 语音模型',
       ttsTitle: 'TTS',
       ttsToggle: 'TTS',
+      ttsBackend: '播报方式',
+      ttsBackendLocal: '本地模型',
+      ttsBackendQwen: '千问',
+      qwenApiKey: 'API Key',
+      qwenApiKeyHint: '留空时不播报。',
+      qwenVoice: '音色',
+      qwenVoiceStandard: '普通话与多语种',
+      qwenVoiceDialect: '方言',
+      qwenSpeed: '语速',
       questionPrompt: '提问提示语',
       ttsSpeed: '语速',
       downloadTts: '下载 TTS 语音播报模型',
@@ -337,6 +346,15 @@ window.__ModuleLoader__.load({
       downloadAsr: 'Start ASR speech model',
       ttsTitle: 'TTS',
       ttsToggle: 'TTS',
+      ttsBackend: 'Speech backend',
+      ttsBackendLocal: 'Local model',
+      ttsBackendQwen: 'Qwen',
+      qwenApiKey: 'API Key',
+      qwenApiKeyHint: 'Nothing is spoken while this is empty.',
+      qwenVoice: 'Voice',
+      qwenVoiceStandard: 'Mandarin and multilingual',
+      qwenVoiceDialect: 'Dialects',
+      qwenSpeed: 'Speed',
       questionPrompt: 'Question prompt',
       ttsSpeed: 'Speed',
       downloadTts: 'Download TTS speech model',
@@ -1324,6 +1342,10 @@ window.__ModuleLoader__.load({
       dismissPhrases: ['你退下吧', '退下吧'],
       dismissReply: '好的，再见',
       ttsEnabled: true,
+      ttsBackend: 'local',
+      qwenApiKey: '',
+      qwenVoice: 'Cherry',
+      qwenSpeed: 1.5,
       questionPrompt: '我有几个问题，你来选一下',
       ttsSpeed: 1.5,
       idleMs: 30000,
@@ -1344,6 +1366,10 @@ window.__ModuleLoader__.load({
         dismissPhrases: Array.isArray(item.dismissPhrases) ? item.dismissPhrases : VOICE_DEFAULTS.dismissPhrases,
         dismissReply: typeof item.dismissReply === 'string' ? item.dismissReply : VOICE_DEFAULTS.dismissReply,
         ttsEnabled: typeof item.ttsEnabled === 'boolean' ? item.ttsEnabled : VOICE_DEFAULTS.ttsEnabled,
+        ttsBackend: item.ttsBackend === 'qwen' ? 'qwen' : 'local',
+        qwenApiKey: typeof item.qwenApiKey === 'string' ? item.qwenApiKey : VOICE_DEFAULTS.qwenApiKey,
+        qwenVoice: typeof item.qwenVoice === 'string' ? item.qwenVoice : VOICE_DEFAULTS.qwenVoice,
+        qwenSpeed: typeof item.qwenSpeed === 'number' ? item.qwenSpeed : VOICE_DEFAULTS.qwenSpeed,
         questionPrompt: typeof item.questionPrompt === 'string' ? item.questionPrompt : VOICE_DEFAULTS.questionPrompt,
         ttsSpeed: typeof item.ttsSpeed === 'number' ? item.ttsSpeed : VOICE_DEFAULTS.ttsSpeed,
         idleMs: typeof item.idleMs === 'number' ? item.idleMs : VOICE_DEFAULTS.idleMs,
@@ -1365,10 +1391,13 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function voiceLocks(control, models) {
+    function voiceLocks(control, models, backend) {
       const missing = []
       if ((control === 'wake' || control === 'wake-reply') && !models.wake.present) missing.push('wake')
-      if ((control === 'wake-reply' || control === 'dismiss-reply' || control === 'tts') && !models.tts.present) missing.push('tts')
+      // Qwen does not use the local files: while it is selected those controls stay editable.
+      if (backend !== 'qwen'
+        && (control === 'wake-reply' || control === 'dismiss-reply' || control === 'tts')
+        && !models.tts.present) missing.push('tts')
       if (control === 'command' && !models.asr.present) missing.push('asr')
       return missing
     }
@@ -1530,6 +1559,66 @@ window.__ModuleLoader__.load({
           }))
       }
 
+      function secretRow(label, key, missing) {
+        return h('label', { className: 'dsh-orb-set-voice-row' },
+          h('span', null, label),
+          h('input', {
+            className: `dsh-orb-set-input dsh-orb-set-input-wide${missing.length ? ' is-locked' : ''}`,
+            type: 'password',
+            autoComplete: 'off',
+            spellCheck: false,
+            'aria-label': label,
+            'aria-disabled': missing.length ? 'true' : 'false',
+            value: String(shown(key) ?? ''),
+            onChange: (event) => {
+              if (missing.length) return
+              remember(key, event.target.value)
+            },
+            onBlur: (event) => {
+              if (missing.length) return
+              remember(key, event.target.value)
+              save({})
+            },
+            ...lockedProps(missing),
+          }))
+      }
+
+      /** The host owns the 48 names; the page only groups and formats them. */
+      function qwenVoiceRow(missing) {
+        const listed = Array.isArray(snap.qwenVoices)
+          ? snap.qwenVoices.filter((item) => item && typeof item.voice === 'string')
+          : []
+        const current = String(shown('qwenVoice') ?? 'Cherry')
+        const voices = listed.length > 0
+          ? listed
+          : [{ voice: current, label: current, group: 'standard' }]
+        const groups = [
+          { id: 'standard', label: text.qwenVoiceStandard },
+          { id: 'dialect', label: text.qwenVoiceDialect },
+        ]
+        const options = groups.flatMap((group) => {
+          const items = voices.filter((item) => (item.group === 'dialect' ? 'dialect' : 'standard') === group.id)
+          if (items.length === 0) return []
+          return [h('optgroup', { key: group.id, label: group.label },
+            items.map((item) => h('option', { key: item.voice, value: item.voice }, item.label || item.voice)))]
+        })
+        return h('label', { className: 'dsh-orb-set-voice-row' },
+          h('span', null, text.qwenVoice),
+          h('select', {
+            className: 'dsh-orb-set-select',
+            'aria-label': text.qwenVoice,
+            'aria-disabled': missing.length ? 'true' : 'false',
+            value: current,
+            ...lockedProps(missing),
+            onChange: (event) => {
+              if (missing.length) return
+              const next = event.target.value
+              remember('qwenVoice', next)
+              save({ qwenVoice: next })
+            },
+          }, options))
+      }
+
       function downloadBlock(kind, label) {
         const model = models[kind]
         if (kind === 'asr' && model.present) return null
@@ -1553,11 +1642,12 @@ window.__ModuleLoader__.load({
           model.error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, model.error) : null)
       }
 
-      const wakeLocks = voiceLocks('wake', models)
-      const wakeReplyLocks = voiceLocks('wake-reply', models)
-      const commandLocks = voiceLocks('command', models)
-      const dismissReplyLocks = voiceLocks('dismiss-reply', models)
-      const ttsLocks = voiceLocks('tts', models)
+      const backend = shown('ttsBackend') === 'qwen' ? 'qwen' : 'local'
+      const wakeLocks = voiceLocks('wake', models, backend)
+      const wakeReplyLocks = voiceLocks('wake-reply', models, backend)
+      const commandLocks = voiceLocks('command', models, backend)
+      const dismissReplyLocks = voiceLocks('dismiss-reply', models, backend)
+      const ttsLocks = voiceLocks('tts', models, backend)
       const chunkMissing = wakeLocks
       const sizeText = (bytes) => text.voiceSize.replaceAll('{size}', String(Math.round(bytes / (1024 * 1024))))
 
@@ -1652,6 +1742,20 @@ window.__ModuleLoader__.load({
           downloadBlock('asr', text.downloadAsr)),
         h('div', { className: 'dsh-orb-set-voice-group' },
           h('h4', null, text.ttsTitle),
+          h('label', { className: 'dsh-orb-set-voice-row' },
+            h('span', null, text.ttsBackend),
+            h('select', {
+              className: 'dsh-orb-set-select',
+              'aria-label': text.ttsBackend,
+              value: backend,
+              onChange: (event) => {
+                const next = event.target.value === 'qwen' ? 'qwen' : 'local'
+                remember('ttsBackend', next)
+                save({ ttsBackend: next })
+              },
+            },
+              h('option', { value: 'local' }, text.ttsBackendLocal),
+              h('option', { value: 'qwen' }, text.ttsBackendQwen))),
           h('div', { className: 'dsh-orb-set-voice-row' },
             h('span', null, text.ttsToggle),
             h(Toggle, {
@@ -1663,7 +1767,15 @@ window.__ModuleLoader__.load({
               onChange: (enabled) => save({ ttsEnabled: enabled }),
             })),
           textRow(text.questionPrompt, 'questionPrompt', ttsLocks),
-          numberRow(text.ttsSpeed, 'ttsSpeed', ttsLocks, { min: 1, max: 3, step: 0.1 }),
+          backend === 'qwen'
+            ? h('div', { className: 'dsh-orb-set-voice-backend' },
+              secretRow(text.qwenApiKey, 'qwenApiKey', []),
+              String(shown('qwenApiKey') ?? '').trim() === ''
+                ? h('p', { className: 'dsh-orb-set-muted' }, text.qwenApiKeyHint)
+                : null,
+              qwenVoiceRow([]),
+              numberRow(text.qwenSpeed, 'qwenSpeed', [], { min: 0.5, max: 2, step: 0.1 }))
+            : numberRow(text.ttsSpeed, 'ttsSpeed', ttsLocks, { min: 1, max: 3, step: 0.1 }),
           downloadBlock('tts', text.downloadTts)),
         h('div', { className: 'dsh-orb-set-voice-group' },
           h('h4', null, text.idleTitle),

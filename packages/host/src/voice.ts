@@ -23,7 +23,7 @@ import {
   type QueueEvent,
   type QueueState,
 } from '@dsh-orb/voice/queue'
-import { hasWakeWord, type VoiceSettings } from '@dsh-orb/voice/settings'
+import { hasWakeWord, ttsReady, type VoiceSettings } from '@dsh-orb/voice/settings'
 
 export interface VoicePresence {
   readonly wake: boolean
@@ -626,7 +626,9 @@ export class VoiceController {
   }
 
   private ttsOn(): boolean {
-    return this.options.settings().ttsEnabled && this.options.presence().tts
+    // The selected backend decides readiness: Qwen only needs its key, local needs
+    // the downloaded files. An unready backend behaves exactly like the TTS switch off.
+    return ttsReady(this.options.settings(), this.options.presence().tts)
   }
 
   private sample() {

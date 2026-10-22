@@ -11,6 +11,7 @@ const root = join(here, '../../..')
 // The host owns the preset ids, the page owns their names. Read the real list so a
 // preset added on the host side without copy here fails a test instead of shipping.
 const { AVATAR_PRESETS } = await import(pathToFileURL(join(root, 'packages/host/src/avatar-presets.ts')).href)
+const { qwenVoiceViews } = await import(pathToFileURL(join(root, 'packages/voice/src/qwen.ts')).href)
 
 function loadSection(hooks = {}) {
   const calls = []
@@ -35,6 +36,7 @@ function loadSection(hooks = {}) {
     avatarUrl: '/.dsh-orb/avatar?v=0',
     avatarPresetId: null,
     avatarPresets: AVATAR_PRESETS.map((preset) => ({ id: preset.id, url: `/.dsh-orb/avatar/preset/${preset.id}` })),
+    qwenVoices: qwenVoiceViews(),
     overlay: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' },
     background: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'max' },
     selectionEnabled: false,
@@ -1212,6 +1214,91 @@ describe('settings section', () => {
     await settle()
     view = page.render()
     assert.equal(find(view, (node) => node.children?.includes('模型已经存在，不需要重新下载')).length, 1)
+  })
+
+  it('switches the speech backend and saves the qwen fields', async () => {
+    const page = loadSection()
+    page.snapshot.voiceModels = readyVoiceModels()
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    const backend = find(view, (node) => node.type === 'select' && node.props?.['aria-label'] === '播报方式')[0]
+    assert.ok(backend)
+    assert.equal(backend.props.value, 'local')
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === 'API Key').length, 0)
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '语速').length, 1)
+
+    backend.props.onChange({ target: { value: 'qwen' } })
+    await settle()
+    const firstSave = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
+    assert.equal(JSON.parse(firstSave.options.body).ttsBackend, 'qwen')
+    assert.equal(JSON.parse(firstSave.options.body).qwenVoice, 'Cherry')
+
+    view = page.render()
+    const key = find(view, (node) => node.props?.['aria-label'] === 'API Key')[0]
+    assert.ok(key)
+    assert.equal(key.props.type, 'password')
+    assert.equal(find(view, (node) => node.children?.includes('留空时不播报。')).length, 1)
+    const voice = find(view, (node) => node.type === 'select' && node.props?.['aria-label'] === '音色')[0]
+    assert.ok(voice)
+    assert.equal(voice.props.value, 'Cherry')
+    assert.equal(find(voice, (node) => node.type === 'optgroup').length, 2)
+    assert.equal(find(voice, (node) => node.type === 'option' && node.props.value === 'Eldric Sage').length, 1)
+    const speed = find(view, (node) => node.props?.['aria-label'] === '语速')[0]
+    assert.equal(String(speed.props.min), '0.5')
+    assert.equal(String(speed.props.max), '2')
+
+    key.props.onBlur({ target: { value: '  sk-test  ' } })
+    await settle()
+    assert.equal(JSON.parse(page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1).options.body).qwenApiKey, '  sk-test  ')
+
+    voice.props.onChange({ target: { value: 'Eldric Sage' } })
+    await settle()
+    const voiceSave = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
+    assert.equal(JSON.parse(voiceSave.options.body).qwenVoice, 'Eldric Sage')
+
+    view = page.render()
+    find(view, (node) => node.props?.['aria-label'] === '语速')[0].props.onBlur({ target: { value: '1.8' } })
+    await settle()
+    assert.equal(JSON.parse(page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1).options.body).qwenSpeed, 1.8)
+    assert.equal(find(view, (node) => node.type === 'button' && node.children?.includes('下载 TTS 语音播报模型')).length, 1)
+  })
+
+  it('unlocks speech controls for qwen even without the local model', async () => {
+    const page = loadSection()
+    page.snapshot.voiceModels = { wake: { present: true }, tts: { present: false }, asr: { present: true } }
+    page.snapshot.voice = { ...page.snapshot.voice, ttsBackend: 'qwen', qwenApiKey: 'sk-test' }
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    const tts = find(view, (node) => node.props?.['aria-label'] === 'TTS' && node.props.role === 'switch')[0]
+    assert.equal(tts.props['aria-disabled'], undefined)
+    for (const label of ['提问提示语', '唤醒后的回复语', '退下后的回复语']) {
+      const field = find(view, (node) => node.props?.['aria-label'] === label)[0]
+      assert.equal(String(field.props.className).includes('is-locked'), false, label)
+    }
+    tts.props.onClick()
+    await settle()
+    const saved = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
+    assert.equal(JSON.parse(saved.options.body).ttsEnabled, false)
+    assert.equal(find(page.render(), (node) => node.props?.role === 'dialog').length, 0)
+
+    page.snapshot.voice = { ...page.snapshot.voice, ttsBackend: 'local' }
+    page.reset()
+    view = page.render()
+    await page.flush()
+    view = page.render()
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === 'API Key').length, 0)
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '音色').length, 0)
+    const localSpeed = find(view, (node) => node.props?.['aria-label'] === '语速')[0]
+    assert.equal(String(localSpeed.props.min), '1')
+    assert.equal(String(localSpeed.props.max), '3')
+    const locked = find(view, (node) => node.props?.['aria-label'] === 'TTS' && node.props.role === 'switch')[0]
+    assert.equal(locked.props['aria-disabled'], 'true')
+    locked.props.onClick()
+    view = page.render()
+    const dialog = find(view, (node) => node.props?.role === 'dialog')[0]
+    assert.equal(find(dialog, (node) => node.children?.includes('要下载 TTS 模型。')).length, 1)
   })
 })
 

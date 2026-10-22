@@ -663,3 +663,87 @@ describe('utterance judging', () => {
     assert.equal(children[1]?.sent.some((item) => item.type === 'speak'), false)
   })
 })
+
+describe('qwen speech readiness', () => {
+  const ttsSpeaks = (child: ReturnType<typeof fakeChild>) =>
+    child.sent.filter((item) => item.type === 'speak')
+
+  function controller(
+    settings: typeof DEFAULT_VOICE_SETTINGS,
+    presence: { wake: boolean, asr: boolean, tts: boolean },
+  ) {
+    const child = fakeChild()
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => presence,
+      now: () => 0,
+      send() {},
+      open: () => child.link,
+    })
+    voice.start()
+    return { child, voice }
+  }
+
+  it('speaks through qwen without the local files', () => {
+    const settings = settingsWith({ ttsBackend: 'qwen', qwenApiKey: 'sk-test' })
+    const { child, voice } = controller(settings, { wake: false, asr: false, tts: false })
+    voice.noteAssistant('b:1:0:0', '今天晴。')
+    const spoken = ttsSpeaks(child)
+    assert.equal(spoken.length, 1)
+    assert.equal(spoken[0]?.text, '今天晴。')
+    voice.close()
+  })
+
+  it('treats a blank qwen key as speech off', () => {
+    const settings = settingsWith({ ttsBackend: 'qwen', qwenApiKey: '   ' })
+    const { child, voice } = controller(settings, { wake: false, asr: false, tts: true })
+    voice.noteAssistant('b:1:0:0', '今天晴。')
+    voice.endTurn()
+    assert.deepEqual(ttsSpeaks(child), [])
+    voice.close()
+  })
+
+  it('keeps the local column on the downloaded files', () => {
+    const settings = settingsWith({ ttsBackend: 'local', qwenApiKey: 'sk-test' })
+    const { child, voice } = controller(settings, { wake: false, asr: false, tts: false })
+    voice.noteAssistant('b:1:0:0', '今天晴。')
+    assert.deepEqual(ttsSpeaks(child), [])
+    voice.close()
+  })
+
+  it('starts using qwen as soon as the key is filled', () => {
+    const settings = settingsWith({ ttsBackend: 'qwen', qwenApiKey: '' })
+    const { child, voice } = controller(settings, { wake: false, asr: false, tts: false })
+    voice.noteAssistant('b:1:0:0', '今天晴。')
+    assert.deepEqual(ttsSpeaks(child), [])
+    settings.qwenApiKey = 'sk-test'
+    voice.applySettings()
+    voice.noteAssistant('b:1:0:1', '明天多云。')
+    assert.equal(ttsSpeaks(child).some((item) => item.text === '明天多云。'), true)
+    voice.close()
+  })
+
+  it('uses qwen for the wake reply and the question prompt', () => {
+    const settings = settingsWith({ ttsBackend: 'qwen', qwenApiKey: 'sk-test' })
+    const { child, voice } = controller(settings, { wake: true, asr: true, tts: false })
+    child.emit({ type: 'mic', open: true })
+    child.emit({ type: 'wake' })
+    const reply = ttsSpeaks(child).find((item) => item.text === '我在')
+    assert.ok(reply)
+    child.emit({ type: 'playback', id: reply.id, phase: 'end' })
+    voice.questionOpened()
+    assert.equal(ttsSpeaks(child).some((item) => item.text === '我有几个问题，你来选一下'), true)
+    voice.close()
+  })
+
+  it('stops the sentence when the key stops being ready', () => {
+    const settings = settingsWith({ ttsBackend: 'qwen', qwenApiKey: 'sk-test' })
+    const { child, voice } = controller(settings, { wake: false, asr: false, tts: false })
+    voice.noteAssistant('b:1:0:0', '今天晴。')
+    assert.equal(ttsSpeaks(child).length, 1)
+    settings.qwenApiKey = '  '
+    voice.applySettings()
+    assert.equal(child.sent.some((item) => item.type === 'stop-speak'), true)
+    voice.close()
+  })
+})

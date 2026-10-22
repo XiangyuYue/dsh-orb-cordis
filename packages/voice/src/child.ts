@@ -16,6 +16,7 @@ import { contextFromFiles, keywordLines } from './keywords.ts'
 import { LevelMeter } from './level.ts'
 import { needsMicrophone, transcribing, type ListenMode } from './listen.ts'
 import { isEcho, type SpokenLine } from './echo.ts'
+import { speakQwen as startQwenSpeech, type QwenSpeech } from './qwen-tts.ts'
 import { captureBinary, CpalCapture, NativeCapture, type CaptureSource } from './capture.ts'
 import { type VoiceSettings } from './settings.ts'
 
@@ -243,6 +244,8 @@ class Engine {
   /** A segment accepted by the synthesizer and not yet handed to the speaker. */
   private armed: { id: string, token: number } | undefined
   private player: { stop(): void } | undefined
+  /** The cloud request for the current sentence, so a stop can close it. */
+  private qwen: QwenSpeech | undefined
   /** Smoothed microphone level for the input meter. Commands only; never wake or playback. */
   private readonly meter = new LevelMeter()
 
@@ -280,6 +283,11 @@ class Engine {
 
   speak(id: string, text: string): void {
     const token = ++this.speakToken
+    this.cancelQwen()
+    if (this.settings?.ttsBackend === 'qwen') {
+      this.speakWithQwen(id, text, token)
+      return
+    }
     const speed = this.settings?.ttsSpeed ?? 1.5
     const worker = this.ensureTts()
     if (!worker) {
@@ -321,8 +329,94 @@ class Engine {
     })
   }
 
+  /**
+   * One queued sentence on the cloud backend. Voice and speed are read here, so a
+   * settings change reaches the next sentence and never the one already speaking.
+   */
+  private speakWithQwen(id: string, text: string, token: number): void {
+    const apiKey = this.settings?.qwenApiKey ?? ''
+    if (!apiKey.trim() || !text.trim()) {
+      emit({ type: 'playback', id, phase: 'end' })
+      return
+    }
+    const voice = this.settings?.qwenVoice ?? 'Cherry'
+    const speed = this.settings?.qwenSpeed ?? 1.5
+    let player: StreamPlayer | undefined
+    let line: { text: string, startedAt: number, endedAt: number | undefined } | undefined
+    let job: QwenSpeech | undefined
+    let settled = false
+    this.armed = { id, token }
+
+    const finish = (stopped: boolean): void => {
+      settled = true
+      if (player && this.player === player) this.player = undefined
+      if (this.qwen === job) this.qwen = undefined
+      if (line) line.endedAt = Date.now()
+      this.ring.clear()
+      if (token !== this.speakToken && !stopped) return
+      emit({ type: 'playback', id, phase: 'end', ...(stopped ? { stopped: true } : {}) })
+    }
+
+    job = startQwenSpeech({
+      text,
+      apiKey,
+      voice,
+      speed,
+      onAudio: (samples, sampleRate) => {
+        if (token !== this.speakToken) return
+        if (!player) {
+          this.armed = undefined
+          try {
+            player = createStreamPlayer(this.native.cpal, this.ensureHost(), sampleRate, (stopped) => finish(stopped))
+          } catch (error) {
+            fail(error)
+            this.armed = undefined
+            job?.cancel()
+            finish(true)
+            return
+          }
+          this.player = player
+          const started = { text, startedAt: Date.now(), endedAt: undefined as number | undefined }
+          line = started
+          this.noteSpoken(started)
+          emit({ type: 'playback', id, phase: 'start' })
+        }
+        player.push(samples)
+      },
+      onDone: () => {
+        if (token !== this.speakToken) return
+        settled = true
+        this.qwen = undefined
+        if (this.armed?.id === id) this.armed = undefined
+        if (player) player.end()
+        else finish(false)
+      },
+      onError: (message) => {
+        if (token !== this.speakToken) return
+        settled = true
+        this.qwen = undefined
+        if (this.armed?.id === id) this.armed = undefined
+        fail(new Error(message))
+        if (player) player.stop()
+        else finish(false)
+      },
+    })
+    this.qwen = job
+    if (settled) {
+      job.cancel()
+      this.qwen = undefined
+    }
+  }
+
+  private cancelQwen(): void {
+    const job = this.qwen
+    this.qwen = undefined
+    job?.cancel()
+  }
+
   stopSpeak(): void {
     this.speakToken += 1
+    this.cancelQwen()
     const armed = this.armed
     this.armed = undefined
     const player = this.player
@@ -694,6 +788,120 @@ function kwsFiles(dir: string, chunk: 8 | 16): { encoder: string, decoder: strin
   }
   if (!existsSync(files.encoder) || !existsSync(files.decoder) || !existsSync(files.joiner)) return undefined
   return files
+}
+
+interface StreamPlayer {
+  push(samples: Float32Array): void
+  /** No more samples will come; finish after the buffer drains. */
+  end(): void
+  stop(): void
+}
+
+/**
+ * The speaker end of a cloud sentence. Chunks arrive while the stream is already
+ * running; the callback pulls across them and writes silence when the network is
+ * behind playback. One call to `onEnded`, exactly like {@link playPcm}.
+ */
+function createStreamPlayer(
+  cpal: any,
+  host: any,
+  sampleRate: number,
+  onEnded: (stopped: boolean) => void,
+): StreamPlayer {
+  const chunks: Float32Array[] = []
+  let head = 0
+  let headOffset = 0
+  let ended = false
+  let finished = false
+  let rate = sampleRate
+  let stream: { close(): void, play(): void } | undefined
+
+  const finish = (stopped: boolean, defer = false): void => {
+    if (finished) return
+    finished = true
+    const close = (): void => {
+      try { stream?.close() } catch { /* already closed */ }
+      onEnded(stopped)
+    }
+    // Closing from inside the audio callback throws in the native addon.
+    if (defer) setImmediate(close)
+    else close()
+  }
+
+  const device = host.defaultOutputDevice()
+  if (!device) {
+    finished = true
+    setImmediate(() => onEnded(false))
+    return { push() {}, end() {}, stop() {} }
+  }
+
+  const pull = (): number | undefined => {
+    while (head < chunks.length) {
+      const chunk = chunks[head]
+      if (chunk === undefined) {
+        head += 1
+        headOffset = 0
+        continue
+      }
+      if (headOffset < chunk.length) {
+        const value = chunk[headOffset] ?? 0
+        headOffset += 1
+        if (headOffset >= chunk.length) {
+          head += 1
+          headOffset = 0
+        }
+        return value
+      }
+      head += 1
+      headOffset = 0
+    }
+    return undefined
+  }
+
+  try {
+    const chosen = pickOutput(cpal, device, sampleRate)
+    rate = chosen.rate
+    const config = chosen.config
+    const output = device.buildOutputStream(
+      config,
+      cpal.SampleFormat.F32,
+      (data: Float32Array) => {
+        const channels = config.channels
+        const frames = Math.floor(data.length / channels)
+        for (let frame = 0; frame < frames; frame += 1) {
+          const sample = pull()
+          for (let channel = 0; channel < channels; channel += 1) {
+            data[frame * channels + channel] = sample ?? 0
+          }
+        }
+        if (ended && head >= chunks.length) finish(false, true)
+      },
+      (error: unknown) => {
+        fail(error)
+        finish(true, true)
+      },
+    )
+    stream = output
+    output.play()
+  } catch (error) {
+    fail(error)
+    finish(true)
+  }
+
+  return {
+    push(samples) {
+      if (finished || samples.length === 0) return
+      chunks.push(rate === sampleRate ? samples : resampleLinear(samples, sampleRate, rate))
+    },
+    end() {
+      if (finished) return
+      ended = true
+      if (head >= chunks.length) finish(false)
+    },
+    stop() {
+      finish(true)
+    },
+  }
 }
 
 function playPcm(

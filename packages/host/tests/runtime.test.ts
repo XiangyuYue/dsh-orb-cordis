@@ -307,6 +307,15 @@ async function waitFor(predicate: () => boolean, timeout = 2000): Promise<void> 
   }
 }
 
+/** `writeFile` makes the path exist before the JSON lands, so wait for the content itself. */
+function markerHas(file: string, swept: number): boolean {
+  try {
+    return readFileSync(file, 'utf8').includes(`"swept":${swept}`)
+  } catch {
+    return false
+  }
+}
+
 function keyOf(message: Record<string, unknown>): string {
   return typeof message.key === 'string' ? message.key : ''
 }
@@ -1816,7 +1825,7 @@ describe('blank conversation sweep', () => {
       return 3
     }
     scheduleBlankSweep({ marker, delayMs: 0, sweep, log: () => {} })
-    await waitFor(() => calls === 1 && existsSync(marker))
+    await waitFor(() => calls === 1 && markerHas(marker, 3))
     assert.match(readFileSync(marker, 'utf8'), /"swept":3/, 'the pass records what it moved')
 
     scheduleBlankSweep({ marker, delayMs: 0, sweep, log: () => {} })
@@ -1835,7 +1844,7 @@ describe('blank conversation sweep', () => {
     await waitFor(() => attempts === 1)
     assert.equal(existsSync(retry), false, 'a pass that could not run is not recorded')
     scheduleBlankSweep({ marker: retry, delayMs: 0, sweep: async () => { attempts += 1; return 0 }, log: () => {} })
-    await waitFor(() => attempts === 2 && existsSync(retry))
+    await waitFor(() => attempts === 2 && markerHas(retry, 0))
     assert.match(readFileSync(retry, 'utf8'), /"swept":0/, 'a real "nothing to sweep" pass is recorded')
   })
 })

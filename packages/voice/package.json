@@ -6,6 +6,7 @@
   "description": "Floating-ball voice: listen mode, playback queue, and the microphone child process.",
   "exports": {
     "./settings": "./src/settings.ts",
+    "./qwen": "./src/qwen.ts",
     "./manifest": "./src/manifest.ts",
     "./listen": "./src/listen.ts",
     "./queue": "./src/queue.ts",

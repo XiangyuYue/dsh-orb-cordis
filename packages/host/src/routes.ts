@@ -21,6 +21,7 @@ import {
 } from './preferences.ts'
 import { selectionRuntimeAvailable } from '@dsh-orb/native-selection'
 import { absentVoiceModels, type VoiceModelKind, type VoiceModels } from '@dsh-orb/voice/manifest'
+import { qwenVoiceViews, type QwenVoiceView } from '@dsh-orb/voice/qwen'
 import { type VoiceSettings } from '@dsh-orb/voice/settings'
 import { defaultAvatarPath } from './helper-path.ts'
 import { isTccRight, openMicrophoneSettings, type TccMonitor, type TccStatus } from './tcc.ts'
@@ -486,6 +487,8 @@ async function snapshot(deps: RouteDeps, voice: VoiceSettings = deps.store.voice
   ballEnabled: boolean
   voice: VoiceSettings
   voiceModels: VoiceModels
+  /** The voice list the Qwen picker renders; the page never keeps its own copy. */
+  qwenVoices: QwenVoiceView[]
   voiceMic: boolean | null
   avatarUrl: string
   avatarPresetId: string | null
@@ -512,6 +515,7 @@ async function snapshot(deps: RouteDeps, voice: VoiceSettings = deps.store.voice
     ballEnabled: deps.store.ballEnabled(),
     voice,
     voiceModels: deps.control.voiceModels?.() ?? absentVoiceModels(),
+    qwenVoices: qwenVoiceViews(),
     voiceMic: deps.control.voiceMic?.() ?? null,
     avatarUrl: `${PREFIX}/avatar?v=${version}`,
     avatarPresetId: selection.kind === 'preset' ? selection.id : null,
