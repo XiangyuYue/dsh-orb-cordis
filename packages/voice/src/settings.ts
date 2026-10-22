@@ -10,6 +10,7 @@ import {
   DEFAULT_QWEN_VOICE,
   isQwenVoice,
 } from './qwen.ts'
+import { clampTtsVolume, DEFAULT_TTS_VOLUME } from './volume.ts'
 
 export type TtsBackend = 'local' | 'qwen'
 
@@ -47,6 +48,8 @@ export interface VoiceSettings {
   questionPrompt: string
   /** 1–3, step 0.1. Factory 1.5. */
   ttsSpeed: number
+  /** 0–2, step 0.01. Shared by the local and Qwen speakers. Factory 1, the model's own level. */
+  ttsVolume: number
   /** 5000–600000. Factory 30000. */
   idleMs: number
 }
@@ -70,6 +73,7 @@ export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   qwenSpeed: DEFAULT_QWEN_SPEED,
   questionPrompt: '我有几个问题，你来选一下',
   ttsSpeed: 1.5,
+  ttsVolume: DEFAULT_TTS_VOLUME,
   idleMs: 30_000,
 }
 
@@ -118,6 +122,7 @@ export function parseVoiceSettings(value: unknown): VoiceSettings {
     qwenSpeed: typeof item.qwenSpeed === 'number' ? clampQwenSpeed(item.qwenSpeed) : DEFAULT_QWEN_SPEED,
     questionPrompt: text(item.questionPrompt, DEFAULT_VOICE_SETTINGS.questionPrompt, REPLY_CHARS),
     ttsSpeed: numberIn(item.ttsSpeed, 1, 3, DEFAULT_VOICE_SETTINGS.ttsSpeed, 1),
+    ttsVolume: typeof item.ttsVolume === 'number' ? clampTtsVolume(item.ttsVolume) : DEFAULT_TTS_VOLUME,
     idleMs: numberIn(item.idleMs, 5000, 600_000, DEFAULT_VOICE_SETTINGS.idleMs, 0),
   }
 }

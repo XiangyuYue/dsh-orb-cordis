@@ -1073,6 +1073,22 @@ describe('settings section', () => {
     await settle()
     const promptCall = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
     assert.equal(JSON.parse(promptCall.options.body).questionPrompt, '你来选')
+    const volume = find(view, (node) => node.type === 'input' && node.props?.['aria-label'] === '音量')[0]
+    assert.ok(volume)
+    assert.equal(volume.props.type, 'range')
+    assert.equal(String(volume.props.min), '0')
+    assert.equal(String(volume.props.max), '200')
+    assert.equal(volume.props.value, '100')
+    volume.props.onChange({ target: { value: '65' } })
+    view = page.render()
+    const changedVolume = find(view, (node) => node.type === 'input' && node.props?.['aria-label'] === '音量')[0]
+    assert.equal(changedVolume.props.value, '65')
+    assert.equal(changedVolume.props['aria-valuetext'], '65%')
+    assert.equal(find(view, (node) => node.children?.includes('65%')).length, 1)
+    changedVolume.props.onBlur({ target: { value: '65' } })
+    await settle()
+    const volumeCall = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
+    assert.equal(JSON.parse(volumeCall.options.body).ttsVolume, 0.65)
     const keyword = find(view, (node) => node.props?.['aria-label'] === '插话关键词')[0]
     assert.equal(String(keyword.props.className).includes('is-locked'), false)
     keyword.props.onBlur({ target: { value: '小肥鱼' } })
@@ -1228,6 +1244,7 @@ describe('settings section', () => {
     assert.equal(backend.props.value, 'local')
     assert.equal(find(view, (node) => node.props?.['aria-label'] === 'API Key').length, 0)
     assert.equal(find(view, (node) => node.props?.['aria-label'] === '语速').length, 1)
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '音量').length, 1)
 
     backend.props.onChange({ target: { value: 'qwen' } })
     await settle()
@@ -1236,6 +1253,7 @@ describe('settings section', () => {
     assert.equal(JSON.parse(firstSave.options.body).qwenVoice, 'Cherry')
 
     view = page.render()
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '音量').length, 1, 'the shared volume stays visible for qwen')
     const key = find(view, (node) => node.props?.['aria-label'] === 'API Key')[0]
     assert.ok(key)
     assert.equal(key.props.type, 'password')
@@ -1262,6 +1280,13 @@ describe('settings section', () => {
     find(view, (node) => node.props?.['aria-label'] === '语速')[0].props.onBlur({ target: { value: '1.8' } })
     await settle()
     assert.equal(JSON.parse(page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1).options.body).qwenSpeed, 1.8)
+    view = page.render()
+    const qwenVolume = find(view, (node) => node.type === 'input' && node.props?.['aria-label'] === '音量')[0]
+    qwenVolume.props.onChange({ target: { value: '150' } })
+    view = page.render()
+    find(view, (node) => node.type === 'input' && node.props?.['aria-label'] === '音量')[0].props.onBlur({ target: { value: '150' } })
+    await settle()
+    assert.equal(JSON.parse(page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1).options.body).ttsVolume, 1.5)
     assert.equal(find(view, (node) => node.type === 'button' && node.children?.includes('下载 TTS 语音播报模型')).length, 1)
   })
 
@@ -1274,7 +1299,7 @@ describe('settings section', () => {
     view = page.render()
     const tts = find(view, (node) => node.props?.['aria-label'] === 'TTS' && node.props.role === 'switch')[0]
     assert.equal(tts.props['aria-disabled'], undefined)
-    for (const label of ['提问提示语', '唤醒后的回复语', '退下后的回复语']) {
+    for (const label of ['提问提示语', '唤醒后的回复语', '退下后的回复语', '音量']) {
       const field = find(view, (node) => node.props?.['aria-label'] === label)[0]
       assert.equal(String(field.props.className).includes('is-locked'), false, label)
     }
@@ -1294,6 +1319,8 @@ describe('settings section', () => {
     const localSpeed = find(view, (node) => node.props?.['aria-label'] === '语速')[0]
     assert.equal(String(localSpeed.props.min), '1')
     assert.equal(String(localSpeed.props.max), '3')
+    const localVolume = find(view, (node) => node.props?.['aria-label'] === '音量')[0]
+    assert.equal(String(localVolume.props.className).includes('is-locked'), true, 'the local volume waits for the model')
     const locked = find(view, (node) => node.props?.['aria-label'] === 'TTS' && node.props.role === 'switch')[0]
     assert.equal(locked.props['aria-disabled'], 'true')
     locked.props.onClick()

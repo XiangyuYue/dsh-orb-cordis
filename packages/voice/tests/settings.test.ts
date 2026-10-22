@@ -11,6 +11,7 @@ describe('voice settings', () => {
     assert.equal(parseVoiceSettings({}).wakeWords[0], '你好大肥鱼')
     assert.equal(parseVoiceSettings({}).idleMs, 30_000)
     assert.equal(parseVoiceSettings({}).ttsSpeed, 1.5)
+    assert.equal(parseVoiceSettings({}).ttsVolume, 1)
   })
 
   it('keeps a valid field and pulls the others back into range', () => {
@@ -28,6 +29,7 @@ describe('voice settings', () => {
       dismissReply: '',
       questionPrompt: '选一下',
       ttsSpeed: 1.54,
+      ttsVolume: 0.37,
       idleMs: 1000,
     })
     assert.equal(parsed.wakeEnabled, false)
@@ -43,10 +45,20 @@ describe('voice settings', () => {
     assert.equal(parsed.dismissReply, '')
     assert.equal(parsed.questionPrompt, '选一下')
     assert.equal(parsed.ttsSpeed, 1.5)
+    assert.equal(parsed.ttsVolume, 0.37)
     assert.equal(parsed.idleMs, 5000)
     assert.equal(parseVoiceSettings({ wakeChunk: 16, ttsSpeed: 3, idleMs: 600_000 }).wakeChunk, 16)
     assert.equal(parseVoiceSettings({ ttsSpeed: 3, idleMs: 600_000 }).ttsSpeed, 3)
     assert.equal(parseVoiceSettings({ idleMs: 600_000 }).idleMs, 600_000)
+  })
+
+  it('keeps the speech volume inside 0–2 at two decimals', () => {
+    assert.equal(parseVoiceSettings({ ttsVolume: 0 }).ttsVolume, 0)
+    assert.equal(parseVoiceSettings({ ttsVolume: -0.4 }).ttsVolume, 0)
+    assert.equal(parseVoiceSettings({ ttsVolume: 1.234 }).ttsVolume, 1.23)
+    assert.equal(parseVoiceSettings({ ttsVolume: 2.5 }).ttsVolume, 2)
+    assert.equal(parseVoiceSettings({ ttsVolume: Number.NaN }).ttsVolume, 1)
+    assert.equal(parseVoiceSettings({ ttsVolume: 'loud' }).ttsVolume, 1)
   })
 
   it('keeps the interject keyword separate from the wake word', () => {

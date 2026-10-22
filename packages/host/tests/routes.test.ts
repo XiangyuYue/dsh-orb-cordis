@@ -312,9 +312,10 @@ describe('settings routes', () => {
       qwenApiKey: '  sk-test  ',
       qwenVoice: 'Eldric Sage',
       qwenSpeed: 1.84,
+      ttsVolume: 1.37,
     }), { 'x-dsh-user': 'ok' }), voice)
     const voiceBody = JSON.parse(voice.body.toString('utf8')) as {
-      voice: { wakeEnabled: boolean, idleMs: number, wakeReply: string, questionPrompt: string, ttsBackend: string, qwenApiKey: string, qwenVoice: string, qwenSpeed: number }
+      voice: { wakeEnabled: boolean, idleMs: number, wakeReply: string, questionPrompt: string, ttsBackend: string, qwenApiKey: string, qwenVoice: string, qwenSpeed: number, ttsVolume: number }
       qwenVoices: { voice: string, label: string, group: string }[]
     }
     assert.equal(voice.status, 200)
@@ -326,6 +327,7 @@ describe('settings routes', () => {
     assert.equal(voiceBody.voice.qwenApiKey, 'sk-test')
     assert.equal(voiceBody.voice.qwenVoice, 'Eldric Sage')
     assert.equal(voiceBody.voice.qwenSpeed, 1.8)
+    assert.equal(voiceBody.voice.ttsVolume, 1.37)
     assert.equal(voiceBody.qwenVoices.length, 48)
     const view = voiceBody.qwenVoices.find((item) => item.voice === 'Eldric Sage')
     assert.deepEqual(view, { voice: 'Eldric Sage', label: '沧明子 · 男 · 沉稳老者', group: 'standard' })
@@ -344,6 +346,7 @@ describe('settings routes', () => {
     assert.equal(reloaded.voice().ttsBackend, 'qwen')
     assert.equal(reloaded.voice().qwenVoice, 'Eldric Sage')
     assert.equal(reloaded.voice().qwenSpeed, 1.8)
+    assert.equal(reloaded.voice().ttsVolume, 1.37)
 
     const blank = response()
     await handler(request('POST', '/.dsh-orb/voice', JSON.stringify({

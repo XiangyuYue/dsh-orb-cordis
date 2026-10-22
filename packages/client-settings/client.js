@@ -176,6 +176,8 @@ window.__ModuleLoader__.load({
       qwenSpeed: '语速',
       questionPrompt: '提问提示语',
       ttsSpeed: '语速',
+      ttsVolume: '音量',
+      ttsVolumeHint: '100% 为模型原始音量，最高可放大到 200%。',
       downloadTts: '下载 TTS 语音播报模型',
       idleTitle: '空闲后取消固定',
       idleSeconds: '空闲时长（秒）',
@@ -361,6 +363,8 @@ window.__ModuleLoader__.load({
       qwenSpeed: 'Speed',
       questionPrompt: 'Question prompt',
       ttsSpeed: 'Speed',
+      ttsVolume: 'Volume',
+      ttsVolumeHint: '100% is the model\'s own level; up to 200% boosts it.',
       downloadTts: 'Download TTS speech model',
       idleTitle: 'Unpin after idle',
       idleSeconds: 'Idle time (seconds)',
@@ -1352,6 +1356,7 @@ window.__ModuleLoader__.load({
       qwenSpeed: 1.4,
       questionPrompt: '我有几个问题，你来选一下',
       ttsSpeed: 1.5,
+      ttsVolume: 1,
       idleMs: 30000,
     }
 
@@ -1376,6 +1381,7 @@ window.__ModuleLoader__.load({
         qwenSpeed: typeof item.qwenSpeed === 'number' ? item.qwenSpeed : VOICE_DEFAULTS.qwenSpeed,
         questionPrompt: typeof item.questionPrompt === 'string' ? item.questionPrompt : VOICE_DEFAULTS.questionPrompt,
         ttsSpeed: typeof item.ttsSpeed === 'number' ? item.ttsSpeed : VOICE_DEFAULTS.ttsSpeed,
+        ttsVolume: typeof item.ttsVolume === 'number' ? item.ttsVolume : VOICE_DEFAULTS.ttsVolume,
         idleMs: typeof item.idleMs === 'number' ? item.idleMs : VOICE_DEFAULTS.idleMs,
       }
     }
@@ -1561,6 +1567,42 @@ window.__ModuleLoader__.load({
             },
             ...lockedProps(missing),
           }))
+      }
+
+      /** A slider whose stored value is a fraction and whose visible unit is a whole percent. */
+      function percentRow(label, key, missing, spec) {
+        const raw = Number(shown(key))
+        const percent = Math.round((Number.isFinite(raw) ? raw : (spec.fallback ?? 1)) * spec.scale)
+        const commit = (event) => {
+          if (missing.length) return
+          const next = Number(event.target.value)
+          if (!Number.isFinite(next)) return
+          remember(key, Math.round(next) / spec.scale)
+          save({})
+        }
+        return h('label', { className: 'dsh-orb-set-voice-row' },
+          h('span', null, label),
+          h('input', {
+            className: `dsh-orb-set-range${missing.length ? ' is-locked' : ''}`,
+            type: 'range',
+            'aria-label': label,
+            'aria-valuetext': `${percent}%`,
+            'aria-disabled': missing.length ? 'true' : 'false',
+            min: spec.min,
+            max: spec.max,
+            step: spec.step,
+            value: String(percent),
+            onChange: (event) => {
+              if (missing.length) return
+              const next = Number(event.target.value)
+              if (!Number.isFinite(next)) return
+              remember(key, Math.round(next) / spec.scale)
+            },
+            // Like the other fields, a drag previews live and the setting is written on blur.
+            onBlur: commit,
+            ...lockedProps(missing),
+          }),
+          h('span', { className: 'dsh-orb-set-muted dsh-orb-set-range-value' }, `${percent}%`))
       }
 
       function secretRow(label, key, missing) {
@@ -1772,6 +1814,8 @@ window.__ModuleLoader__.load({
               onLocked: () => openLock(ttsLocks),
               onChange: (enabled) => save({ ttsEnabled: enabled }),
             })),
+          percentRow(text.ttsVolume, 'ttsVolume', ttsLocks, { min: 0, max: 200, step: 1, scale: 100, fallback: 1 }),
+          h('p', { className: 'dsh-orb-set-muted' }, text.ttsVolumeHint),
           textRow(text.questionPrompt, 'questionPrompt', ttsLocks),
           backend === 'qwen'
             ? h('div', { className: 'dsh-orb-set-voice-backend' },
@@ -1922,6 +1966,8 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-status { font-weight: 600; }
 .dsh-orb-set-fields:disabled { opacity: 0.55; }
 .dsh-orb-set-input { width: 72px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 8px; padding: 6px 8px; font: inherit; }
+.dsh-orb-set-range { flex: 1; min-width: 0; max-width: 220px; accent-color: var(--dsw-alias-button-info-fill, #2f6fed); }
+.dsh-orb-set-range-value { flex: none; min-width: 40px; text-align: end; font-variant-numeric: tabular-nums; }
 .dsh-orb-set-label { display: flex; align-items: center; gap: 12px; font-weight: 600; }
 .dsh-orb-set-select { min-width: 190px; }
 .dsh-orb-set-input-wide { width: auto; min-width: 0; flex: 1; }

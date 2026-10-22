@@ -19,6 +19,7 @@ import { isEcho, type SpokenLine } from './echo.ts'
 import { speakQwen as startQwenSpeech, type QwenSpeech } from './qwen-tts.ts'
 import { DEFAULT_QWEN_SPEED, DEFAULT_QWEN_VOICE } from './qwen.ts'
 import { isRecoverableSpeakerError } from './speaker.ts'
+import { DEFAULT_TTS_VOLUME, scaledSample } from './volume.ts'
 import { captureBinary, CpalCapture, NativeCapture, type CaptureSource } from './capture.ts'
 import { type VoiceSettings } from './settings.ts'
 
@@ -269,7 +270,7 @@ class Engine {
   configure(message: ConfigureMessage): void {
     this.settings = message.settings
     this.paths = message.paths
-    debug(`configure backend=${this.settings?.ttsBackend ?? 'local'} key=${this.settings?.qwenApiKey?.trim() ? 'yes' : 'no'} voice=${this.settings?.qwenVoice ?? ''} speed=${this.settings?.qwenSpeed ?? ''} tts=${this.settings?.ttsEnabled === true}`)
+    debug(`configure backend=${this.settings?.ttsBackend ?? 'local'} key=${this.settings?.qwenApiKey?.trim() ? 'yes' : 'no'} voice=${this.settings?.qwenVoice ?? ''} speed=${this.settings?.qwenSpeed ?? ''} volume=${this.settings?.ttsVolume ?? DEFAULT_TTS_VOLUME} tts=${this.settings?.ttsEnabled === true}`)
     // Build the recognizers before the microphone callback starts. Loading them
     // on the audio thread makes CoreAudio drop the stream.
     this.ensureKws()
@@ -309,6 +310,7 @@ class Engine {
       return
     }
     const speed = this.settings?.ttsSpeed ?? 1.5
+    const volume = this.settings?.ttsVolume ?? DEFAULT_TTS_VOLUME
     const worker = this.ensureTts()
     if (!worker) {
       debug(`local id=${id} no-worker`)
@@ -336,7 +338,7 @@ class Engine {
       try {
         const line = { text, startedAt: Date.now(), endedAt: undefined as number | undefined }
         this.noteSpoken(line)
-        this.player = playPcm(this.native.cpal, this.ensureHost(), samples, sampleRate, (stopped) => {
+        this.player = playPcm(this.native.cpal, this.ensureHost(), samples, sampleRate, volume, (stopped) => {
           this.player = undefined
           line.endedAt = Date.now()
           // The command that follows must not seed the recognizer with the speaker's own tail.
@@ -366,6 +368,7 @@ class Engine {
     }
     const voice = this.settings?.qwenVoice ?? DEFAULT_QWEN_VOICE
     const speed = this.settings?.qwenSpeed ?? DEFAULT_QWEN_SPEED
+    const volume = this.settings?.ttsVolume ?? DEFAULT_TTS_VOLUME
     let player: StreamPlayer | undefined
     let line: { text: string, startedAt: number, endedAt: number | undefined } | undefined
     let job: QwenSpeech | undefined
@@ -393,7 +396,7 @@ class Engine {
         if (!player) {
           this.armed = undefined
           try {
-            player = createStreamPlayer(this.native.cpal, this.ensureHost(), sampleRate, (stopped) => finish(stopped))
+            player = createStreamPlayer(this.native.cpal, this.ensureHost(), sampleRate, volume, (stopped) => finish(stopped))
           } catch (error) {
             fail(error)
             this.armed = undefined
@@ -839,6 +842,7 @@ function createStreamPlayer(
   cpal: any,
   host: any,
   sampleRate: number,
+  volume: number,
   onEnded: (stopped: boolean) => void,
 ): StreamPlayer {
   const chunks: Float32Array[] = []
@@ -883,7 +887,7 @@ function createStreamPlayer(
           head += 1
           headOffset = 0
         }
-        return value
+        return scaledSample(value, volume)
       }
       head += 1
       headOffset = 0
@@ -945,6 +949,7 @@ function playPcm(
   host: any,
   samples: Float32Array,
   sampleRate: number,
+  volume: number,
   onEnded: (stopped: boolean) => void,
 ): { stop(): void } {
   const device = host.defaultOutputDevice()
@@ -971,7 +976,7 @@ function playPcm(
       const channels = config.channels
       const frames = Math.floor(data.length / channels)
       for (let frame = 0; frame < frames; frame += 1) {
-        const sample = cursor < pcm.length ? pcm[cursor] ?? 0 : 0
+        const sample = scaledSample(cursor < pcm.length ? pcm[cursor] ?? 0 : 0, volume)
         for (let channel = 0; channel < channels; channel += 1) data[frame * channels + channel] = sample
         cursor += 1
       }

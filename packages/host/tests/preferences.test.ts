@@ -288,6 +288,7 @@ describe('profile preferences', () => {
       dismissPhrases: ['退下吧'],
       questionPrompt: '你来选',
       ttsSpeed: 2,
+      ttsVolume: 0.55,
     })
     const again = new ProfileStore(path)
     assert.equal(again.voice().wakeEnabled, false)
@@ -298,6 +299,7 @@ describe('profile preferences', () => {
     assert.deepEqual(again.voice().dismissPhrases, ['退下吧'])
     assert.equal(again.voice().questionPrompt, '你来选')
     assert.equal(again.voice().ttsSpeed, 2)
+    assert.equal(again.voice().ttsVolume, 0.55)
     assert.deepEqual(again.voice().wakeWords, ['你好大肥鱼'])
     writeFileSync(join(path, 'orb-voice.json'), '{')
     assert.equal(new ProfileStore(path).voice().wakeEnabled, true)
