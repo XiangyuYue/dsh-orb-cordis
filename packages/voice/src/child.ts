@@ -416,6 +416,9 @@ class Engine {
         if (player) player.end()
         else finish(false)
       },
+      onRetry: (message, attempt) => {
+        debug(`qwen id=${id} retry=${attempt} ${message.slice(0, 80)}`)
+      },
       onError: (message) => {
         if (token !== this.speakToken) return
         debug(`qwen id=${id} error ${message.slice(0, 120)}`)

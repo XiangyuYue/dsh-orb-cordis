@@ -188,11 +188,45 @@ describe('qwen session protocol', () => {
   })
 
   it('times out a connection that never answers', async () => {
-    const run = harness('你好。', { connectTimeoutMs: 5 })
+    const run = harness('你好。', { connectTimeoutMs: 5, retries: 0 })
     assert.ok(run.sockets[0])
     await new Promise((resolve) => setTimeout(resolve, 30))
     assert.deepEqual(run.errors, ['千问语音合成超时'])
     assert.equal(run.sockets[0]?.closed, true)
+    assert.equal(run.done(), 0)
+  })
+
+  it('retries a timeout that produced no audio', async () => {
+    const run = harness('你好。', { connectTimeoutMs: 200, firstAudioTimeoutMs: 100, retries: 1 })
+    const first = run.sockets[0]
+    assert.ok(first)
+    first.open()
+    first.message({ type: 'session.updated' })
+    for (let attempt = 0; attempt < 100 && run.sockets.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.equal(run.sockets.length, 2, 'a fresh socket is opened for the retry')
+    assert.equal(first.closed, true)
+    const second = run.sockets[1]
+    assert.ok(second)
+    second.open()
+    second.message({ type: 'session.updated' })
+    second.message({ type: 'response.audio.delta', delta: pcm([7]) })
+    second.message({ type: 'session.finished' })
+    assert.deepEqual(run.errors, [])
+    assert.equal(run.done(), 1)
+  })
+
+  it('does not retry after audio has started', async () => {
+    const run = harness('你好。', { firstAudioTimeoutMs: 50, idleTimeoutMs: 5, retries: 1 })
+    const socket = run.sockets[0]
+    assert.ok(socket)
+    socket.open()
+    socket.message({ type: 'session.updated' })
+    socket.message({ type: 'response.audio.delta', delta: pcm([7]) })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(run.sockets.length, 1, 'repeating a started sentence would duplicate audio')
+    assert.deepEqual(run.errors, ['千问语音合成超时'])
     assert.equal(run.done(), 0)
   })
 

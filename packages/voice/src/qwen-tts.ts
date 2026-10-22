@@ -36,8 +36,14 @@ export interface QwenSpeechOptions {
   readonly onDone: () => void
   /** One request failure. Not called after {@link QwenSpeech.cancel}. */
   readonly onError?: (message: string) => void
+  /** Fired before a no-audio request is retried with a fresh socket. */
+  readonly onRetry?: (message: string, attempt: number) => void
   readonly connectTimeoutMs?: number
+  /** How long to wait for the first PCM after the session is ready. */
+  readonly firstAudioTimeoutMs?: number
   readonly idleTimeoutMs?: number
+  /** Extra attempts after a timeout with no audio. Factory 1. */
+  readonly retries?: number
   /** Test seam; production uses the runtime's global WebSocket. */
   readonly socket?: (url: string, init: QwenSocketInit) => QwenSocket
 }
@@ -49,8 +55,10 @@ export interface QwenSpeech {
 /** The service caps one request at 5000 characters; leave room for cleaning. */
 export const QWEN_TEXT_LIMIT = 4000
 
-const CONNECT_TIMEOUT_MS = 15_000
+const CONNECT_TIMEOUT_MS = 10_000
+const FIRST_AUDIO_TIMEOUT_MS = 8_000
 const IDLE_TIMEOUT_MS = 30_000
+const RETRY_DELAY_MS = 300
 
 /** Markdown out, one line of speakable text in. English stays in the same run. */
 export function prepareQwenText(text: string): string {
@@ -132,7 +140,9 @@ export function speakQwen(options: QwenSpeechOptions): QwenSpeech {
   const apiKey = options.apiKey.trim()
   const segments = splitQwenText(prepareQwenText(options.text))
   const connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS
+  const firstAudioTimeoutMs = options.firstAudioTimeoutMs ?? FIRST_AUDIO_TIMEOUT_MS
   const idleTimeoutMs = options.idleTimeoutMs ?? IDLE_TIMEOUT_MS
+  const retries = Math.max(0, Math.floor(options.retries ?? 1))
   let settled = false
   let current: { close(): void } | undefined
 
@@ -151,23 +161,40 @@ export function speakQwen(options: QwenSpeechOptions): QwenSpeech {
     options.onDone()
   }
 
-  const start = (index: number): void => {
+  const start = (index: number, retry = 0): void => {
     if (settled) return
     const text = segments[index]
     if (text === undefined) {
       complete()
       return
     }
+    let gotAudio = false
     current = openSegment(text, {
       apiKey,
       voice: options.voice,
       speed: options.speed,
       connectTimeoutMs,
+      firstAudioTimeoutMs,
       idleTimeoutMs,
       socket: options.socket,
-      onAudio: options.onAudio,
+      onAudio: (samples, sampleRate) => {
+        gotAudio = true
+        options.onAudio(samples, sampleRate)
+      },
       onComplete: () => start(index + 1),
-      onFailure: fail,
+      onFailure: (message, retryable) => {
+        if (settled) return
+        // The service occasionally accepts the session and then sends no PCM. Retrying a
+        // fresh socket is safe only if this attempt produced no audio; otherwise the
+        // sentence would repeat from the beginning.
+        if (retryable && !gotAudio && retry < retries) {
+          current = undefined
+          options.onRetry?.(message, retry + 1)
+          setTimeout(() => { if (!settled) start(index, retry + 1) }, RETRY_DELAY_MS)
+          return
+        }
+        fail(message)
+      },
     })
   }
 
@@ -193,11 +220,13 @@ interface SegmentOptions {
   readonly voice: string
   readonly speed: number
   readonly connectTimeoutMs: number
+  readonly firstAudioTimeoutMs: number
   readonly idleTimeoutMs: number
   readonly socket?: (url: string, init: QwenSocketInit) => QwenSocket
   readonly onAudio: (samples: Float32Array, sampleRate: number) => void
   readonly onComplete: () => void
-  readonly onFailure: (message: string) => void
+  /** `retryable` is true only for a timeout that produced no audio. */
+  readonly onFailure: (message: string, retryable: boolean) => void
 }
 
 /** One connection for one text segment. All callbacks fire at most once. */
@@ -208,12 +237,13 @@ function openSegment(text: string, options: SegmentOptions): { close(): void } {
       headers: { Authorization: `Bearer ${options.apiKey}` },
     })
   } catch (error) {
-    options.onFailure(error instanceof Error ? error.message : String(error))
+    options.onFailure(error instanceof Error ? error.message : String(error), false)
     return { close() {} }
   }
 
   let settled = false
   let sentText = false
+  let gotAudio = false
   let timer: ReturnType<typeof setTimeout> | undefined
 
   const clearTimer = (): void => {
@@ -234,10 +264,10 @@ function openSegment(text: string, options: SegmentOptions): { close(): void } {
     try { socket.close() } catch { /* the peer may already be gone */ }
   }
 
-  const fail = (message: string): void => {
+  const fail = (message: string, retryable = false): void => {
     if (!take()) return
     try { socket.close() } catch { /* the peer may already be gone */ }
-    options.onFailure(message)
+    options.onFailure(message, retryable)
   }
 
   const complete = (): void => {
@@ -248,7 +278,7 @@ function openSegment(text: string, options: SegmentOptions): { close(): void } {
 
   const arm = (ms: number): void => {
     clearTimer()
-    timer = setTimeout(() => fail('千问语音合成超时'), ms)
+    timer = setTimeout(() => fail('千问语音合成超时', true), ms)
     timer.unref?.()
   }
 
@@ -267,7 +297,7 @@ function openSegment(text: string, options: SegmentOptions): { close(): void } {
 
   socket.onMessage((data) => {
     if (settled) return
-    arm(options.idleTimeoutMs)
+    arm(gotAudio ? options.idleTimeoutMs : options.firstAudioTimeoutMs)
     let parsed: unknown
     try {
       parsed = JSON.parse(data) as unknown
@@ -295,7 +325,7 @@ function openSegment(text: string, options: SegmentOptions): { close(): void } {
         fail(error instanceof Error ? error.message : String(error))
         return
       }
-      arm(options.idleTimeoutMs)
+      arm(options.firstAudioTimeoutMs)
       return
     }
     if (type === 'response.audio.delta') {
@@ -303,7 +333,11 @@ function openSegment(text: string, options: SegmentOptions): { close(): void } {
       if (typeof delta !== 'string' || delta === '') return
       try {
         const samples = decodeQwenPcm(delta)
-        if (samples.length > 0) options.onAudio(samples, QWEN_SAMPLE_RATE)
+        if (samples.length > 0) {
+          gotAudio = true
+          options.onAudio(samples, QWEN_SAMPLE_RATE)
+          arm(options.idleTimeoutMs)
+        }
       } catch (error) {
         fail(error instanceof Error ? error.message : String(error))
       }
@@ -314,7 +348,6 @@ function openSegment(text: string, options: SegmentOptions): { close(): void } {
 
   socket.onError(() => fail('千问语音连接失败'))
   socket.onClose(() => fail('千问语音连接中断'))
-
   // The handshake and `session.updated` share one deadline; audio then gets the idle one.
   arm(options.connectTimeoutMs)
 
