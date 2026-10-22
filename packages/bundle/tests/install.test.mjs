@@ -177,6 +177,14 @@ describe('dsh-orb install layout', () => {
       ]) {
         assert.ok(existsSync(join(root, rel)), rel)
       }
+      // The child and the TTS worker share a hashed speak-text chunk. A missing one only
+      // shows up when the voice child is forked, so resolve every relative import here.
+      for (const entry of ['child.js', 'tts-worker.js']) {
+        const source = readFileSync(join(root, 'dist/voice', entry), 'utf8')
+        for (const match of source.matchAll(/from "\.\/([^"]+)"/g)) {
+          assert.ok(existsSync(join(root, 'dist/voice', match[1])), `${entry} imports ${match[1]}`)
+        }
+      }
       const koffi = JSON.parse(readFileSync(join(root, 'node_modules/koffi/package.json'), 'utf8'))
       assert.equal(koffi.scripts, undefined, 'no install script for pnpm to gate')
     } finally {
