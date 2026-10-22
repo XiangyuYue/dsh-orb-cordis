@@ -298,6 +298,9 @@ class Engine {
   }
 
   speak(id: string, text: string): void {
+    // The host normally serializes sentences, but a new command can arrive while an old
+    // player is still draining. Make the new sentence the only audio before it starts.
+    this.stopSpeak()
     const token = ++this.speakToken
     debug(`speak id=${id} backend=${this.settings?.ttsBackend ?? 'local'} chars=${text.length}`)
     this.cancelQwen()

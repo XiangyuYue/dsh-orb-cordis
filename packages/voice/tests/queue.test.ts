@@ -271,6 +271,39 @@ describe('playback queue', () => {
     assert.equal(bodyBusy(prompt.state), false)
     assert.equal(localBusy(prompt.state), false)
   })
+
+  it('drops held text when a new assistant block starts, without stopping the current sentence', () => {
+    let state = createQueue(true)
+    state = apply(state, { type: 'text', text: '第一句。' }).state
+    state = apply(state, { type: 'text', text: '播报期间的第二句。' }).state
+    assert.deepEqual(queueView(state).held, ['播报期间的第二句。'])
+    state = apply(state, { type: 'block' }).state
+    assert.deepEqual(queueView(state).held, [])
+    assert.equal(queueView(state).playing?.text, '第一句。')
+  })
+
+  it('plays a sentence from a new block after the old block was dropped', () => {
+    let state = createQueue(true)
+    state = apply(state, { type: 'text', text: '第一句。' }).state
+    state = apply(state, { type: 'text', text: '播报期间的途中句。' }).state
+    const playing = queueView(state).playing
+    assert.ok(playing)
+    state = apply(state, { type: 'playback-ended', id: playing.id }).state
+    state = apply(state, { type: 'block' }).state
+    const next = apply(state, { type: 'text', text: '网页能访问。' })
+    assert.deepEqual(playText(next.effects), ['网页能访问。'])
+    assert.equal(next.effects[0]?.type === 'play' && next.effects[0].kind, 'unclassified')
+  })
+
+  it('keeps a closing slot when a new assistant block starts', () => {
+    let state = createQueue(true)
+    state = apply(state, { type: 'local', text: '我在' }).state
+    state = apply(state, { type: 'text', text: '最终结果。' }).state
+    state = apply(state, { type: 'turn-end' }).state
+    assert.deepEqual(queueView(state).queued.map((item) => item.text), ['最终结果。'])
+    state = apply(state, { type: 'block' }).state
+    assert.deepEqual(queueView(state).queued.map((item) => item.text), ['最终结果。'])
+  })
 })
 
 describe('takeReadyPrefix', () => {

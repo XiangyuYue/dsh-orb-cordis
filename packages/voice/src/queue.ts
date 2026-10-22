@@ -5,6 +5,8 @@
  * A later closing replaces the closing text without passing the prompt.
  * An unfinished opening line still in the buffer is spoken when a tool call
  * starts, if the speaker is free. If the speaker is busy, that line is dropped.
+ * A new assistant block drops the previous block's holding area; a sentence
+ * already playing keeps going.
  */
 
 import { takeReadyPrefix } from './speak-text.ts'
@@ -13,6 +15,7 @@ export type PlayingKind = 'unclassified' | 'mid' | 'closing' | 'question' | 'loc
 
 export type QueueEvent =
   | { type: 'text', text: string }
+  | { type: 'block' }
   | { type: 'tool' }
   | { type: 'turn-end' }
   | { type: 'question', text: string }
@@ -121,6 +124,8 @@ export function reduceQueue(state: QueueState, event: QueueEvent): { state: Queu
       return cleared(state, state.enabled)
     case 'text':
       return state.enabled ? pushText(state, event.text) : { state, effects: [] }
+    case 'block':
+      return { state: { ...state, buffer: '', held: [] }, effects: [] }
     case 'tool':
       return onTool(state)
     case 'turn-end':

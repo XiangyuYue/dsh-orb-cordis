@@ -305,7 +305,9 @@ export class OrbRuntime {
   /** Bumped every time a turn starts; stopTurn uses it to spot a turn that replaced its own. */
   private turnEpoch = 0
   /** The old turn is being stopped; send this text as a new task after its turn/end. */
-  private pendingInterject: { text: string; key: string; sessionId?: string } | undefined
+  private pendingPrompt: { text: string; key: string; sessionId?: string } | undefined
+  /** Steps whose first tool-call delta already told voice that the preceding text was mid-turn. */
+  private readonly toolVoiceSteps = new Set<string>()
   private child: ChildProcess | undefined
   private binary = ''
   private failures = 0
@@ -453,7 +455,11 @@ export class OrbRuntime {
       send: (message) => this.broadcast(message),
       open: () => openVoiceChild(),
       interject: (text) => { void this.onInterject(text) },
-      stopTurn: () => { if (this.turnRunning) this.run('stop', () => this.stopTurn()) },
+      stopTurn: () => {
+        if (!this.turnRunning) return
+        const epoch = this.turnEpoch
+        this.run('stop', () => this.stopTurn(epoch))
+      },
     })
     this.voiceDownloads = new VoiceDownloads(() => ({
       kws: dshHomePath('dsh-orb', 'voice', 'kws'),
@@ -834,11 +840,11 @@ export class OrbRuntime {
   private async onPrompt(text: string): Promise<void> {
     const trimmed = text.trim()
     if (!trimmed) return
-    // A typed send (or the page's command-mode voice prompt) is the newest intent; it
-    // supersedes an interjection still waiting for the old turn to stop.
-    this.settlePendingInterject()
-    this.block(`user:${randomUUID()}`, 'user', trimmed, false, 'set')
-    await this.submitPrompt(trimmed)
+    // A typed send (or the page's command-mode voice prompt) is the newest intent. It
+    // preempts a running turn, or a previous voice command still waiting for its turn/end.
+    const key = `user:${randomUUID()}`
+    this.block(key, 'user', trimmed, false, 'set')
+    await this.preempt(trimmed, key)
   }
 
   /** Start one new turn on the current session. The caller owns the user bubble. */
@@ -878,49 +884,54 @@ export class OrbRuntime {
   }
 
   /**
-   * 一句插话：停掉旧轮，等它真正结束后，把原话当成一条新消息另起一轮。
-   * 旧轮还在跑时不能立刻开始下一轮（官方要求同一会话只有一轮）。
+   * 一句最新的用户命令：停掉旧轮和旧语音，等旧轮真正结束后，把这句话当成新消息另起一轮。
+   * 打字、语音命令和插话都走这里；旧轮还在跑时不能立刻开始下一轮（官方要求同一会话只有一轮）。
    */
-  private async onInterject(text: string): Promise<void> {
-    const trimmed = text.trim()
-    if (!trimmed) return
-    const key = `user:${randomUUID()}`
-    this.block(key, 'user', trimmed, false, 'set')
+  private async preempt(trimmed: string, key: string): Promise<void> {
+    // The latest command wins while the old turn is being stopped.
+    this.settlePendingPrompt()
     this.voice.activity()
 
     if (!this.turnRunning || this.sessionId === undefined) {
-      // A stale pending belongs to a turn the UI already considers finished.
-      this.settlePendingInterject()
       await this.submitPrompt(trimmed)
       return
     }
 
-    // The latest instruction wins while the old turn is being stopped.
-    if (this.pendingInterject) this.dropBlock(this.pendingInterject.key)
     const pending = { text: trimmed, key, sessionId: this.sessionId }
-    this.pendingInterject = pending
+    this.pendingPrompt = pending
+    // Stop the old speaker immediately, before cancel() and the eventual turn/end. The
+    // remaining old-turn text stays muted until beginTurn rebuilds the queue.
+    this.voice.prepareNewTurn()
     try {
       await this.ctx.sessionController.cancel({ sessionId: pending.sessionId })
       // The official cancel aborts the current step; turn/end lands after in-flight tools
       // settle. Drain once now so the normal 400 ms transcript poll is not the floor.
       this.drain()
     } catch (error) {
-      // A newer interjection, a stop, or a turn/end may have replaced this one already.
-      if (this.pendingInterject !== pending) return
-      this.pendingInterject = undefined
+      // A newer command, a stop, or a turn/end may have replaced this one already.
+      if (this.pendingPrompt !== pending) return
+      this.pendingPrompt = undefined
       this.dropBlock(key)
       this.voice.resumeAfterInterjectFailure()
       const message = error instanceof Error ? error.message : String(error)
-      console.error(`dsh-orb: interject cancel failed: ${message}`)
+      console.error(`dsh-orb: prompt cancel failed: ${message}`)
       this.status(message)
     }
   }
 
-  /** Start the task waiting for the old turn's turn/end. */
-  private startPendingInterject(): void {
-    const pending = this.pendingInterject
+  private async onInterject(text: string): Promise<void> {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    const key = `user:${randomUUID()}`
+    this.block(key, 'user', trimmed, false, 'set')
+    await this.preempt(trimmed, key)
+  }
+
+  /** Start the command waiting for the old turn's turn/end. */
+  private startPendingPrompt(): void {
+    const pending = this.pendingPrompt
     if (!pending) return
-    this.pendingInterject = undefined
+    this.pendingPrompt = undefined
     if (pending.sessionId !== this.sessionId) {
       this.dropBlock(pending.key)
       return
@@ -928,11 +939,11 @@ export class OrbRuntime {
     void this.submitPrompt(pending.text)
   }
 
-  /** Drop a waiting interjection because a newer input or a stop replaced it. */
-  private settlePendingInterject(): void {
-    const pending = this.pendingInterject
+  /** Drop a waiting command because a newer input or a stop replaced it. */
+  private settlePendingPrompt(): void {
+    const pending = this.pendingPrompt
     if (!pending) return
-    this.pendingInterject = undefined
+    this.pendingPrompt = undefined
     this.dropBlock(pending.key)
   }
 
@@ -1160,8 +1171,8 @@ export class OrbRuntime {
     }
     if (type === 'turn/end') {
       this.finishTurn()
-      // The old turn is really gone; now the interjection can become the next turn.
-      this.startPendingInterject()
+      // The old turn is really gone; now the pending command can become the next turn.
+      this.startPendingPrompt()
     }
   }
 
@@ -1219,6 +1230,13 @@ export class OrbRuntime {
         return
       }
       if (chunk.type === 'tool-call-delta') {
+        // The model has started a tool call. Anything it said before this belongs to a
+        // mid-turn step; tell voice now, not when the tool block gets its name or result.
+        const stepKey = `${turn}:${step}`
+        if (!this.replaying && !this.toolVoiceSteps.has(stepKey)) {
+          this.toolVoiceSteps.add(stepKey)
+          this.voice.tool()
+        }
         const name = typeof chunk.name === 'string' ? chunk.name : ''
         if (!name) return
         const id = typeof chunk.id === 'string' ? chunk.id : ''
@@ -1358,6 +1376,7 @@ export class OrbRuntime {
     }
     this.stepBlocks.clear()
     this.lastAttemptByStep.clear()
+    this.toolVoiceSteps.clear()
     // Mark the final answer so a folded turn keeps only it visible.
     for (const key of [...this.responseKeys]) {
       const item = this.blocks.get(key)
@@ -1977,7 +1996,10 @@ export class OrbRuntime {
     }
     if (record.type === 'stop') {
       this.voice.haltSpeech()
-      if (this.turnRunning) this.run('stop', () => this.stopTurn())
+      if (this.turnRunning) {
+        const epoch = this.turnEpoch
+        this.run('stop', () => this.stopTurn(epoch))
+      }
       return
     }
     if (record.type === 'pinned' && typeof record.pinned === 'boolean') {
@@ -2053,13 +2075,12 @@ export class OrbRuntime {
     await this.publishChrome()
   }
 
-  private async stopTurn(): Promise<void> {
-    // Stop and dismiss own the turn now; an interjection waiting for its turn/end must not
+  private async stopTurn(epoch: number): Promise<void> {
+    // Stop and dismiss own the turn now; a command waiting for its turn/end must not
     // start a new task after this.
-    this.settlePendingInterject()
+    this.settlePendingPrompt()
     const sessionId = this.sessionId
     if (!sessionId || !this.turnRunning) return
-    const epoch = this.turnEpoch
     try {
       await this.ctx.sessionController.cancel({ sessionId })
     } catch (error) {
@@ -2074,6 +2095,9 @@ export class OrbRuntime {
     // was in flight; only the turn this call was about may be closed here.
     if (this.turnEpoch !== epoch || this.sessionId !== sessionId) return
     this.drain()
+    // drain() can synchronously process the old turn/end, which starts a pending new
+    // prompt. Re-check before closing: that new turn is not ours to finish.
+    if (this.turnEpoch !== epoch || this.sessionId !== sessionId) return
     this.finishTurn()
   }
 
@@ -2174,7 +2198,7 @@ export class OrbRuntime {
   }
 
   private resetTranscript(): void {
-    this.pendingInterject = undefined
+    this.pendingPrompt = undefined
     this.blocks.clear()
     this.blockOrder.length = 0
     this.watermark = 0

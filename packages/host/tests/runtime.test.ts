@@ -454,6 +454,28 @@ describe('ball control socket', { concurrency: 1 }, () => {
     }
   })
 
+  it('hard-stops a running turn when a typed prompt arrives', async () => {
+    const harness = boot()
+    const client = await connect(harness.runtime)
+    try {
+      client.send({ type: 'prompt', text: '查一下今天的天气' })
+      await waitFor(() => harness.calls.prompt.length === 1)
+      const sessionId = harness.calls.prompt[0]?.sessionId
+      assert.ok(sessionId)
+      const before = harness.calls.prompt.length
+      client.send({ type: 'prompt', text: '改成明天的' })
+      await waitFor(() => harness.calls.cancel.length === 1)
+      assert.equal(harness.calls.cancel[0]?.sessionId, sessionId)
+      assert.equal(harness.calls.prompt.length, before, 'the old turn must end before the new prompt')
+
+      harness.inject(sessionId, { type: 'turn/end', seq: 1, data: { turn: 1 } })
+      await waitFor(() => harness.calls.prompt.length === before + 1)
+      assert.equal(harness.calls.prompt.at(-1)?.content?.[0]?.text, '改成明天的')
+    } finally {
+      client.socket.destroy()
+    }
+  })
+
   it('starts an interjection as a new turn when only the closing speech is left', async () => {
     const harness = boot()
     const client = await connect(harness.runtime)
@@ -1639,7 +1661,7 @@ describe('ball control socket', { concurrency: 1 }, () => {
     }
   })
 
-  it('does not close a prompt submitted while cancel was pending', async () => {
+  it('starts a prompt submitted while cancel was pending after the old turn ends', async () => {
     const harness = boot()
     const client = await connect(harness.runtime)
     try {
@@ -1648,15 +1670,22 @@ describe('ball control socket', { concurrency: 1 }, () => {
       harness.holdPrompt()
       client.send({ type: 'prompt', text: '第一' })
       await waitFor(() => harness.calls.prompt.length > 0)
-      const after = await stopWithPendingCancel(
-        harness,
-        client,
-        () => { client.send({ type: 'prompt', text: '第二' }) },
-        () => harness.calls.prompt.length >= 2,
-      )
-      const flags = turnFlags(after)
-      assert.equal(flags.some((running) => !running), false)
-      assert.equal(flags.at(-1), true)
+      const sessionId = harness.calls.prompt[0]?.sessionId
+      assert.ok(sessionId)
+
+      harness.holdCancel()
+      const mark = client.messages.length
+      client.send({ type: 'stop' })
+      await waitFor(() => harness.calls.cancel.length === 1)
+      client.send({ type: 'prompt', text: '第二' })
+      await waitFor(() => harness.calls.cancel.length === 2)
+      assert.equal(harness.calls.prompt.length, 1, 'the new prompt waits for the old turn to end')
+
+      harness.releaseCancel()
+      harness.inject(sessionId, { type: 'turn/end', seq: 1, data: { turn: 1 } })
+      await waitFor(() => harness.calls.prompt.length >= 2)
+      const flags = turnFlags(client.messages.slice(mark))
+      assert.equal(flags.at(-1), true, 'the new prompt opens its own turn after the old one closes')
     } finally {
       harness.releasePrompt()
       client.socket.end()

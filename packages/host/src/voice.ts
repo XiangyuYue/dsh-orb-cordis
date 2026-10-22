@@ -112,6 +112,10 @@ export class VoiceController {
   private commandSeed = 300
   private hold = false
   private seen = new Map<string, string>()
+  /** The assistant block currently streaming; a new key starts a new block. */
+  private assistantKey: string | undefined
+  /** Keys that belonged to a previous turn; late updates must not reach the new queue. */
+  private staleKeys = new Set<string>()
 
   constructor(private readonly options: VoiceControllerOptions) {
     this.queue = createQueue(this.ttsOn())
@@ -214,6 +218,30 @@ export class VoiceController {
     this.agentBusy = true
     this.muted = false
     this.stopping = false
+    this.silencedSteps.clear()
+    this.assistantKey = undefined
+    // Anything already seen belongs to an older turn. Late updates for those blocks
+    // must not leak into the new queue.
+    this.staleKeys = new Set(this.seen.keys())
+    // A new command owns the speaker: stop the previous closing and drop its queue before
+    // the first sentence of this turn arrives.
+    this.apply({ type: 'stop' })
+    if (this.live) this.link?.send({ type: 'stop-speak', id: 'new-turn' })
+    this.pushListen(false)
+    this.poll()
+  }
+
+  /**
+   * A new user command arrived while the old turn may still be running. Stop the old
+   * speaker immediately and keep the old turn's remaining text silent until {@link beginTurn}.
+   */
+  prepareNewTurn(): void {
+    debug('prepareNewTurn')
+    this.muted = true
+    this.stopping = this.agentBusy
+    this.assistantKey = undefined
+    this.apply({ type: 'stop' })
+    if (this.live) this.link?.send({ type: 'stop-speak', id: 'new-turn' })
     this.pushListen(false)
     this.poll()
   }
@@ -235,6 +263,16 @@ export class VoiceController {
 
   /** Full assistant text for one block. Only the newly arrived suffix is spoken. */
   noteAssistant(key: string, text: string): void {
+    if (this.staleKeys.has(key)) {
+      debug(`stale key=${key}`)
+      return
+    }
+    if (this.assistantKey !== undefined && this.assistantKey !== key) {
+      // A new assistant block supersedes anything the previous block left in the holding
+      // area. The sentence already playing caught the speaker and keeps going.
+      this.apply({ type: 'block' })
+    }
+    this.assistantKey = key
     const previous = this.seen.get(key) ?? ''
     const starts = text.startsWith(previous)
     // Track text even while the child is restarting; otherwise the first update after the
@@ -303,6 +341,8 @@ export class VoiceController {
   /** The panel moved to another conversation. */
   clearSession(): void {
     this.seen.clear()
+    this.assistantKey = undefined
+    this.staleKeys.clear()
     this.muted = false
     this.stopping = false
     this.silencedSteps.clear()
@@ -517,6 +557,8 @@ export class VoiceController {
     this.commandSeed = 300
     this.hold = false
     this.idle = createIdle()
+    this.assistantKey = undefined
+    this.staleKeys.clear()
     // `seen` follows the displayed conversation, not the child lifecycle. Clearing it here
     // would make the first block update after a ball toggle replay a whole assistant answer.
     this.queue = createQueue(this.ttsOn())

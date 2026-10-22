@@ -686,6 +686,94 @@ describe('utterance judging', () => {
   })
 })
 
+describe('new turn speech reset', () => {
+  function controller(child: ReturnType<typeof fakeChild>): VoiceController {
+    const settings = settingsWith()
+    return new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send() {},
+      open: () => child.link,
+    })
+  }
+
+  it('stops the previous closing and speaks the new turn first sentence', () => {
+    const child = fakeChild()
+    const voice = controller(child)
+    voice.start()
+    child.emit({ type: 'mic', open: true })
+    voice.beginTurn()
+    voice.noteAssistant('b:1:0:0', '旧结果。')
+    voice.endTurn()
+    const old = child.sent.find((message) => message.type === 'speak')
+    assert.ok(old)
+
+    voice.beginTurn()
+    assert.deepEqual(voice.snapshot().queued, [])
+    assert.equal(child.sent.some((message) => message.type === 'stop-speak' && message.id === old.id), true)
+
+    voice.noteAssistant('b:2:0:0', '新任务第一句。')
+    assert.equal(
+      child.sent.some((message) => message.type === 'speak' && message.text === '新任务第一句。'),
+      true,
+    )
+    voice.close()
+  })
+
+  it('drops the previous block held during playback and plays the next block', () => {
+    const child = fakeChild()
+    const voice = controller(child)
+    voice.start()
+    child.emit({ type: 'mic', open: true })
+    voice.beginTurn()
+    voice.noteAssistant('b:1:0:0', '第一句。')
+    const first = child.sent.find((message) => message.type === 'speak')
+    assert.ok(first)
+    voice.noteAssistant('b:1:1:0', '播报期间的途中句。')
+    child.emit({ type: 'playback', id: first.id, phase: 'end' })
+
+    voice.noteAssistant('b:1:2:0', '网页能访问。')
+    assert.equal(
+      child.sent.some((message) => message.type === 'speak' && message.text === '网页能访问。'),
+      true,
+    )
+    assert.equal(
+      child.sent.some((message) => message.type === 'speak' && message.text === '播报期间的途中句。'),
+      false,
+    )
+    voice.close()
+  })
+
+  it('mutes the old turn and ignores its late key after the new turn starts', () => {
+    const child = fakeChild()
+    const voice = controller(child)
+    voice.start()
+    child.emit({ type: 'mic', open: true })
+    voice.beginTurn()
+    voice.noteAssistant('b:1:0:0', '旧结果。')
+    voice.endTurn()
+
+    voice.prepareNewTurn()
+    const speaksBefore = child.sent.filter((message) => message.type === 'speak').length
+    voice.noteAssistant('b:1:0:0', '旧结果。晚到。')
+    assert.equal(child.sent.filter((message) => message.type === 'speak').length, speaksBefore)
+
+    voice.beginTurn()
+    voice.noteAssistant('b:2:0:0', '新第一句。')
+    voice.noteAssistant('b:1:0:0', '旧结果。更晚到。')
+    assert.equal(
+      child.sent.some((message) => message.type === 'speak' && message.text === '新第一句。'),
+      true,
+    )
+    assert.equal(
+      child.sent.some((message) => message.type === 'speak' && String(message.text).includes('更晚到')),
+      false,
+    )
+    voice.close()
+  })
+})
+
 describe('qwen speech readiness', () => {
   const ttsSpeaks = (child: ReturnType<typeof fakeChild>) =>
     child.sent.filter((item) => item.type === 'speak')
