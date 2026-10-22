@@ -17,6 +17,7 @@ import { LevelMeter } from './level.ts'
 import { needsMicrophone, transcribing, type ListenMode } from './listen.ts'
 import { isEcho, type SpokenLine } from './echo.ts'
 import { speakQwen as startQwenSpeech, type QwenSpeech } from './qwen-tts.ts'
+import { isRecoverableSpeakerError } from './speaker.ts'
 import { captureBinary, CpalCapture, NativeCapture, type CaptureSource } from './capture.ts'
 import { type VoiceSettings } from './settings.ts'
 
@@ -877,6 +878,9 @@ function createStreamPlayer(
         if (ended && head >= chunks.length) finish(false, true)
       },
       (error: unknown) => {
+        // A streaming source underruns whenever the network pauses; the callback
+        // already writes silence, so this notice must not end the sentence.
+        if (isRecoverableSpeakerError(error)) return
         fail(error)
         finish(true, true)
       },
