@@ -3,24 +3,28 @@
 > 对照 [07-voice-listen.md](07-voice-listen.md)。交互以那份需求为准。本文只写改哪里、按什么顺序改、每一步怎么验收。
 > 本文建立在已经合入的 [06-voice-plan.md](06-voice-plan.md) 之上。06 里没被本文提到的部分一律不动。
 > 做完一节再做下一节。每一节的验收没过，不要开始下一节。第 1–8 节不需要麦克风，用脚本子进程和单测就能走通；第 9–11 节才碰真设备。
+>
+> **2026-10-21 修订：插话改为「硬停旧轮 + 另起新任务」。** 命中插话时不再使用官方 `steer`，而是 `sessionController.cancel` 旧轮，等官方 `turn/end` 后把原话作为 `mode: 'queue'` 的新消息发送。0.1 节保留为官方的历史行为参考；第 1 节第 2 条、4.4、4.5、4.6、4.7、5、13、14、15 已按修订更新。
 
 ## 0. 已经定下来的做法
 
 下面这些已经查证过，直接照做，不用再选型。
 
 1. **听法从三种变成四种。** 在现有的 `off`、`wake`、`command` 之外，新增 `interject`：Agent 正在执行，或正文还在播时，转写开着，但只认退下口令和插话关键词。子进程把 `command` 和 `interject` 当成同一种「转写」处理，两者之间切换时 VAD 不重置、麦克风不断开。一句话怎么判，看的是**这句开口那一刻**的听法：子进程在 `utterance` 里带上开口时的 `mode`。用户正说着的时候，Host 不从转写切到唤醒，等这句说完再切（第 4.6 节）。这样收尾刚好在用户说到一半时播完，这句插话也不会丢，也不会被当成普通语音输入发出去。
-2. **执行中插话走官方的 `steer`。** Host 直接调 `ctx.sessionController.prompt({ mode: 'steer' })`，不经过页面。只剩收尾在播、执行已经结束时，不发 `steer`：Host 先停播报，再把原话交给页面，走打字发送的同一条路径（`voice-prompt` → `api.send` → `onPrompt`，`mode: 'queue'`）。
+2. **执行中插话改成硬停旧轮 + 新任务。** Host 画完用户气泡后直接调 `ctx.sessionController.cancel({ sessionId })`，等同点「停止」；官方在 aborted 驱动的 `finally` 里写 `turn/end`。Host 收到 `turn/end` 后再走 `submitPrompt()` 的新任务路径（`mode: 'queue'`），把原话作为下一条用户消息发送。不再调用 `mode: 'steer'`，也不再经过页面的 `voice-prompt`。只有收尾在播、执行已经结束时，直接按新任务发送，不需要 cancel。
 3. **回声消除做在采集这一层。** 新增一个原生小程序 `dsh-orb-voice-capture`，由语音子进程拉起。它采集麦克风，消掉电脑自己放出的声音，再把 16kHz 单声道 PCM 交给子进程。macOS 用系统的 Voice Processing I/O（VPIO）。Windows 用 WASAPI 采集，把默认扬声器的回采（loopback）作为参考，交给 WebRTC AEC3 处理。**播报不动**，仍由子进程用 `node-cpal` 放到默认输出设备。
 4. **再加一道文字回声过滤。** 子进程知道自己在什么时候播了哪句话。一句转写落地时，如果它和同一时段正在播的文字高度重合，就丢掉。这只是兜底，主力仍是第 3 条的回声消除。
 5. **提问卡期间真正放开麦克风设备。** Host 每次推送听法时多带一个字段 `device`。提问卡在等时为 `false`，子进程关掉采集，系统的麦克风指示随之消失。提示语照常播，因为播报不走采集程序。
 6. **停止、退下、插话之后，旧的正文不再补出声音。** Host 按 block key 处理：
-   - 插话时，Agent 还没收到这句插话之前写的正文（也就是命中那一刻正在进行的这一步里的全部正文）照常上屏，但一律不再出声。官方要等这一步做完才把插话交给 Agent，下一步起写的正文才是对插话的回应，从那里开始照常播。上屏不受任何影响。
+   - 插话时，旧轮被取消。命中前已经写出的正文照常上屏，但一律不再出声；取消过程中才写完的那部分也不再出声。`muted` 一直保持到新任务 `beginTurn()`，下一步起写的正文才恢复播报。上屏不受任何影响。
    - 停止和退下时，被停的那一轮剩下的正文全部静音，直到下一轮开始。
-   - 停止和退下之后，到执行真正停下之前，听法为 `off`（第 3.2 节的 `stopping`）。这段时间发出的插话会被官方压在收件箱里，见 0.1 节。
+   - 停止、退下和插话之后，到执行真正停下之前，听法为 `off`（第 3.2 节的 `stopping`）。插话要等旧轮 `turn/end` 之后才作为新任务发送；这段时间的听法关闭。
 7. **TTS 后端仍不绑定模型。** 听法只读队列状态，也就是「正文在播」「本地短句在播」，不读 TTS 的模型种类。子进程的 `speak` / `stop-speak` 协议就是以后换后端的边界。本次不做后端选择。
 8. **官方仓库一行不改。**
 
-### 0.1 官方 `steer` 的行为（已在 DeepSeek Harness 源码和本机安装版 0.2.1-rc.2 上核对）
+### 0.1 官方 `steer` 的行为（历史参考；修订后不再使用）
+
+> 2026-10-21 修订后，插话不再使用 `steer`。下面保留是为了解释旧实现和官方行为；其中的 `cancel` 行为（保留收件箱、abort 信号）仍然适用。
 
 | 情况 | 结果 | 出处（`deepseek-harness` 仓库） |
 |---|---|---|
@@ -39,6 +43,7 @@
 - Host 以为还在执行、实际刚结束时发出的 `steer`，官方会自动开新的一轮。现有 `consume()` 里 `turn/start` 的分支会调用 `beginTurn()`，插件不需要补救。
 - 停止或退下之后、执行真正停下之前，插件不再发 `steer`：Host 在这段时间把听法置为 `off`（第 3.2 节的 `stopping`）。否则「退下吧」之后紧跟的一句插话会让官方自己再开一轮。
 - 第 15 节记下了 `cancel` 保留收件箱带来的一个已知行为。
+- **修订后的实际流程：** 气泡仍由 Host 画；`cancel` 后等 `turn/end`；不等 `steer`，也不把插话塞回旧轮。`turn/end` 分支负责启动 pending 插话。
 
 ### 0.2 回声消除已有的实测（macOS 26.4，MacBook Air 内置麦克风和扬声器）
 
@@ -65,7 +70,7 @@ Windows 侧目前只有文档依据，第 10 节第一步就是可行性验证�
 flowchart LR
   page["helper 页面 shell.js<br>指示条、插话气泡"]
   host["Host 语音控制器 voice.ts<br>四种听法、判句、静音规则"]
-  orb["orb.ts<br>steer / 页面发送 / 停止"]
+  orb["orb.ts<br>硬停旧轮 / 新任务 / 停止"]
   child["语音子进程 child.ts<br>KWS、VAD、ASR、TTS、文字回声过滤"]
   cap["dsh-orb-voice-capture<br>麦克风 + 回声消除"]
   spk["默认输出设备"]
@@ -91,7 +96,7 @@ flowchart LR
 | `packages/voice/scripts/build-windows-voice-capture.sh`（新） | 在 MSYS2 UCRT64 里编 Windows 可执行文件 |
 | `packages/voice/prebuilds/darwin-universal/`、`win32-x64/`（新，入库） | 两个平台的预编译产物 |
 | `packages/host/src/voice.ts` | 判句、插话、退下、静音规则、设备字段 |
-| `packages/host/src/orb.ts` | `onInterject`（steer 或页面发送）、`stopTurn` 回调、停止按钮静音 |
+| `packages/host/src/orb.ts` | `onInterject`（cancel 旧轮 + `turn/end` 后新任务）、pending 插话、`stopTurn` 回调、停止按钮静音 |
 | `packages/helper/src/main.ts` | 转发 `voice-mode: 'interject'` |
 | `packages/helper/assets/shell.js` | 指示条在执行中也显示；执行结束时按指针位置收回显示框 |
 | `packages/client-settings/client.js` | 「插话关键词」一项 |
@@ -331,22 +336,34 @@ private dismiss(): void {
 
 ```ts
 private interject(text: string): void {
-  // Agent 还没收到这句插话之前写的正文：照常上屏，不再出声
+  // 旧轮马上取消；重新进入转写时不要把旧任务的播报尾巴 seed 进来
+  this.commandSeed = 0
+  if (this.agentBusy) {
+    this.muted = true       // 旧轮剩余正文不再出声，直到新任务 beginTurn()
+    this.stopping = true    // 取消期间听法 off
+  }
+  // 旧步里迟到的正文也只上屏、不出声（兜底）
   for (const key of this.seen.keys()) this.silencedSteps.add(stepOf(key))
-  this.apply({ type: 'stop' })           // 正在播的立刻停，排着的清掉（队列里没切成句的缓冲也一起清空）
-  this.options.interject?.(text)         // orb 决定 steer 还是走页面发送，见第 5 节
+  this.apply({ type: 'stop' })           // 正在播的立刻停，排着的清掉
+  this.options.interject?.(text)         // orb 取消旧轮，等 turn/end 后另起一轮
   this.poll()
 }
 
-/** `b:${turn}:${step}:${index}` → `b:${turn}:${step}`。不是这个格式的 key 原样返回。 */
-function stepOf(key: string): string {
-  return /^b:\d+:\d+:\d+$/.test(key) ? key.slice(0, key.lastIndexOf(':')) : key
+/** cancel 失败时由 orb 调用：旧轮继续跑，恢复它的播报和听法。 */
+resumeAfterInterjectFailure(): void {
+  this.muted = false
+  this.stopping = false
+  this.commandSeed = 300
+  this.silencedSteps.clear()
+  if (!this.live) return
+  this.pushListen(false)
+  this.poll()
 }
 ```
 
-为什么按「步」静音：官方的 `steer` 不中断模型当前这一步的输出，要等这一步写完、工具做完，下一步开头才把插话交给模型（0.1 节第一行）。所以命中那一刻正在进行的这一步里写出来的正文，包括命中之后才写出来的句子，都是 Agent 还没看到插话时的旧内容。这些正文照常上屏，只是不出声。不这样做的话，喇叭刚被停下、空着，按 05「喇叭空着时，新来的正文直接播」，旧内容会马上接着播出来，听起来像插话没起作用，开头往往还是一个没头的半句。
+为什么现在不需要按「步」解释 steer：命中即 `cancel` 旧轮，旧轮不会再继续写下一步。`muted` 覆盖到新任务开始，保证取消期间迟到的正文也不出声；`silencedSteps` 是 key 级别的兜底。新任务由 orb 在 `turn/end` 后 `beginTurn()`，`muted` 此时清掉，新正文正常播。
 
-正文块的 key 是 `b:${turn}:${step}:${index}`（`orb.ts` 的 `onChunk`），同一步里后出现的块（`index` 更大）也属于这一步，所以按 `b:${turn}:${step}` 这一段来记，不按单个块记。下一步的 `step` 不同，那时写的正文是对插话的回应，照常播。
+正文块的 key 是 `b:${turn}:${step}:${index}`（`orb.ts` 的 `onChunk`）。`stepOf` 仍把同一步的块归到一起；新任务的 turn/step 不同，不受旧 `silencedSteps` 影响。
 
 ### 4.5 静音规则
 
@@ -362,8 +379,10 @@ private readonly silencedSteps = new Set<string>()
 ```
 
 - `noteAssistant(key, text)`：照旧更新 `seen`。然后如果 `this.muted || this.silencedSteps.has(stepOf(key))`，就直接返回，不进队列。其余照旧。上屏走的是 `orb.ts` 的 `block()`，不经过这里，所以不受影响。
-- `beginTurn()`：`muted = false`，`stopping = false`。
-- `endTurn()`：`stopping = false`。
+- `beginTurn()`：`muted = false`，`stopping = false`。新任务开始时恢复播报和听法。
+- `endTurn()`：`stopping = false`。旧轮结束时不清 `muted`，要等下一次 `beginTurn()`。
+- `interject()`：`commandSeed = 0`；`agentBusy` 时 `muted = true`、`stopping = true`，再 `apply({type:'stop'})`。取消期间旧正文不再出声，听法为 `off`。
+- `resumeAfterInterjectFailure()`：`muted = false`、`stopping = false`、`commandSeed = 300`、`silencedSteps.clear()`，再 `pushListen(false)` + `poll()`；旧轮继续跑，恢复播报和听法。
 - `haltSpeech()`（停止按钮）：**在 `if (!this.live) return` 之前**做 `if (this.agentBusy) { this.muted = true; this.stopping = true }`，然后照旧。子进程正在重启时也要记下静音，否则重启后会把被停那一轮剩下的正文播出来。这样也修掉停止按钮的一个隐患：`stopTurn()` 里的 `drain()` 可能带回最后一段已经定稿的正文，它会在 `endTurn` 时被拼成收尾播出来。
 - `clearSession()`：`muted = false`，`stopping = false`，`silencedSteps.clear()`，和 `seen.clear()` 一起做。
 
@@ -381,6 +400,7 @@ private readonly silencedSteps = new Set<string>()
   - 现有的 `if (mode !== 'command') send voice-level 0` 改成 `if (!transcribing(mode))`。
   - 计算 `device = holdsDevice({...})`。`mode` 或 `device` 任一变化都要发 `listen`。新增字段 `private device = false` 记住上次发的值。
   - `device` 从 `false` 变成 `true` 的那一次，`seedMs` 一律为 `0`。环形缓冲里是提问卡之前的旧声音，不能拼到卡片之后的第一句前面（子进程也会在关设备时清空环形缓冲，见第 8.2 节，两边都做）。
+  - 硬插话后重新进入转写时 `seedMs` 也是 `0`：`interject()` 把 `commandSeed` 置 0，环形缓冲里是旧任务/播报的尾巴，不能 seed 进新任务的第一句。
 - `onChild`：
   - `speech` 消息：`this.speechOpen = open && transcribing(this.mode)`。`open` 为假时调用 `this.pushListen(false)`，让第 4.6 节等着的切换发生。
   - `utterance` 消息：`this.onUtterance(message.text, message.mode)`。
@@ -389,7 +409,7 @@ private readonly silencedSteps = new Set<string>()
 - `VoiceControllerOptions` 新增两项，都是**可选**的。这样现有测试里的 `new VoiceController({...})` 不用改也能编译：
 
 ```ts
-/** 插话原话。orb 决定发 steer 还是交给页面走打字发送。 */
+/** 插话原话。orb 会硬停旧轮，再把这句话当作新任务发送。 */
 interject?(text: string): void
 /** 和点「停止」相同的执行停止。没有在执行时不做事。 */
 stopTurn?(): void
@@ -409,10 +429,10 @@ stopTurn?(): void
 1. `wake` → 播「我在」→ 播完后最后一次 `listen` 是 `command`，并且 `device: true`。
 2. `utterance: 查一下今天的天气`（`mode: command`）→ 页面收到 `voice-prompt`。`beginTurn()` 后最后一次 `listen` 是 `interject`，没有新的 `seedMs > 0`，页面收到 `voice-mode: interject`。
 3. `noteAssistant('b:1:0:0', '我去查一下今天的天气。')` → 发出 `speak`。此时 `utterance: 等一下`（`mode: interject`）→ 页面没有新的 `voice-prompt`，`interject` 回调没被调用。
-4. `noteAssistant('b:1:0:0', '我去查一下今天的天气。明天')`，然后 `utterance: 大肥鱼，把明天的也查一下`（`mode: interject`）→ `interject` 回调收到原话（关键词还在）；子进程收到 `stop-speak`。再 `noteAssistant('b:1:0:0', '我去查一下今天的天气。明天会下雨。后天晴。')` 和同一步的新块 `noteAssistant('b:1:0:2', '我先查一下。')`：都不产生新的 `speak`。下一步的 `noteAssistant('b:1:1:0', '明天多云。')` 产生 `speak`。
+4. `noteAssistant('b:1:0:0', '我去查一下今天的天气。明天')`，然后 `utterance: 大肥鱼，把明天的也查一下`（`mode: interject`）→ `interject` 回调收到原话（关键词还在）；子进程收到 `stop-speak`；`listen` 变成 `off`（`stopping`）。再 `noteAssistant('b:1:0:0', '我去查一下今天的天气。明天会下雨。后天晴。')` 和同一步的新块 `noteAssistant('b:1:0:2', '我先查一下。')`：都不产生新的 `speak`。然后 `endTurn()`（模拟 orb 取消旧轮收尾）→ `beginTurn()`（模拟 orb 在 `turn/end` 后起新任务）；新 step 的 `noteAssistant('b:2:0:0', '明天多云。')` 产生 `speak`。
 5. `questionOpened()` → `listen` 为 `off` 且 `device: false`。`questionClosed()`，执行仍在 → 回到 `interject`，`device: true`。
 6. `utterance: 大肥鱼退下吧`（`mode: interject`）→ `stopTurn` 被调用一次，`interject` 没被调用；页面收到 `unpin`；子进程先收到 `stop-speak`，再收到 `speak: 好的，再见`；回复在播时 `listen` 是 `off`。回复播完、`endTurn()` 之前，`listen` 仍是 `off`（`stopping`）。`endTurn()` 之后是 `wake`。
-7. 另起一轮：`endTurn()` 后收尾在播（`bodyBusy`），听法是 `interject`。`utterance: 大肥鱼，再查一次`（`mode: interject`）→ 子进程收到 `stop-speak`，`interject` 回调收到原话（第 5 节的 orb 会把它交给页面）。
+7. 另起一轮：`endTurn()` 后收尾在播（`bodyBusy`），听法是 `interject`。`utterance: 大肥鱼，再查一次`（`mode: interject`）→ 子进程收到 `stop-speak`，`interject` 回调收到原话（第 5 节的 orb 会直接作为新任务发送，不再走页面 `voice-prompt`）。
 8. **收尾在用户说到一半时播完。** 球没固定，收尾在播，听法是 `interject`。子进程发 `speech: true`，然后让收尾播完（`playback end`）：`listen` 仍是 `interject`，没有发出 `wake`。子进程发 `speech: false`：`listen` 变成 `wake`。随后到达的 `utterance: 大肥鱼，再查一次`（`mode: interject`）仍然调用 `interject` 回调。把球改成固定、重复一遍，落地的 `utterance: 等一下`（`mode: interject`）不产生 `voice-prompt`。
 9. 把 `interjectKeyword` 设成 `''`（再试一次 `'，。'`）后 `applySettings()`，执行中的听法变成 `off`。
 10. 用 `VOICE_AEC=0` 启动脚本子进程：收尾在播时听法是 `off`，执行中没有播报时是 `interject`。
@@ -433,46 +453,55 @@ stopTurn: () => { if (this.turnRunning) this.run('stop', () => this.stopTurn()) 
 ### 5.2 `onInterject`
 
 ```ts
-/**
- * 一句插话。执行中走官方 steer：当前这一步的工具做完，下一步按这句继续，不中断这一轮。
- * 只剩收尾在播时 steer 发不出去，原话交给页面，走和打字一样的发送路径，另起一轮。
- */
+private pendingInterject?: { text: string; key: string; sessionId?: string }
+
 private async onInterject(text: string): Promise<void> {
   const trimmed = text.trim()
   if (!trimmed) return
-  const sessionId = this.sessionId
-  if (!this.turnRunning || sessionId === undefined) {
-    this.broadcast({ type: 'voice-prompt', text: trimmed })
-    return
-  }
   const key = `user:${randomUUID()}`
   this.block(key, 'user', trimmed, false, 'set')
+  this.voice.activity()
+
+  if (!this.turnRunning || this.sessionId === undefined) {
+    await this.submitPrompt(trimmed)   // 只有收尾在播：直接另起一轮
+    return
+  }
+
+  // 最新一句覆盖上一句尚未发送的插话
+  if (this.pendingInterject) this.dropBlock(this.pendingInterject.key)
+  const pending = { text: trimmed, key, sessionId: this.sessionId }
+  this.pendingInterject = pending
   try {
-    await this.ctx.sessionController.prompt({
-      requestId: randomUUID(),
-      sessionId,
-      mode: 'steer',
-      content: [{ type: 'text', text: trimmed }],
-      clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    }, new AbortController().signal)
+    await this.ctx.sessionController.cancel({ sessionId: pending.sessionId })
     this.drain()
   } catch (error) {
-    // 气泡已经画出来了，没发出去就不能留着，否则看上去像发成功了
+    if (this.pendingInterject !== pending) return
+    this.pendingInterject = undefined
     this.dropBlock(key)
-    const message = error instanceof Error ? error.message : String(error)
-    console.error(`dsh-orb: interject failed: ${message}`)
-    this.status(message)
+    this.voice.resumeAfterInterjectFailure()
+    this.status(errorMessage(error))
   }
 }
 ```
 
-要点：
+- 用户气泡先画，cancel 失败再 `dropBlock`；成功就保留。
+- 不调 `stopTurn()`：它会在 cancel 后立刻 `finishTurn()`，旧轮迟到的 `turn/end` 可能误停新轮。这里只 cancel，等真正的 `turn/end`。
+- 不画第二次气泡：`submitPrompt()` 只发送，不画；`onPrompt()` 才画。
+- `turn/end` 的 `consume` 分支：
 
-- 不调 `beginTurn()`，也不动 `turnInterrupted`：同一轮还在继续。
-- 用户气泡由这里画，和 `onPrompt` 一样，`consume()` 不用改。
-- 不做 Windows 前台还原（`foreground.restore()`）：用户是用嘴说的，没有点球，前台窗口没变。
-- 不拼划词 chip，也不清掉它：需求要求上屏和发送的都是原话。走页面发送的那条兜底路径，和打字一样会带上 chip。
-- `prompt` 抛错时只显示状态，不改走 `queue`。按 0.1 节，官方只在会话不存在、被别的写者占用等真正的错误时才抛。
+  ```ts
+  if (type === 'turn/end') {
+    this.finishTurn()
+    this.startPendingInterject()
+  }
+  ```
+
+  `startPendingInterject()` 取 pending、核对 sessionId 后 `void this.submitPrompt(pending.text)`。
+- 新任务由 Host 直接发送（`mode: 'queue'`），不广播 `voice-prompt`，因此不经过页面的 TCC 门、也不拼划词 chip；`submitPrompt()` 仍会 `foreground.restore()`、`ensureSession()`、`watch()`、`drain()`。
+- 停止按钮、退下（`stopTurn()`）、手动打字（`onPrompt()`）、切换会话（`resetTranscript()`）都 `settlePendingInterject()`：清 pending、删气泡，避免旧插话在停止后突然发出。
+- `cancel` 抛错时旧轮仍在跑：只显示状态、恢复 VoiceController 的播报/听法，不发新任务。
+- 官方 `cancel` 保留收件箱；旧轮里排着的其他消息可能随新轮交付，见第 15 节。
+- 不响应 `AbortSignal` 的工具会让官方等它 settle，`turn/end` 和 pending 新任务都会延后；这是官方边界，不伪造 finish。
 
 ### 5.3 验收
 
@@ -480,9 +509,12 @@ private async onInterject(text: string): Promise<void> {
 
 测试运行时 `openVoiceChild()` 返回 `undefined`（`voice.ts` 里判断了 `NODE_TEST_CONTEXT`），走不到语音子进程，所以直接调用 `(orb as any).onInterject(text)`。
 
-1. 打字发一句，让会话进入执行。送一句「大肥鱼，把明天的也查一下」。期望：`calls.prompt` 的最后一条是 `mode: 'steer'`、文本是原话；页面收到一个 `kind: 'user'` 的 block；没有新的 `turn: running: true` 广播。
-2. 本轮结束后再送一句。期望：不调用 `prompt`，页面收到 `voice-prompt`。页面随后发来 `prompt` 时，`calls.prompt` 新增一条 `mode: 'queue'`。
-3. 让 harness 的 `prompt` 抛错后再送一句。期望：页面先收到这个 user block，然后收到它的删除；状态栏显示错误。
+1. 打字发一句，让会话进入执行。送一句「大肥鱼，把明天的也查一下」。期望：`calls.cancel` 收到当前 session；页面先收到一个 `kind: 'user'` 的 block；`calls.prompt` 不增加（不再发 `steer`）；注入 `turn/end` 后，`calls.prompt` 新增一条 `mode: 'queue'`、文本是原话。
+2. 本文轮结束后再送一句。期望：不调用 `cancel`，不广播 `voice-prompt`，直接新增一条 `mode: 'queue'`。
+3. 让 harness 的 `cancel` 抛错后再送一句。期望：页面先收到 user block，然后收到它的删除；状态栏显示错误；`calls.prompt` 不增加。
+4. 连续送两句：第一句的气泡被删除，`turn/end` 后只发送第二句。
+5. 让 harness 的 `prompt` 抛错、在空闲时送一句。期望：用户气泡保留，状态栏显示错误，turn 结束。
+6. 插话 pending 时点停止：pending 气泡删除，`turn/end` 后不发送新任务。
 
 ## 6. 提问卡：放开麦克风设备
 
@@ -513,6 +545,16 @@ if (mode === 'off' || mode === 'wake' || mode === 'command' || mode === 'interje
    const active = listening && expanded && !asking()
    ```
 
+   另外 `#voice-meter` 在 `#composer` 里面，而 `floating.css` 有 `body.running #composer { visibility: hidden }`，会把蓝条一起藏掉。必须在 `floating.css` 加：
+
+   ```css
+   body.running #voice-meter {
+     visibility: visible;
+   }
+   ```
+
+   子元素显式 `visible` 可以覆盖父级继承下来的 `hidden`；只改 `renderVoiceMeter` 的 `!running` 不够。
+
 3. `api.onVoiceLevel`：条件从 `voiceMode === 'command'` 改成同样的 `listening`。
 4. `setRunning(next)`：`next` 为假的分支末尾（`if (processGroup) {...}` 之后）加一行：
 
@@ -529,6 +571,7 @@ if (mode === 'off' || mode === 'wake' || mode === 'command' || mode === 'interje
 `packages/helper/tests/shell-render.test.ts` 是对源码做正则断言，不跑 DOM，所以按现有写法补：
 
 - 第 197 行的 `assert.match(code, /const active = voiceMode === 'command' && expanded && !running && !asking\(\)/)` 换成新表达式：`/const listening = voiceMode === 'command' \|\| voiceMode === 'interject'/` 和 `/const active = listening && expanded && !asking\(\)/`。
+- 断言 `floating.css` 有 `body.running #voice-meter { visibility: visible; }`，否则执行期间蓝条仍被父级隐藏。
 - 断言 `onVoiceMode` 接受 `'interject'`，`onVoiceLevel` 的条件用的是 `listening` 同一判断。
 - 断言 `setRunning` 的结束分支里有 `if (!pinned && !pointerInside) scheduleCollapse()`。
 - `packages/helper/tests` 里对 `main.ts` 白名单的断言（如果有）加上 `'interject'`。
@@ -808,7 +851,7 @@ g++ -O2 -std=c++17 -municode packages/voice/native/windows-voice-capture.cpp \
 1. 球没固定。说「你好大肥鱼」。显示框展开并固定，听到「我在」。这句播完以后，指示条才亮。
 2. 说「查一下今天的天气」。说完后整句上屏并发送，没有逐字稿。
 3. Agent 开始干活。指示条一直亮着，并随音量律动。说「等一下」：没有新的用户消息，也没有任何动作。
-4. Agent 播报途中那句时，说「大肥鱼，把明天的也查一下」。播报立刻停；显示框出现这句原话（关键词还在）；当前工具做完后，Agent 按这句继续；这一轮没有被掐断，停止按钮一直在。
+4. Agent 播报途中那句时，说「大肥鱼，把明天的也查一下」。播报立刻停；显示框立刻出现这句原话（关键词还在）；旧轮被 cancel，正在跑的工具收到取消；旧轮真正停下后，这句原话作为新任务另起一轮，不再等当前工具做完。
 5. Agent 弹出提问卡。1 秒内系统的麦克风指示消失。说话没有任何反应。点选后卡片消失；活还在干，麦克风指示回来，指示条亮着。
 6. 说「退下吧」。执行停掉，播报停掉，这句不上屏。显示框取消固定，听到「好的，再见」，而且之后不再冒出被停那一轮的任何正文。鼠标不在球上时，显示框收回。之后只听唤醒。
 7. 再跑一次任务。任务结束、收尾还在播时，说「大肥鱼，再查一次」。收尾立刻停，这句上屏，并作为新的一条消息另起一轮。
@@ -829,7 +872,7 @@ g++ -O2 -std=c++17 -municode packages/voice/native/windows-voice-capture.cpp \
 
 1. `feat(voice): 插话关键词设置`（第 2 节）
 2. `feat(voice): 执行与播报期间接着听，按插话关键词和退下口令判句`（第 3、4 节。第 3 节改了 `ListenInput`，`voice.ts` 的 `pushListen` 要在同一个提交里跟着改，否则过不了 typecheck，所以两节合成一个提交）
-3. `feat(orb): 插话走官方 steer，收尾期间改为另起一轮`（第 5 节）
+3. `feat(orb): 插话改为硬停旧轮并另起新任务`（第 5 节，2026-10-21 修订）
 4. `feat(orb): 指示条在执行中也显示，执行结束按指针收回`（第 7 节）
 5. `feat(voice): 提问卡期间放开麦克风设备，接入采集程序`（第 6、8 节）
 6. `feat(voice): macOS 回声消除采集程序`（第 9 节）
@@ -843,17 +886,25 @@ g++ -O2 -std=c++17 -municode packages/voice/native/windows-voice-capture.cpp \
 - 需求第 9 节里的项：用语音回答提问卡、边说边出逐字稿、不带关键词也不带退下口令的句子在执行和播报期间打断播报、补播途中没赶上的正文、单独的语音按钮或另一套 VAD / ASR 参数。
 - 不要在说出关键词的瞬间就停播报，要等整句落地再判。
 - 不要把 TTS 改成从采集程序播放，也不要让听法读 TTS 的模型种类。
-- 不要为 `steer` 失败自动改发 `queue`，也不要在插话时调用 `cancel`。
+- 不要为 `steer` 失败自动改发 `queue`，也不要再回退到 `steer`。
+- 不要在插话时只 `cancel` 而不等 `turn/end` 就 `beginTurn`；旧轮迟到的 `turn/end` 会把新轮误停。
+- 不要为了绕过不响应取消的工具而新开会话或并发跑两轮。
+- 不要伪造 `turn/end` 或手动 `finishTurn` 来提前启动新任务（停止按钮的既有路径除外）。
 - 不要用说话人识别（声纹）来过滤，也不要再加第二个回声消除库。
 - 不要在 Host 主线程里做识别、合成或采集。
 
 ## 15. 已知行为
 
-- **插话之后马上停止或退下，那句插话可能留到下一次。** 官方 `cancel` 保留收件箱。如果一句插话已经被接收、但这一轮还没走到下一步，用户就说了退下（或点了停止），这句插话会留在官方收件箱里，等用户下一次发消息时一起带进那一轮的第一步。这和主窗口里点「停止」后排队消息的处理一致，插件没有能清空收件箱又不破坏会话的接口。
+- **插话 pending 期间停止或退下，会取消这次插话。** 停止按钮、退下、手动打字、切换会话都会清掉尚未发送的 pending 和它的气泡；不会留到下一次。
+- **`cancel` 保留收件箱。** 旧轮里排着的其他 steer/queue 消息可能随新轮一起交付；插件没有稳定的公开接口清空收件箱。硬插话本身不再留在旧轮里。
+- **不响应取消的工具会延迟新任务。** 官方 `cancel` 会等已经 dispatch 的工具 settle；只有工具响应 `exec.signal` 才会立刻结束。这类工具下，用户气泡先出现，但新任务要等旧工具结束、官方写 `turn/end` 之后才发送。
+- **硬插话不经过页面的 TCC 门和划词 chip。** Host 直接 `submitPrompt()`；屏幕权限缺失时由 Computer Use 工具自己报错。命令模式（固定空闲时语音输入）仍走页面 `voice-prompt`。
+- **连续插话以最新一句为准。** 旧轮停止期间再说一句，前一句 pending 气泡被删除，只发送最新一句。
+- **旧轮剩余正文只上屏、不出声。** `muted` 覆盖到新任务 `beginTurn()`；取消过程中迟到写出的正文也不再出声，`silencedSteps` 兜底。
 - **只消得掉默认输出设备上的声音。** 用户把某个应用单独输出到另一台设备（例如显示器音箱，而默认输出是笔记本扬声器）时，那台设备上的声音不在参考里。
 - **用户复述播报里的原话会被当成回声丢掉。** 例如播报说「今天晴」，用户正好也说「今天晴」。这是文字回声过滤的代价；带插话关键词的长句一般不会触发。
 - **没有回声消除时，正文播报期间不听。** 采集程序缺失、启动失败、`mic-denied` 以外的原因改用了 `node-cpal`，或某个 macOS 版本上 VPIO 过不了第 9.3 节，都会这样。这时需求第 1 节「正文还在播也接着听」做不到；执行中、没有播报时仍能插话和退下。空闲固定时的普通语音输入照旧，但电脑放出的声音会进转写，和 06 现状一样。
-- **插话那一步里的正文只上屏、不出声。** 命中时这一步里 Agent 还没看到插话、接着写完的正文，屏幕上完整显示，但不播。下一步起按插话写的正文照常播（第 4.4 节）。
+- **旧轮收尾不会再补出声音。** 命中后旧轮被取消，`muted` 保持到新任务 `beginTurn()`；旧轮已经写出的正文继续显示，之后迟到写出的也不播。新任务从下一轮开始正常播。
 - **停掉的那句合成不会真正中断。** 现在的本地 TTS 在 worker 里同步合成一整句，中途停不下来，`stop-speak` 只是丢掉结果。最坏情况下，退下回复语要等那一句合成完（通常不到 1 秒）才开始合成。需求第 10 节「取消还没合成完的那句」对以后的云端后端要真正做到（中断 HTTP 请求），换后端时写进后端的接口约定。
 - **macOS 13 上压低闪避依赖私有函数。** 找不到 `AudioDeviceDuck` 时，其他应用的声音在麦克风开着时会被系统压低一些。
 - **唤醒词现在听的是回声消除之后的声音。** 第 9.3、10.4 节之后要按 06 第 7 节重跑唤醒验收。命中率下降时，先在设置里调灵敏度，出厂值是否要改单独再议。
@@ -862,7 +913,8 @@ g++ -O2 -std=c++17 -municode packages/voice/native/windows-voice-capture.cpp \
 
 - 交互：[07-voice-listen.md](07-voice-listen.md)、[05-voice.md](05-voice.md)
 - 上一版实现：[06-voice-plan.md](06-voice-plan.md)
-- 官方 `steer`：`deepseek-harness` 仓库的 `packages/core/agent-loop/src/agent.ts`、`packages/core/agent-loop/src/inbox.ts`、`packages/api/session-controller/src/commands.ts`、`packages/client/ui-conversation/src/client/input/submission-policy.ts`
+- 官方 `cancel` / `turn/end`：`deepseek-harness` 仓库的 `packages/core/agent-loop/src/agent.ts`（`cancel()`、`turn()` 的 `finally` 写 `turn/end`）、`packages/api/session-controller/src/commands.ts` 的 `cancel()`（`keepInbox: true`）
+- 官方 `steer`（历史参考，修订后不再使用）：同仓库的 `agent.ts`、`inbox.ts`、`commands.ts`、`client/ui-conversation/src/client/input/submission-policy.ts`
 - VPIO：SDK 头文件 `AudioToolbox/AUComponent.h`（`kAUVoiceIOProperty_*`）；WWDC23「What's new in voice processing」；Chromium `media/audio/mac/audio_low_latency_input_mac.cc`
 - WASAPI：微软文档「Loopback Recording」「Stream Attenuation」
 - WebRTC AudioProcessing：`https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing`，MSYS2 包 `mingw-w64-ucrt-x86_64-webrtc-audio-processing-1`

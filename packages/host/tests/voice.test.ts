@@ -346,6 +346,33 @@ describe('voice lifecycle', () => {
     assert.equal(page.some((message) => message.type === 'voice-level' && message.value === 0.3), true)
   })
 
+  it('resumes the old turn when the hard interjection could not be started', () => {
+    const settings = settingsWith()
+    const child = fakeChild()
+    const heard: string[] = []
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send() {},
+      open: () => child.link,
+      interject: (text) => { heard.push(text) },
+    })
+    voice.start()
+    child.emit({ type: 'mic', open: true })
+    voice.setPinned(true)
+    voice.beginTurn()
+    voice.noteAssistant('b:1:0:0', '旧任务。')
+    child.emit({ type: 'utterance', text: '大肥鱼，新任务', mode: 'interject' })
+    assert.deepEqual(heard, ['大肥鱼，新任务'])
+    assert.equal(voice.listenMode(), 'off', 'the hard interjection waits for the old turn to stop')
+    voice.resumeAfterInterjectFailure()
+    assert.equal(voice.listenMode(), 'interject')
+    voice.noteAssistant('b:1:0:0', '旧任务。继续。')
+    assert.equal(child.sent.some((message) => message.type === 'speak' && message.text === '继续。'), true, 'the old turn speaks again after the failure')
+    voice.close()
+  })
+
   it('drops the old queue and restarts after a crash, instead of holding the stop button', () => {
     const settings = settingsWith()
     const children = [fakeChild(), fakeChild()]
@@ -467,11 +494,18 @@ describe('utterance judging', () => {
       emit({ type: 'utterance', text: '大肥鱼，把明天的也查一下', mode: 'interject' })
       await until(() => heard.at(-1) === '大肥鱼，把明天的也查一下')
       await until(() => traceOf(trace).some((item) => (item as { type?: string }).type === 'stop-speak'), () => readFileSync(trace, 'utf8'))
+      // The interjection now hard-stops the old turn: the old step is silent and the
+      // microphone waits until the orb starts the new task.
+      assert.equal(voice.listenMode(), 'off')
       const speaksBeforeSilence = speaks(trace).length
       voice.noteAssistant('b:1:0:0', '我去查一下今天的天气。明天会下雨。后天晴。')
       voice.noteAssistant('b:1:0:2', '我先查一下。')
       assert.equal(speaks(trace).length, speaksBeforeSilence)
-      voice.noteAssistant('b:1:1:0', '明天多云。')
+      voice.endTurn()
+      assert.equal(voice.listenMode(), 'command')
+      voice.beginTurn()
+      assert.equal(voice.listenMode(), 'interject')
+      voice.noteAssistant('b:2:0:0', '明天多云。')
       await speakText('明天多云。')
 
       voice.questionOpened()
@@ -503,7 +537,7 @@ describe('utterance judging', () => {
       assert.equal(voice.listenMode(), 'wake')
 
       voice.beginTurn()
-      voice.noteAssistant('b:2:0:0', '今天晴。')
+      voice.noteAssistant('b:3:0:0', '今天晴。')
       voice.endTurn()
       await speakText('今天晴。')
       assert.equal(voice.listenMode(), 'interject')
@@ -515,7 +549,7 @@ describe('utterance judging', () => {
       }, () => readFileSync(trace, 'utf8'))
 
       voice.beginTurn()
-      voice.noteAssistant('b:3:0:0', '后天也晴。')
+      voice.noteAssistant('b:4:0:0', '后天也晴。')
       voice.endTurn()
       await speakText('后天也晴。')
       assert.equal(voice.snapshot().pinned, false)
@@ -532,7 +566,7 @@ describe('utterance judging', () => {
 
       voice.setPinned(true)
       voice.beginTurn()
-      voice.noteAssistant('b:4:0:0', '大后天晴。')
+      voice.noteAssistant('b:5:0:0', '大后天晴。')
       voice.endTurn()
       const pinnedClosing = await speakText('大后天晴。')
       assert.equal(voice.listenMode(), 'interject')

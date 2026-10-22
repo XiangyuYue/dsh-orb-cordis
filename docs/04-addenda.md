@@ -330,3 +330,14 @@ Windows 上的实测反馈:在浏览器里点球、输入、回车提交后,**Ag
 - **修法**:①`newSession()` 先读官方列表的 `blank` 标记,**当前会话还空白就只重置面板、不铸会话**;有内容才新建(与主窗口的复用语义一致,球是单会话 UI,只复用它自己那一个,不会跳到别处)。②`historyRecords()` 隐藏空白会话、保留当前那个(对齐 `sessionVisible`)。③**一次性清扫**:`HistoryCleaner.sweepBlanks()` 把"空白 × 非当前 × 未 attach × 非 pinned/archived × 5 分钟前 × computer-use 预设"的会话走**原有**的 archive + 系统回收站通道(`trashTree`,带 manifest,可恢复),所以升级后旧的那一堆会自己消失。④`scheduleBlankSweep()` 每个 profile 只跑一次,marker(`blank-sweep.json`)只在清扫**真的跑过**之后才写——服务不可用/正在清理时 `sweepBlanks` 抛错、marker 不写,下次启动再试,避免"记成已清扫但什么都没做"。
 - **测试**:`history.test.ts` 一例(旧空白被移入回收站并 archive;有内容的、5 分钟内的、attached、pinned、archived、当前会话、standard 预设一律不动;第二次运行 0 条);`runtime.test.ts` 两例(在空白会话上发 `{type:'new'}` **不**再产生 `create`,有内容时才产生;`history` 消息里当前空白可见、其它空白隐藏),以及 `scheduleBlankSweep` 一例(只跑一次;失败不写 marker、下次重试;"确实 0 条"要写 marker)。
 - **未做**:球面板本身没有可驱动的验证通道(helper 是不带调试端口的独立 Electron),所以"点按钮"那条路径由 host 层 socket 集成测试覆盖(它就是按钮实际发的消息),没有另做 UI 截图。
+
+## 25. 插话从官方 steer 改为硬停旧轮 + 新任务(2026-10-21)
+
+现象:Agent 正在等一个约 30 秒的工具时,用户说「大肥鱼,把明天的也查一下」,气泡能上屏,但要等当前工具/这一步结束,Agent 才看到这句;交互上像"卡住半分钟"。
+
+- **原因**:官方 `steer` 不中断当前模型输出和工具,只在下一步开头把插话交给模型。长工具下等待时间等于工具剩余时间。
+- **决定**:插话不再用 `steer`。命中时 `sessionController.cancel` 旧轮(等同点「停止」),等官方 `turn/end` 后把原话作为 `mode:'queue'` 的新消息发送,另起一轮。用户气泡在命中时就画,不 cancel 完成;旧轮剩余正文静音到新任务 `beginTurn()`。
+- **官方边界**:`cancel` 会 abort 模型流和当前步,但 `runGroup` 会等已经 dispatch 的工具 settle;工具响应 `exec.signal` 才会立刻结束。不响应取消的工具仍会推迟新任务。`cancel` 保留收件箱(`keepInbox: true`),旧轮排队的其他消息可能随新轮交付。
+- **实现**:见 `packages/host/src/voice.ts` 的 `interject()`/`resumeAfterInterjectFailure()`、`packages/host/src/orb.ts` 的 `pendingInterject`/`onInterject()`/`startPendingInterject()`/`consume('turn/end')`。不调 `stopTurn()`(它会手动 `finishTurn`,旧轮迟到的 `turn/end` 可能误停新轮);`turn/end` 之后再 `submitPrompt()`。
+- **交互细节**:连续插话以最新一句为准;停止、退下、手动打字、切会话都会清 pending 并删气泡;硬插话由 Host 直接发送,不经过页面 `voice-prompt`,因此不拼划词 chip、不走页面的 TCC 门。命令模式的普通语音输入不变。
+- **测试**:`runtime.test.ts` 新增执行中硬停、只剩余收尾、`cancel` 失败、连续插话、`prompt` 失败五例;`voice.test.ts` 增加插话后 `muted/off`、旧轮结束后新任务恢复播报、`resumeAfterInterjectFailure()` 三处断言。

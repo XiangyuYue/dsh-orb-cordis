@@ -56,7 +56,7 @@ export interface VoiceControllerOptions {
   send(message: VoicePageMessage): void
   /** Fork the voice child. Undefined means this host has no voice runtime. */
   open(): VoiceLink | undefined
-  /** 插话原话。orb 决定发 steer 还是交给页面走打字发送。 */
+  /** 插话原话。orb 会硬停旧轮，再把这句话当作新任务发送。 */
   interject?(text: string): void
   /** 和点「停止」相同的执行停止。没有在执行时不做事。 */
   stopTurn?(): void
@@ -415,9 +415,30 @@ export class VoiceController {
   }
 
   private interject(text: string): void {
+    // The old turn is about to be cancelled. Re-entering transcription must not seed the
+    // speaker tail of the task that is being stopped.
+    this.commandSeed = 0
+    if (this.agentBusy) {
+      this.muted = true
+      this.stopping = true
+    }
     for (const key of this.seen.keys()) this.silencedSteps.add(stepOf(key))
     this.apply({ type: 'stop' })
     this.options.interject?.(text)
+    this.poll()
+  }
+
+  /**
+   * The hard interjection could not cancel the old turn. Undo the muted/stopping state
+   * so the turn that is still running keeps speaking and listening.
+   */
+  resumeAfterInterjectFailure(): void {
+    this.muted = false
+    this.stopping = false
+    this.commandSeed = 300
+    this.silencedSteps.clear()
+    if (!this.live) return
+    this.pushListen(false)
     this.poll()
   }
 

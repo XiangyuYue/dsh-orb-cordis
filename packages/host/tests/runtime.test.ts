@@ -415,40 +415,123 @@ describe('ball control socket', { concurrency: 1 }, () => {
     }
   })
 
-  it('steers an interjection during a turn and queues one after the turn ends', async () => {
+  it('hard-stops a running turn and starts the interjection as a new turn', async () => {
     const harness = boot()
     const client = await connect(harness.runtime)
     const interject = (text: string) => (harness.runtime as unknown as { onInterject(text: string): Promise<void> }).onInterject(text)
     try {
       client.send({ type: 'prompt', text: '查一下今天的天气' })
       await waitFor(() => harness.calls.prompt.length === 1)
-      const running = liveTurnCount(client.messages)
-      await interject('大肥鱼，把明天的也查一下')
-      await waitFor(() => harness.calls.prompt.length === 2)
-      const steered = harness.calls.prompt.at(-1)
-      assert.equal(steered?.mode, 'steer')
-      assert.equal(steered?.content?.[0]?.text, '大肥鱼，把明天的也查一下')
-      await waitFor(() => client.messages.some((message) => message.type === 'block' && message.kind === 'user' && message.text === '大肥鱼，把明天的也查一下'))
-      assert.equal(liveTurnCount(client.messages), running, 'an interjection stays inside the running turn')
-
-      const sessionId = steered?.sessionId
+      const sessionId = harness.calls.prompt[0]?.sessionId
       assert.ok(sessionId)
-      const beforeEnd = client.messages.length
-      harness.inject(sessionId, { type: 'turn/end', seq: 1, data: {} })
-      await waitFor(() => client.messages.slice(beforeEnd).some((message) => message.type === 'turn' && message.running === false))
-      const beforeIdle = harness.calls.prompt.length
+      const before = harness.calls.prompt.length
+      const voicePrompts = client.messages.filter((message) => message.type === 'voice-prompt').length
+
+      await interject('大肥鱼，把明天的也查一下')
+      await waitFor(() => harness.calls.cancel.length === 1)
+      assert.equal(harness.calls.cancel[0]?.sessionId, sessionId)
+      assert.equal(harness.calls.prompt.length, before, 'the old turn must end before the new prompt')
+      await waitFor(() => client.messages.some((message) => message.type === 'block' && message.kind === 'user' && message.text === '大肥鱼，把明天的也查一下'))
+
+      harness.inject(sessionId, { type: 'turn/end', seq: 1, data: { turn: 1 } })
+      await waitFor(() => harness.calls.prompt.length === before + 1)
+      const next = harness.calls.prompt.at(-1)
+      assert.equal(next?.mode, 'queue')
+      assert.equal(next?.content?.[0]?.text, '大肥鱼，把明天的也查一下')
+      assert.equal(harness.calls.prompt.some((call) => call.mode === 'steer'), false)
+      assert.equal(client.messages.filter((message) => message.type === 'voice-prompt').length, voicePrompts)
+    } finally {
+      client.socket.destroy()
+    }
+  })
+
+  it('starts an interjection as a new turn when only the closing speech is left', async () => {
+    const harness = boot()
+    const client = await connect(harness.runtime)
+    const interject = (text: string) => (harness.runtime as unknown as { onInterject(text: string): Promise<void> }).onInterject(text)
+    try {
+      client.send({ type: 'prompt', text: '查一下今天的天气' })
+      await waitFor(() => harness.calls.prompt.length === 1)
+      const sessionId = harness.calls.prompt[0]?.sessionId
+      assert.ok(sessionId)
+      const closeMark = client.messages.length
+      harness.inject(sessionId, { type: 'turn/end', seq: 1, data: { turn: 1 } })
+      await waitFor(() => client.messages.slice(closeMark).some((message) => message.type === 'turn' && message.running === false))
+
+      const before = harness.calls.prompt.length
       await interject('大肥鱼，再查一次')
-      assert.equal(harness.calls.prompt.length, beforeIdle)
-      await waitFor(() => client.messages.some((message) => message.type === 'voice-prompt' && message.text === '大肥鱼，再查一次'))
-      client.send({ type: 'prompt', text: '大肥鱼，再查一次' })
-      await waitFor(() => harness.calls.prompt.length === beforeIdle + 1)
+      await waitFor(() => harness.calls.prompt.length === before + 1)
       assert.equal(harness.calls.prompt.at(-1)?.mode, 'queue')
+      assert.equal(harness.calls.prompt.at(-1)?.content?.[0]?.text, '大肥鱼，再查一次')
+      assert.equal(harness.calls.cancel.length, 0, 'an idle turn needs no cancel')
+      assert.equal(client.messages.some((message) => message.type === 'voice-prompt'), false)
+    } finally {
+      client.socket.destroy()
+    }
+  })
+
+  it('drops the interjection bubble when the old turn cannot be stopped', async () => {
+    const harness = boot()
+    const client = await connect(harness.runtime)
+    const interject = (text: string) => (harness.runtime as unknown as { onInterject(text: string): Promise<void> }).onInterject(text)
+    try {
+      client.send({ type: 'prompt', text: '查一下今天的天气' })
+      await waitFor(() => harness.calls.prompt.length === 1)
+      harness.failCancel(new Error('cancel refused'))
+      const before = harness.calls.prompt.length
+      const mark = client.messages.length
+      await interject('大肥鱼，这次发不出去')
+      await waitFor(() => harness.calls.cancel.length === 1)
+      await waitFor(() => client.messages.slice(mark).some((message) => message.type === 'block-drop'))
+      await waitFor(() => client.messages.some((message) => message.type === 'status' && message.text === 'cancel refused'))
+      assert.equal(harness.calls.prompt.length, before)
+    } finally {
+      client.socket.destroy()
+    }
+  })
+
+  it('keeps only the newest interjection while the old turn is stopping', async () => {
+    const harness = boot()
+    const client = await connect(harness.runtime)
+    const interject = (text: string) => (harness.runtime as unknown as { onInterject(text: string): Promise<void> }).onInterject(text)
+    try {
+      client.send({ type: 'prompt', text: '查一下今天的天气' })
+      await waitFor(() => harness.calls.prompt.length === 1)
+      const sessionId = harness.calls.prompt[0]?.sessionId
+      assert.ok(sessionId)
+      const before = harness.calls.prompt.length
+
+      await interject('大肥鱼，第一句')
+      await interject('大肥鱼，第二句')
+      await waitFor(() => harness.calls.cancel.length === 2)
+      await waitFor(() => client.messages.some((message) => message.type === 'block-drop'))
+      assert.equal(harness.calls.prompt.length, before)
+
+      harness.inject(sessionId, { type: 'turn/end', seq: 1, data: { turn: 1 } })
+      await waitFor(() => harness.calls.prompt.length === before + 1)
+      assert.equal(harness.calls.prompt.at(-1)?.content?.[0]?.text, '大肥鱼，第二句')
+    } finally {
+      client.socket.destroy()
+    }
+  })
+
+  it('keeps the interjection bubble when the new prompt fails', async () => {
+    const harness = boot()
+    const client = await connect(harness.runtime)
+    const interject = (text: string) => (harness.runtime as unknown as { onInterject(text: string): Promise<void> }).onInterject(text)
+    try {
+      client.send({ type: 'prompt', text: '查一下今天的天气' })
+      await waitFor(() => harness.calls.prompt.length === 1)
+      const sessionId = harness.calls.prompt[0]?.sessionId
+      assert.ok(sessionId)
+      const closeMark = client.messages.length
+      harness.inject(sessionId, { type: 'turn/end', seq: 1, data: { turn: 1 } })
+      await waitFor(() => client.messages.slice(closeMark).some((message) => message.type === 'turn' && message.running === false))
 
       harness.failPrompt(new Error('session missing'))
       await interject('大肥鱼，这次发不出去')
-      await waitFor(() => client.messages.some((message) => message.type === 'block' && message.kind === 'user' && message.text === '大肥鱼，这次发不出去'))
-      await waitFor(() => client.messages.some((message) => message.type === 'block-drop'))
       await waitFor(() => client.messages.some((message) => message.type === 'status' && message.text === 'session missing'))
+      assert.equal(client.messages.some((message) => message.type === 'block' && message.kind === 'user' && message.text === '大肥鱼，这次发不出去'), true)
     } finally {
       client.socket.destroy()
     }
