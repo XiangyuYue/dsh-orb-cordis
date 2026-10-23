@@ -8,14 +8,24 @@ describe('voice settings', () => {
     assert.deepEqual(parseVoiceSettings(undefined), DEFAULT_VOICE_SETTINGS)
     assert.deepEqual(parseVoiceSettings(null), DEFAULT_VOICE_SETTINGS)
     assert.deepEqual(parseVoiceSettings([]), DEFAULT_VOICE_SETTINGS)
+    assert.equal(parseVoiceSettings(undefined).voiceEnabled, false, 'a fresh profile starts with voice off')
+    assert.equal(parseVoiceSettings({}).voiceEnabled, false)
     assert.equal(parseVoiceSettings({}).wakeWords[0], '你好大肥鱼')
     assert.equal(parseVoiceSettings({}).idleMs, 30_000)
     assert.equal(parseVoiceSettings({}).ttsSpeed, 1.5)
     assert.equal(parseVoiceSettings({}).ttsVolume, 1)
   })
 
+  it('reads a voice file written before the master switch as on', () => {
+    assert.equal(parseVoiceSettings({ wakeEnabled: true }, { legacyMaster: true }).voiceEnabled, true)
+    assert.equal(parseVoiceSettings({ wakeEnabled: false }, { legacyMaster: true }).voiceEnabled, true)
+    assert.equal(parseVoiceSettings({ voiceEnabled: false }, { legacyMaster: true }).voiceEnabled, false, 'an explicit value wins')
+    assert.equal(parseVoiceSettings({ wakeEnabled: true }).voiceEnabled, false, 'without the legacy hint, a missing field is off')
+  })
+
   it('keeps a valid field and pulls the others back into range', () => {
     const parsed = parseVoiceSettings({
+      voiceEnabled: true,
       wakeEnabled: false,
       commandEnabled: false,
       ttsEnabled: false,
@@ -32,6 +42,7 @@ describe('voice settings', () => {
       ttsVolume: 0.37,
       idleMs: 1000,
     })
+    assert.equal(parsed.voiceEnabled, true)
     assert.equal(parsed.wakeEnabled, false)
     assert.equal(parsed.commandEnabled, false)
     assert.equal(parsed.ttsEnabled, false)

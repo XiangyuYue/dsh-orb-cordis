@@ -204,7 +204,10 @@ export class ProfileStore {
     this.ballValue = readBall(dir)
     this.updateValue = readUpdate(dir)
     this.historyValue = readHistory(dir)
-    this.voiceValue = parseVoiceSettings(readJson(join(dir, VOICE_FILE)))
+    const voice = readJson(join(dir, VOICE_FILE))
+    // A fresh profile starts with voice off. A file written before the master switch
+    // existed keeps the old effective state: on only if one of its columns was on.
+    this.voiceValue = parseVoiceSettings(voice, { legacyMaster: legacyVoiceOn(voice) })
   }
 
   permission(): PermissionPreset {
@@ -566,6 +569,13 @@ function serializeSelection(selection: AgentModelSelection): AgentModelSelection
     model: selection.model,
     ...selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort },
   }
+}
+
+/** A pre-master voice file was running if any of its three columns was explicitly on. */
+function legacyVoiceOn(value: unknown): boolean {
+  const item = record(value)
+  if (item === undefined) return false
+  return item.wakeEnabled === true || item.commandEnabled === true || item.ttsEnabled === true
 }
 
 function readJson(file: string): unknown {

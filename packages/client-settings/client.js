@@ -141,10 +141,15 @@ window.__ModuleLoader__.load({
       historyFailed: '清理失败：',
       voiceTitle: '语音',
       voiceIntro: '唤醒、语音输入和播报可以单独关掉。模型还没准备好时，对应的一项不会发生。',
+      voiceOffIntro: '打开总开关后，可以设置唤醒、语音输入和播报。',
+      voiceMasterToggle: '启用语音',
       voiceMicBody: '没有拿到麦克风，唤醒和语音输入都不会发生。球的其他功能照常。',
       voiceMicOpen: '打开「麦克风」设置',
       voiceOn: '已开启',
       voiceOff: '已关闭',
+      unitSeconds: '{value} 秒',
+      unitMinutes: '{value} 分钟',
+      unitMinuteSeconds: '{minutes} 分 {seconds} 秒',
       wakeTitle: '语音唤醒',
       wakeToggle: '语音唤醒',
       wakeDesc: '说一句唤醒词，悬浮球就会醒过来。',
@@ -351,10 +356,15 @@ window.__ModuleLoader__.load({
       historyFailed: 'Cleanup failed: ',
       voiceTitle: 'Voice',
       voiceIntro: 'Wake word, voice input, and speech can each be turned off. A column whose model is not ready does not run.',
+      voiceOffIntro: 'Turn the master switch on to set up the wake word, voice input, and speech.',
+      voiceMasterToggle: 'Enable voice',
       voiceMicBody: 'The microphone is not available, so wake word and voice input do not run. The rest of the ball still works.',
       voiceMicOpen: 'Open Microphone settings',
       voiceOn: 'On',
       voiceOff: 'Off',
+      unitSeconds: '{value} s',
+      unitMinutes: '{value} min',
+      unitMinuteSeconds: '{minutes} min {seconds} s',
       wakeTitle: 'Wake word',
       wakeToggle: 'Wake word',
       wakeDesc: 'Say a wake word and the floating ball wakes up.',
@@ -851,6 +861,7 @@ window.__ModuleLoader__.load({
               void mutate('/.dsh-orb/observation-frame', { enabled })
             },
           })),
+          h(IdleCard, { text, snap, mutate }),
           snap.tcc && snap.tcc.applicable ? tccCard(text, snap, disabled, mutate) : null),
         h(WorkspaceCard, { text, snap, refreshSettings }),
         h(HistoryCard, { text, snap, mutate, refreshHistory }))
@@ -1386,6 +1397,7 @@ window.__ModuleLoader__.load({
     }
 
     const VOICE_DEFAULTS = {
+      voiceEnabled: false,
       wakeEnabled: true,
       wakeWords: ['你好大肥鱼'],
       wakeThreshold: 0.25,
@@ -1409,8 +1421,12 @@ window.__ModuleLoader__.load({
     }
 
     function normalizeVoice(raw) {
-      const item = raw && typeof raw === 'object' ? raw : {}
+      const present = raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+      const item = present ? raw : {}
+      // A host that predates the master field kept voice on if any column was on.
+      const legacyOn = item.wakeEnabled === true || item.commandEnabled === true || item.ttsEnabled === true
       return {
+        voiceEnabled: typeof item.voiceEnabled === 'boolean' ? item.voiceEnabled : legacyOn,
         wakeEnabled: typeof item.wakeEnabled === 'boolean' ? item.wakeEnabled : VOICE_DEFAULTS.wakeEnabled,
         wakeWords: Array.isArray(item.wakeWords) ? item.wakeWords : VOICE_DEFAULTS.wakeWords,
         wakeThreshold: typeof item.wakeThreshold === 'number' ? item.wakeThreshold : VOICE_DEFAULTS.wakeThreshold,
@@ -1521,6 +1537,101 @@ window.__ModuleLoader__.load({
       }, lines.map((d, index) => h('path', { key: index, d })))
     }
 
+    /** A value with its unit, so 600 seconds reads as 10 分钟. */
+    function secondsLabel(value, text) {
+      const total = Math.round(value)
+      if (total < 60) return text.unitSeconds.replaceAll('{value}', String(total))
+      const minutes = Math.floor(total / 60)
+      const rest = total % 60
+      return rest === 0
+        ? text.unitMinutes.replaceAll('{value}', String(minutes))
+        : text.unitMinuteSeconds.replaceAll('{minutes}', String(minutes)).replaceAll('{seconds}', String(rest))
+    }
+
+    function voiceFieldHead(label, valueText) {
+      return h('span', { className: 'dsh-orb-set-voice-field-head' },
+        h('span', { className: 'dsh-orb-set-voice-field-label' }, label),
+        valueText === null ? null : h('span', { className: 'dsh-orb-set-voice-field-value' }, valueText))
+    }
+
+    /**
+     * One stored value as a slider. `factor` converts display units to stored units:
+     * 1000 for milliseconds, 0.01 for the volume fraction, 1 for the rest. The caller owns
+     * the draft and the save; `settled` de-duplicates the release and the blur that follows.
+     * A plain node builder rather than a component: the value and its state live in the caller.
+     */
+    function voiceSliderNode({ label, value, spec, hint, locked, wide, settled, stateKey, onLocked, onPreview, onCommit }) {
+      const stepText = String(spec.step)
+      const dot = stepText.indexOf('.')
+      const stepDecimals = dot === -1 ? 0 : stepText.length - dot - 1
+      const factor = spec.factor ?? 1
+      const raw = Number(value)
+      const stored = Number.isFinite(raw) ? raw : (spec.fallback ?? spec.min * factor)
+      let display = stored / factor
+      if (!Number.isFinite(display)) display = spec.min
+      display = Math.min(spec.max, Math.max(spec.min, Number(display.toFixed(stepDecimals))))
+      const percent = spec.max === spec.min ? 0 : ((display - spec.min) / (spec.max - spec.min)) * 100
+      const shownValue = spec.format(display)
+      const storedFrom = (next) => {
+        const stepped = Math.round((next - spec.min) / spec.step) * spec.step + spec.min
+        return Number((stepped * factor).toFixed(spec.decimals ?? 2))
+      }
+      const commit = (event) => {
+        if (locked) return
+        let next = display
+        if (event && event.target && event.target.value !== undefined && event.target.value !== '') {
+          const parsed = Number(event.target.value)
+          if (Number.isFinite(parsed)) next = parsed
+        }
+        next = Math.min(spec.max, Math.max(spec.min, next))
+        const nextStored = storedFrom(next)
+        // A release already saved this value; the blur that follows it must not save twice.
+        if (settled[stateKey] === nextStored) return
+        settled[stateKey] = nextStored
+        onCommit(nextStored)
+      }
+      return h('label', { className: `dsh-orb-set-voice-field${wide ? ' is-wide' : ''}` },
+        voiceFieldHead(label, shownValue),
+        h('input', {
+          type: 'range',
+          className: `dsh-orb-set-voice-field-range${locked ? ' is-locked' : ''}`,
+          'aria-label': label,
+          'aria-valuetext': shownValue,
+          'aria-disabled': locked ? 'true' : 'false',
+          min: spec.min,
+          max: spec.max,
+          step: spec.step,
+          value: String(display),
+          style: { '--dsh-orb-voice-fill': `${Math.max(0, Math.min(100, percent))}%` },
+          onChange: (event) => {
+            if (locked) return
+            const next = Number(event.target.value)
+            if (!Number.isFinite(next)) return
+            delete settled[stateKey]
+            onPreview(storedFrom(next))
+          },
+          onMouseDown: (event) => {
+            if (!locked) return
+            event.preventDefault()
+            if (onLocked) onLocked()
+          },
+          onClick: () => {
+            if (locked && onLocked) onLocked()
+          },
+          onPointerUp: commit,
+          onKeyUp: (event) => {
+            if (!event) return
+            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home'
+              || event.key === 'End' || event.key === 'PageUp' || event.key === 'PageDown') commit(event)
+          },
+          onBlur: commit,
+        }),
+        h('span', { className: 'dsh-orb-set-voice-field-scale' },
+          h('span', null, spec.format(spec.min)),
+          h('span', null, spec.format(spec.max))),
+        hint ? h('span', { className: 'dsh-orb-set-voice-field-hint' }, hint) : null)
+    }
+
     /**
      * Voice group on the floating-ball page. A missing model looks unavailable, but the
      * control still takes a click and explains which model to prepare. Native `disabled`
@@ -1603,90 +1714,23 @@ window.__ModuleLoader__.load({
         }
       }
 
-      /** Small values read better with their unit attached: 10 分钟, not 600. */
-      function secondsLabel(value) {
-        const total = Math.round(value)
-        if (total < 60) return `${total} 秒`
-        const minutes = Math.floor(total / 60)
-        const rest = total % 60
-        return rest === 0 ? `${minutes} 分钟` : `${minutes} 分 ${rest} 秒`
-      }
-
-      function fieldHead(label, valueText) {
-        return h('span', { className: 'dsh-orb-set-voice-field-head' },
-          h('span', { className: 'dsh-orb-set-voice-field-label' }, label),
-          valueText === null ? null : h('span', { className: 'dsh-orb-set-voice-field-value' }, valueText))
-      }
-
-      /**
-       * A stored value shown as a slider. `factor` converts display units to what the host
-       * stores: 1000 for milliseconds, 0.01 for the volume fraction, 1 for the rest. A drag
-       * previews live; release, arrow keys, and blur all write once.
-       */
       function rangeField(label, key, missing, spec, wide) {
-        const stepText = String(spec.step)
-        const dot = stepText.indexOf('.')
-        const stepDecimals = dot === -1 ? 0 : stepText.length - dot - 1
-        const factor = spec.factor ?? 1
-        const raw = Number(shown(key))
-        const stored = Number.isFinite(raw) ? raw : (spec.fallback ?? spec.min * factor)
-        let display = stored / factor
-        if (!Number.isFinite(display)) display = spec.min
-        display = Math.min(spec.max, Math.max(spec.min, Number(display.toFixed(stepDecimals))))
-        const percent = spec.max === spec.min ? 0 : ((display - spec.min) / (spec.max - spec.min)) * 100
-        const shownValue = spec.format(display)
-        const storedFrom = (next) => {
-          const stepped = Math.round((next - spec.min) / spec.step) * spec.step + spec.min
-          return Number((stepped * factor).toFixed(spec.decimals ?? 2))
-        }
-        const commit = (event) => {
-          if (missing.length) return
-          let next = display
-          if (event && event.target && event.target.value !== undefined && event.target.value !== '') {
-            const parsed = Number(event.target.value)
-            if (Number.isFinite(parsed)) next = parsed
-          }
-          next = Math.min(spec.max, Math.max(spec.min, next))
-          const nextStored = storedFrom(next)
-          // A release already saved this value; the blur that follows it must not save twice.
-          if (settledRef.current[key] === nextStored) return
-          settledRef.current[key] = nextStored
-          remember(key, nextStored)
-          save({})
-        }
-        return h('label', { className: `dsh-orb-set-voice-field${wide ? ' is-wide' : ''}` },
-          fieldHead(label, shownValue),
-          h('input', {
-            type: 'range',
-            className: `dsh-orb-set-voice-field-range${missing.length ? ' is-locked' : ''}`,
-            'aria-label': label,
-            'aria-valuetext': shownValue,
-            'aria-disabled': missing.length ? 'true' : 'false',
-            min: spec.min,
-            max: spec.max,
-            step: spec.step,
-            value: String(display),
-            style: { '--dsh-orb-voice-fill': `${Math.max(0, Math.min(100, percent))}%` },
-            onChange: (event) => {
-              if (missing.length) return
-              const next = Number(event.target.value)
-              if (!Number.isFinite(next)) return
-              delete settledRef.current[key]
-              remember(key, storedFrom(next))
-            },
-            onPointerUp: commit,
-            onKeyUp: (event) => {
-              if (!event) return
-              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home'
-                || event.key === 'End' || event.key === 'PageUp' || event.key === 'PageDown') commit(event)
-            },
-            onBlur: commit,
-            ...lockedProps(missing),
-          }),
-          h('span', { className: 'dsh-orb-set-voice-field-scale' },
-            h('span', null, spec.format(spec.min)),
-            h('span', null, spec.format(spec.max))),
-          spec.hint ? h('span', { className: 'dsh-orb-set-voice-field-hint' }, spec.hint) : null)
+        return voiceSliderNode({
+          label,
+          value: shown(key),
+          spec,
+          hint: spec.hint,
+          locked: missing.length > 0,
+          wide,
+          settled: settledRef.current,
+          stateKey: key,
+          onLocked: () => openLock(missing),
+          onPreview: (stored) => remember(key, stored),
+          onCommit: (stored) => {
+            remember(key, stored)
+            save({})
+          },
+        })
       }
 
       function textInput(label, key, missing, hint, options) {
@@ -1954,7 +1998,7 @@ window.__ModuleLoader__.load({
             factor: 1000,
             decimals: 0,
             fallback: 1500,
-            format: (value) => `${value.toFixed(1)} 秒`,
+            format: (value) => text.unitSeconds.replaceAll('{value}', value.toFixed(1)),
             hint: text.wakeCooldownHint,
           }),
           linesInput(text.wakeWords, 'wakeWords', wakeLocks, text.wakeWordsHint),
@@ -2013,38 +2057,82 @@ window.__ModuleLoader__.load({
           backend === 'qwen' ? qwenVoiceField() : null),
         modelFooter('tts', text.downloadTts))
 
-      const idlePanel = voicePanel('idle', text.idleTitle, text.idleDesc, null,
-        h('div', { className: 'dsh-orb-set-voice-fields' },
-          rangeField(text.idleSeconds, 'idleMs', [], {
-            min: 5,
-            max: 600,
-            step: 1,
-            factor: 1000,
-            decimals: 0,
-            fallback: 30000,
-            format: secondsLabel,
-            hint: text.idleHint,
-          }, true)))
+      // The master switch is the whole card's gate. Off hides every column, but the three
+      // column switches keep their stored values, so the next switch-on restores the mix.
+      const voiceOn = shown('voiceEnabled') === true
 
       return h('section', { className: 'dsh-orb-set-card dsh-orb-set-voice' },
         h('div', { className: 'dsh-orb-set-voice-head' },
           h('span', { className: 'dsh-orb-set-voice-head-icon', 'aria-hidden': 'true' }, voiceIcon('voice')),
           h('div', { className: 'dsh-orb-set-voice-head-text' },
             h('h3', null, text.voiceTitle),
-            h('p', null, text.voiceIntro))),
-        snap.voiceMic === false ? h('div', { className: 'dsh-orb-set-voice-mic' },
-          h('span', { className: 'dsh-orb-set-voice-mic-icon', 'aria-hidden': 'true' }, voiceIcon('micOff')),
-          h('p', { className: 'dsh-orb-set-voice-mic-text' }, text.voiceMicBody),
-          h('button', {
-            type: 'button',
-            className: 'dsh-orb-set-button dsh-orb-set-voice-action',
-            onClick: () => { void mutate('/.dsh-orb/voice/mic', {}) },
-          }, text.voiceMicOpen)) : null,
-        wakePanel,
-        commandPanel,
-        ttsPanel,
-        idlePanel,
+            h('p', null, voiceOn ? text.voiceIntro : text.voiceOffIntro)),
+          h('div', { className: 'dsh-orb-set-voice-head-control' },
+            h('span', { className: 'dsh-orb-set-voice-head-state' }, voiceOn ? text.voiceOn : text.voiceOff),
+            h(Toggle, {
+              checked: voiceOn,
+              label: text.voiceMasterToggle,
+              disabled,
+              onChange: (enabled) => {
+                remember('voiceEnabled', enabled)
+                save({ voiceEnabled: enabled })
+              },
+            }))),
+        voiceOn ? [
+          snap.voiceMic === false ? h('div', { className: 'dsh-orb-set-voice-mic' },
+            h('span', { className: 'dsh-orb-set-voice-mic-icon', 'aria-hidden': 'true' }, voiceIcon('micOff')),
+            h('p', { className: 'dsh-orb-set-voice-mic-text' }, text.voiceMicBody),
+            h('button', {
+              type: 'button',
+              className: 'dsh-orb-set-button dsh-orb-set-voice-action',
+              onClick: () => { void mutate('/.dsh-orb/voice/mic', {}) },
+            }, text.voiceMicOpen)) : null,
+          wakePanel,
+          commandPanel,
+          ttsPanel,
+        ] : null,
         dialogNode)
+    }
+
+    /**
+     * Idle unpin is a ball behavior, not a voice column. It lives outside the voice card so
+     * the master switch can collapse the long voice form without taking this setting with it.
+     */
+    function IdleCard({ text, snap, mutate }) {
+      const voice = normalizeVoice(snap.voice)
+      const settledRef = React.useRef({})
+      const [draft, setDraft] = React.useState(null)
+      const value = draft === null ? voice.idleMs : draft
+      function commit(stored) {
+        setDraft(stored)
+        void mutate('/.dsh-orb/voice', { ...voice, idleMs: stored }).then((saved) => {
+          if (saved) setDraft(null)
+        })
+      }
+      return h('section', { className: 'dsh-orb-set-card dsh-orb-set-idle' },
+        h('h3', null, text.idleTitle),
+        h('p', null, text.idleDesc),
+        h('div', { className: 'dsh-orb-set-idle-body' },
+          voiceSliderNode({
+            label: text.idleSeconds,
+            value,
+            spec: {
+              min: 5,
+              max: 600,
+              step: 1,
+              factor: 1000,
+              decimals: 0,
+              fallback: 30000,
+              format: (seconds) => secondsLabel(seconds, text),
+            },
+            hint: text.idleHint,
+            locked: false,
+            wide: true,
+            settled: settledRef.current,
+            stateKey: 'idleMs',
+            onPreview: (stored) => setDraft(stored),
+            onCommit: commit,
+          })))
     }
 
     function card(title, description, control) {
@@ -2199,11 +2287,14 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-muted { color: color-mix(in srgb, currentColor 58%, transparent); }
 /* Voice: three switchable panels, sliders for every bounded value. */
 .dsh-orb-set-voice { padding: 16px 16px 18px; }
-.dsh-orb-set-voice-head { display: flex; align-items: flex-start; gap: 12px; }
+.dsh-orb-set-voice-head { display: flex; align-items: center; gap: 12px; }
 .dsh-orb-set-voice-head-icon { flex: none; width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: var(--dsw-alias-button-info-fill, #2f6fed); background: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 12%, transparent); }
 .dsh-orb-set-voice-head-text { flex: 1; min-width: 0; }
 .dsh-orb-set .dsh-orb-set-voice-head-text h3 { font-size: 15px; }
 .dsh-orb-set .dsh-orb-set-voice-head-text p { margin-top: 3px; font-size: 12.5px; line-height: 1.45; color: color-mix(in srgb, currentColor 62%, transparent); }
+.dsh-orb-set-voice-head-control { flex: none; display: flex; align-items: center; gap: 9px; margin-left: auto; }
+.dsh-orb-set-voice-head-state { font-size: 11px; color: color-mix(in srgb, currentColor 55%, transparent); }
+.dsh-orb-set-idle-body { margin-top: 12px; max-width: 520px; }
 .dsh-orb-set-voice-panel { margin-top: 12px; padding: 14px 15px 15px; border: 1px solid color-mix(in srgb, currentColor 8%, transparent); border-radius: 13px; background: color-mix(in srgb, currentColor 2.6%, transparent); }
 .dsh-orb-set-voice-panel-head { display: flex; align-items: center; gap: 11px; }
 .dsh-orb-set-voice-panel-icon { flex: none; width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--dsw-alias-button-info-fill, #2f6fed); background: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 11%, transparent); }
@@ -2264,6 +2355,7 @@ window.__ModuleLoader__.load({
 .dsh-orb-set .is-locked { opacity: 0.45; }
 @media (max-width: 560px) {
   .dsh-orb-set-voice-panel-switch .dsh-orb-set-voice-panel-state { display: none; }
+  .dsh-orb-set-voice-head-state { display: none; }
   .dsh-orb-set-voice-model { flex-wrap: wrap; }
 }
 `

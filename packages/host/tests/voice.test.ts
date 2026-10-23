@@ -54,6 +54,7 @@ describe('voice controller with a script child', () => {
     let now = 0
     const settings = {
       ...DEFAULT_VOICE_SETTINGS,
+      voiceEnabled: true,
       wakeWords: [...DEFAULT_VOICE_SETTINGS.wakeWords],
       dismissPhrases: [...DEFAULT_VOICE_SETTINGS.dismissPhrases],
     }
@@ -225,7 +226,8 @@ describe('voice controller with a script child', () => {
 })
 
 function settingsWith(patch: Partial<typeof DEFAULT_VOICE_SETTINGS> = {}): typeof DEFAULT_VOICE_SETTINGS {
-  return { ...DEFAULT_VOICE_SETTINGS, wakeWords: [...DEFAULT_VOICE_SETTINGS.wakeWords], dismissPhrases: [...DEFAULT_VOICE_SETTINGS.dismissPhrases], ...patch }
+  // Runtime tests start with the master switch on; the column switches exercise their own gates.
+  return { ...DEFAULT_VOICE_SETTINGS, voiceEnabled: true, wakeWords: [...DEFAULT_VOICE_SETTINGS.wakeWords], dismissPhrases: [...DEFAULT_VOICE_SETTINGS.dismissPhrases], ...patch }
 }
 
 /** A link that never touches a microphone. `emit` is the child speaking; `die` is a crash. */
@@ -446,6 +448,72 @@ describe('voice lifecycle', () => {
     voice.start()
     child.emit({ type: 'mic', open: true })
     assert.equal(voice.listenMode(), 'off')
+  })
+
+  it('keeps every voice column off behind the master switch, and restores them together', () => {
+    const settings = settingsWith({ voiceEnabled: false })
+    const child = fakeChild()
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send() {},
+      open: () => child.link,
+    })
+    voice.start()
+    child.emit({ type: 'mic', open: true })
+    assert.equal(voice.listenMode(), 'off')
+    assert.equal(voice.microphone(), null, 'no listening column holds the device')
+    const configure = child.sent.filter((item) => item.type === 'configure').at(-1) as { settings: typeof settings }
+    assert.equal(configure.settings.voiceEnabled, false)
+    assert.equal(configure.settings.wakeEnabled, false, 'the child is told the wake column is off')
+    assert.equal(configure.settings.commandEnabled, false)
+    assert.equal(configure.settings.ttsEnabled, false)
+    const listen = child.sent.filter((item) => item.type === 'listen').at(-1) as { mode: string, device: boolean }
+    assert.equal(listen.mode, 'off')
+    assert.equal(listen.device, false)
+
+    voice.noteAssistant('b:1:0:0', '这句话不应该播报。')
+    assert.deepEqual(child.sent.filter((item) => item.type === 'speak'), [])
+
+    settings.voiceEnabled = true
+    voice.applySettings()
+    assert.equal(voice.listenMode(), 'wake')
+    assert.equal(voice.microphone(), true)
+    const restored = child.sent.filter((item) => item.type === 'configure').at(-1) as { settings: typeof settings }
+    assert.equal(restored.settings.wakeEnabled, true)
+    assert.equal(restored.settings.commandEnabled, true)
+    assert.equal(restored.settings.ttsEnabled, true, 'the stored column choices come back')
+    voice.noteAssistant('b:1:0:1', '现在可以播报了。')
+    assert.equal(child.sent.filter((item) => item.type === 'speak').length, 1)
+
+    settings.voiceEnabled = false
+    voice.applySettings()
+    assert.equal(voice.listenMode(), 'off')
+    assert.equal(voice.microphone(), null)
+    assert.equal(child.sent.some((item) => item.type === 'stop-speak'), true, 'the playing sentence is stopped')
+    assert.deepEqual(voice.snapshot().queued, [])
+    voice.close()
+  })
+
+  it('keeps the idle unpin clock running with the master switch off', () => {
+    const settings = settingsWith({ voiceEnabled: false })
+    const child = fakeChild()
+    const page: VoicePageMessage[] = []
+    let now = 0
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => now,
+      send: (message) => { page.push(message) },
+      open: () => child.link,
+    })
+    voice.start()
+    voice.setPinned(true)
+    now = 30_000
+    voice.poll()
+    assert.equal(page.some((message) => message.type === 'unpin'), true)
+    voice.close()
   })
 })
 

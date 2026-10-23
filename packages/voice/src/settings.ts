@@ -15,6 +15,12 @@ import { clampTtsVolume, DEFAULT_TTS_VOLUME } from './volume.ts'
 export type TtsBackend = 'local' | 'qwen'
 
 export interface VoiceSettings {
+  /**
+   * Master switch. Off means wake, voice input, and TTS do not run, whatever the three
+   * column switches say. The column switches keep their values so turning voice back on
+   * restores the user's combination.
+   */
+  voiceEnabled: boolean
   wakeEnabled: boolean
   /** One phrase per entry. Empty means there is no wake word. */
   wakeWords: string[]
@@ -55,6 +61,8 @@ export interface VoiceSettings {
 }
 
 export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
+  // A profile that has never saved voice settings starts with the whole feature off.
+  voiceEnabled: false,
   wakeEnabled: true,
   wakeWords: ['你好大肥鱼'],
   wakeThreshold: 0.25,
@@ -99,11 +107,17 @@ export function ttsReady(
   return settings.ttsBackend === 'qwen' ? settings.qwenApiKey.trim() !== '' : localTtsPresent
 }
 
+/** A voice file written before the master switch existed belongs to someone who configured voice. */
+export interface ParseVoiceOptions {
+  readonly legacyMaster?: boolean
+}
+
 /** Replace anything unreadable or out of range. Missing fields keep the factory value. */
-export function parseVoiceSettings(value: unknown): VoiceSettings {
+export function parseVoiceSettings(value: unknown, options: ParseVoiceOptions = {}): VoiceSettings {
   const item = record(value)
   if (item === undefined) return clone(DEFAULT_VOICE_SETTINGS)
   return {
+    voiceEnabled: flag(item.voiceEnabled, options.legacyMaster === true),
     wakeEnabled: flag(item.wakeEnabled, DEFAULT_VOICE_SETTINGS.wakeEnabled),
     wakeWords: phrases(item.wakeWords, DEFAULT_VOICE_SETTINGS.wakeWords),
     wakeThreshold: numberIn(item.wakeThreshold, 0.05, 0.9, DEFAULT_VOICE_SETTINGS.wakeThreshold, 2),

@@ -302,6 +302,7 @@ describe('settings routes', () => {
 
     const voice = response()
     await handler(request('POST', '/.dsh-orb/voice', JSON.stringify({
+      voiceEnabled: true,
       wakeEnabled: false,
       idleMs: 45_000,
       wakeReply: '在',
@@ -315,10 +316,11 @@ describe('settings routes', () => {
       ttsVolume: 1.37,
     }), { 'x-dsh-user': 'ok' }), voice)
     const voiceBody = JSON.parse(voice.body.toString('utf8')) as {
-      voice: { wakeEnabled: boolean, idleMs: number, wakeReply: string, questionPrompt: string, ttsBackend: string, qwenApiKey: string, qwenVoice: string, qwenSpeed: number, ttsVolume: number }
+      voice: { voiceEnabled: boolean, wakeEnabled: boolean, idleMs: number, wakeReply: string, questionPrompt: string, ttsBackend: string, qwenApiKey: string, qwenVoice: string, qwenSpeed: number, ttsVolume: number }
       qwenVoices: { voice: string, label: string, group: string }[]
     }
     assert.equal(voice.status, 200)
+    assert.equal(voiceBody.voice.voiceEnabled, true)
     assert.equal(voiceBody.voice.wakeEnabled, false)
     assert.equal(voiceBody.voice.idleMs, 45_000)
     assert.equal(voiceBody.voice.wakeReply, '在')
@@ -339,6 +341,7 @@ describe('settings routes', () => {
     assert.equal(savedSnapshot.voice.interjectKeyword, '小肥鱼')
     assert.equal(savedSnapshot.voice.qwenApiKey, 'sk-test')
     const reloaded = new ProfileStore(profile)
+    assert.equal(reloaded.voice().voiceEnabled, true)
     assert.equal(reloaded.voice().wakeEnabled, false)
     assert.equal(reloaded.voice().idleMs, 45_000)
     assert.deepEqual(reloaded.voice().dismissPhrases, ['退下吧'])

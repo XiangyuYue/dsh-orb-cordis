@@ -276,10 +276,12 @@ describe('profile preferences', () => {
   it('keeps voice settings across a new store and falls back when the file is bad', () => {
     const path = dir('voice')
     const store = new ProfileStore(path)
+    assert.equal(store.voice().voiceEnabled, false, 'a profile without a voice file starts with voice off')
     assert.equal(store.voice().wakeEnabled, true)
     assert.equal(store.voice().idleMs, 30_000)
     assert.deepEqual(store.voice().wakeWords, ['你好大肥鱼'])
     store.setVoice({
+      voiceEnabled: true,
       wakeEnabled: false,
       commandEnabled: false,
       ttsEnabled: true,
@@ -291,6 +293,7 @@ describe('profile preferences', () => {
       ttsVolume: 0.55,
     })
     const again = new ProfileStore(path)
+    assert.equal(again.voice().voiceEnabled, true)
     assert.equal(again.voice().wakeEnabled, false)
     assert.equal(again.voice().commandEnabled, false)
     assert.equal(again.voice().ttsEnabled, true)
@@ -302,7 +305,32 @@ describe('profile preferences', () => {
     assert.equal(again.voice().ttsVolume, 0.55)
     assert.deepEqual(again.voice().wakeWords, ['你好大肥鱼'])
     writeFileSync(join(path, 'orb-voice.json'), '{')
+    assert.equal(new ProfileStore(path).voice().voiceEnabled, false)
     assert.equal(new ProfileStore(path).voice().wakeEnabled, true)
     assert.equal(new ProfileStore(path).voice().idleMs, 30_000)
+  })
+
+  it('keeps the old effective state for a voice file written before the master switch', () => {
+    const path = dir('legacy-voice')
+    writeFileSync(join(path, 'orb-voice.json'), JSON.stringify({
+      wakeEnabled: true,
+      commandEnabled: false,
+      ttsEnabled: false,
+      idleMs: 45_000,
+    }))
+    const store = new ProfileStore(path)
+    assert.equal(store.voice().voiceEnabled, true, 'a column was on, so voice comes back on')
+    assert.equal(store.voice().wakeEnabled, true)
+    assert.equal(store.voice().commandEnabled, false)
+    assert.equal(store.voice().ttsEnabled, false)
+    assert.equal(store.voice().idleMs, 45_000)
+
+    const quiet = dir('legacy-voice-off')
+    writeFileSync(join(quiet, 'orb-voice.json'), JSON.stringify({
+      wakeEnabled: false,
+      commandEnabled: false,
+      ttsEnabled: false,
+    }))
+    assert.equal(new ProfileStore(quiet).voice().voiceEnabled, false, 'all three columns were off, so the master starts off')
   })
 })

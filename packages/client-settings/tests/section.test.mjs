@@ -42,6 +42,7 @@ function loadSection(hooks = {}) {
     selectionEnabled: false,
     millifractionEnabled: false,
     observationFrameEnabled: true,
+    voice: { voiceEnabled: true },
     tcc: { applicable: true, appName: 'DeepSeek Harness', screen: 'missing', accessibility: 'granted' },
     workspace: {
       path: '/Users/test/.dsh/dsh_orb',
@@ -1042,6 +1043,75 @@ describe('settings section', () => {
       .map((node) => find(node, (child) => child.type === 'h3')[0]?.children?.[0])
     assert.deepEqual(titles.slice(0, 5), ['启用悬浮球', '悬浮球头像', '悬浮球 Agent', '后台 Agent', '语音'])
     assert.equal(titles[5], '千分比坐标', 'coordinate and frame cards stay below the voice panel')
+    assert.equal(titles[7], '空闲后取消固定', 'idle unpin lives outside the voice card')
+  })
+
+  it('starts with voice collapsed and expands it from the master switch', async () => {
+    const page = loadSection()
+    delete page.snapshot.voice
+    page.snapshot.voiceModels = readyVoiceModels()
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    const master = find(view, (node) => node.props?.['aria-label'] === '启用语音')[0]
+    assert.ok(master)
+    assert.equal(master.props['aria-checked'], 'false', 'a fresh profile starts with voice off')
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '语音唤醒').length, 0)
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '灵敏度').length, 0)
+    assert.equal(find(view, (node) => node.children?.includes('打开总开关后，可以设置唤醒、语音输入和播报。')).length, 1)
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '空闲时长（秒）').length, 1, 'idle stays available while voice is off')
+
+    master.props.onClick()
+    await settle()
+    view = page.render()
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '启用语音')[0].props['aria-checked'], 'true')
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '语音唤醒')[0].props['aria-checked'], 'true', 'the stored column mix comes back')
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '灵敏度').length, 1)
+    const saved = JSON.parse(page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1).options.body)
+    assert.equal(saved.voiceEnabled, true)
+    assert.equal(saved.wakeEnabled, true)
+    assert.equal(saved.commandEnabled, true)
+    assert.equal(saved.ttsEnabled, true)
+  })
+
+  it('collapses the voice form when the master switch goes off and keeps the column choices', async () => {
+    const page = loadSection()
+    page.snapshot.voiceModels = readyVoiceModels()
+    page.snapshot.voice = { ...page.snapshot.voice, wakeEnabled: true, commandEnabled: false, ttsEnabled: true }
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    find(view, (node) => node.props?.['aria-label'] === '启用语音')[0].props.onClick()
+    await settle()
+    view = page.render()
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '启用语音')[0].props['aria-checked'], 'false')
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '语音唤醒').length, 0)
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '语音输入').length, 0)
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === 'TTS' && node.props.role === 'switch').length, 0)
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '空闲时长（秒）').length, 1)
+    const saved = JSON.parse(page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1).options.body)
+    assert.equal(saved.voiceEnabled, false)
+    assert.equal(saved.wakeEnabled, true, 'the column choices are kept')
+    assert.equal(saved.commandEnabled, false, 'the column choices are kept')
+    assert.equal(saved.ttsEnabled, true, 'the column choices are kept')
+  })
+
+  it('keeps the old effective state when the master field is missing', async () => {
+    const page = loadSection()
+    page.snapshot.voice = { wakeEnabled: true, commandEnabled: false, ttsEnabled: false }
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '启用语音')[0].props['aria-checked'], 'true')
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '语音唤醒')[0].props['aria-checked'], 'true')
+
+    page.snapshot.voice = { wakeEnabled: false, commandEnabled: false, ttsEnabled: false }
+    page.reset()
+    view = page.render()
+    await page.flush()
+    view = page.render()
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '启用语音')[0].props['aria-checked'], 'false')
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '语音唤醒').length, 0)
   })
 
   it('uses sliders for every bounded voice value and writes once when one is released', async () => {

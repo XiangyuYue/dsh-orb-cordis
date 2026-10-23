@@ -135,6 +135,22 @@ export class VoiceController {
   }
 
   /**
+   * The master switch gates the three columns without rewriting them. The stored column
+   * switches keep their values, so turning voice back on restores the user's combination.
+   * Reads that do not drive voice behavior (the idle clock) still get the raw values.
+   */
+  private settings(): VoiceSettings {
+    const settings = this.options.settings()
+    if (settings.voiceEnabled !== false) return settings
+    return {
+      ...settings,
+      wakeEnabled: false,
+      commandEnabled: false,
+      ttsEnabled: false,
+    }
+  }
+
+  /**
    * Start the child. A second call while it is up does nothing.
    *
    * `initial` is the state of the ball when this lifecycle starts. The helper is freshly
@@ -183,7 +199,7 @@ export class VoiceController {
 
   /** Whether wake or voice input can actually run; TTS does not use the microphone. */
   private listeningEnabled(): boolean {
-    const settings = this.options.settings()
+    const settings = this.settings()
     const presence = this.options.presence()
     return needsMicrophone({
       wakeEnabled: settings.wakeEnabled,
@@ -330,7 +346,7 @@ export class VoiceController {
       this.pushListen(false)
       return
     }
-    this.apply({ type: 'question', text: this.options.settings().questionPrompt })
+    this.apply({ type: 'question', text: this.settings().questionPrompt })
     this.poll()
   }
 
@@ -451,7 +467,7 @@ export class VoiceController {
     if (this.mode !== 'wake') return
     this.pinned = true
     this.options.send({ type: 'pin' })
-    const reply = this.localReply(this.options.settings().wakeReply)
+    const reply = this.localReply(this.settings().wakeReply)
     // The reply is about to play in the same room; do not hand its tail to the recognizer.
     this.commandSeed = reply ? 0 : 300
     if (reply) this.apply({ type: 'local', text: reply })
@@ -464,7 +480,7 @@ export class VoiceController {
     this.speechOpen = false
     if (mode !== 'command' && mode !== 'interject') return this.poll()
     if (!this.canFinish(mode)) return this.poll()
-    const settings = this.options.settings()
+    const settings = this.settings()
     if (mode === 'command') {
       const spoken = stripWakePrefix(text, settings.wakeWords)
       if (!spoken) return this.poll()
@@ -487,12 +503,12 @@ export class VoiceController {
   }
 
   private commandEnabled(): boolean {
-    const settings = this.options.settings()
+    const settings = this.settings()
     return settings.commandEnabled && this.options.presence().asr
   }
 
   private interjectEnabled(): boolean {
-    return this.commandEnabled() && normalizeUtterance(this.options.settings().interjectKeyword) !== ''
+    return this.commandEnabled() && normalizeUtterance(this.settings().interjectKeyword) !== ''
   }
 
   private dismiss(): void {
@@ -503,7 +519,7 @@ export class VoiceController {
       this.options.stopTurn?.()
     }
     this.apply({ type: 'stop' })
-    const reply = this.localReply(this.options.settings().dismissReply)
+    const reply = this.localReply(this.settings().dismissReply)
     if (reply) this.apply({ type: 'local', text: reply })
     this.requestUnpin()
     this.poll()
@@ -671,13 +687,13 @@ export class VoiceController {
   private pushConfigure(): void {
     this.link?.send({
       type: 'configure',
-      settings: this.options.settings(),
+      settings: this.settings(),
       paths: this.options.paths?.(),
     })
   }
 
   private pushListen(force: boolean): void {
-    const settings = this.options.settings()
+    const settings = this.settings()
     const presence = this.options.presence()
     const mode = listenMode({
       pinned: this.pinned,
@@ -730,7 +746,7 @@ export class VoiceController {
   private ttsOn(): boolean {
     // The selected backend decides readiness: Qwen only needs its key, local needs
     // the downloaded files. An unready backend behaves exactly like the TTS switch off.
-    return ttsReady(this.options.settings(), this.options.presence().tts)
+    return ttsReady(this.settings(), this.options.presence().tts)
   }
 
   private sample() {
@@ -741,7 +757,7 @@ export class VoiceController {
       questionOpen: this.questionOpen,
       playbackBusy: queueView(this.queue).playbackBusy,
       speechOpen: this.speechOpen,
-      idleMs: this.options.settings().idleMs,
+      idleMs: this.settings().idleMs,
     }
   }
 }
