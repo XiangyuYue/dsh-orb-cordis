@@ -1031,6 +1031,36 @@ describe('settings section', () => {
     assert.equal(fieldset().props.disabled, false, 'the dropped answer must still release the fields')
   })
 
+  it('uses sliders for every bounded voice value and writes once when one is released', async () => {
+    const page = loadSection()
+    page.snapshot.voiceModels = readyVoiceModels()
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    const ranges = find(view, (node) => node.type === 'input' && node.props?.type === 'range')
+    for (const label of ['灵敏度', '增强分', '冷却（秒）', '音量', '语速', '空闲时长（秒）']) {
+      assert.equal(ranges.some((node) => node.props['aria-label'] === label), true, `${label} is a slider`)
+    }
+    assert.equal(find(view, (node) => node.type === 'input' && node.props?.type === 'number').length, 0, 'no bounded value asks for a typed number')
+    const chunk = find(view, (node) => node.props?.role === 'radiogroup' && node.props?.['aria-label'] === '判定粒度')[0]
+    assert.ok(chunk, 'the two fixed chunk sizes are buttons, not a slider')
+
+    const threshold = ranges.find((node) => node.props['aria-label'] === '灵敏度')
+    threshold.props.onChange({ target: { value: '0.35' } })
+    view = page.render()
+    const dragged = find(view, (node) => node.props?.['aria-label'] === '灵敏度')[0]
+    assert.equal(dragged.props.value, '0.35')
+    assert.equal(dragged.props['aria-valuetext'], '0.35')
+    dragged.props.onPointerUp({ target: { value: '0.35' } })
+    await settle()
+    const saved = JSON.parse(page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1).options.body)
+    assert.equal(saved.wakeThreshold, 0.35)
+    const before = page.calls.length
+    dragged.props.onBlur({ target: { value: '0.35' } })
+    await settle()
+    assert.equal(page.calls.length, before, 'the release already wrote the value; blur must not write it again')
+  })
+
   it('saves voice settings when the models are present, and hides the ASR button', async () => {
     const page = loadSection()
     page.snapshot.voiceModels = readyVoiceModels()
@@ -1225,7 +1255,7 @@ describe('settings section', () => {
     view = page.render()
     await page.flush()
     view = page.render()
-    const again = find(view, (node) => node.type === 'button' && node.children?.includes('下载语音唤醒模型'))[0]
+    const again = find(view, (node) => node.type === 'button' && node.children?.includes('重新下载'))[0]
     assert.match(again.props.className, /dsh-orb-set-ghost/)
     again.props.onClick()
     await settle()
@@ -1239,14 +1269,15 @@ describe('settings section', () => {
     let view = page.render()
     await page.flush()
     view = page.render()
-    const backend = find(view, (node) => node.type === 'select' && node.props?.['aria-label'] === '播报方式')[0]
+    const backend = find(view, (node) => node.props?.role === 'radiogroup' && node.props?.['aria-label'] === '播报方式')[0]
     assert.ok(backend)
-    assert.equal(backend.props.value, 'local')
+    const localOption = find(backend, (node) => node.props?.role === 'radio' && node.children?.includes('本地模型'))[0]
+    assert.equal(localOption.props['aria-checked'], 'true')
     assert.equal(find(view, (node) => node.props?.['aria-label'] === 'API Key').length, 0)
     assert.equal(find(view, (node) => node.props?.['aria-label'] === '语速').length, 1)
     assert.equal(find(view, (node) => node.props?.['aria-label'] === '音量').length, 1)
 
-    backend.props.onChange({ target: { value: 'qwen' } })
+    find(backend, (node) => node.props?.role === 'radio' && node.children?.includes('千问'))[0].props.onClick()
     await settle()
     const firstSave = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
     assert.equal(JSON.parse(firstSave.options.body).ttsBackend, 'qwen')
@@ -1287,7 +1318,12 @@ describe('settings section', () => {
     find(view, (node) => node.type === 'input' && node.props?.['aria-label'] === '音量')[0].props.onBlur({ target: { value: '150' } })
     await settle()
     assert.equal(JSON.parse(page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1).options.body).ttsVolume, 1.5)
-    assert.equal(find(view, (node) => node.type === 'button' && node.children?.includes('下载 TTS 语音播报模型')).length, 1)
+    const ttsPanel = find(view, (node) => String(node.props?.className).includes('dsh-orb-set-voice-panel')
+      && find(node, (child) => child.type === 'h4' && child.children?.includes('TTS')).length === 1)[0]
+    assert.ok(ttsPanel)
+    const ttsRedownload = find(ttsPanel, (node) => node.type === 'button' && node.children?.includes('重新下载'))[0]
+    assert.ok(ttsRedownload, 'the ready local model offers a re-download')
+    assert.match(ttsRedownload.props.className, /dsh-orb-set-ghost/)
   })
 
   it('unlocks speech controls for qwen even without the local model', async () => {

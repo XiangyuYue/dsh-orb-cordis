@@ -143,20 +143,28 @@ window.__ModuleLoader__.load({
       voiceIntro: '唤醒、语音输入和播报可以单独关掉。模型还没准备好时，对应的一项不会发生。',
       voiceMicBody: '没有拿到麦克风，唤醒和语音输入都不会发生。球的其他功能照常。',
       voiceMicOpen: '打开「麦克风」设置',
+      voiceOn: '已开启',
+      voiceOff: '已关闭',
       wakeTitle: '语音唤醒',
       wakeToggle: '语音唤醒',
+      wakeDesc: '说一句唤醒词，悬浮球就会醒过来。',
       wakeThreshold: '灵敏度',
+      wakeThresholdHint: '越低越容易被唤醒；环境吵时调高，可以减少误触发。',
       wakeScore: '增强分',
+      wakeScoreHint: '给唤醒词加权的程度，环境吵时可适当调高。',
       wakeChunk: '判定粒度',
       wakeChunk8: '160 毫秒',
       wakeChunk16: '320 毫秒',
+      wakeChunkHint: '每次判定的音频长度，越长越省电，反应稍慢。',
       wakeCooldown: '冷却（秒）',
+      wakeCooldownHint: '一次唤醒后，这段时间内不再响应新的唤醒词。',
       wakeWords: '唤醒词',
-      wakeWordsHint: '一行一条',
+      wakeWordsHint: '一行一条，留空表示不启用唤醒。',
       wakeReply: '唤醒后的回复语',
       downloadWake: '下载语音唤醒模型',
       commandTitle: '语音输入',
       commandToggle: '语音输入',
+      commandDesc: '把说的话识别成文字交给悬浮球，也可以中途插话或让它退下。',
       interjectKeyword: '插话关键词',
       interjectHint: '按拼音匹配，同音字自动生效，不需要另填别名。',
       dismissPhrases: '退下口令',
@@ -165,6 +173,7 @@ window.__ModuleLoader__.load({
       downloadAsr: '启动 ASR 语音模型',
       ttsTitle: 'TTS',
       ttsToggle: 'TTS',
+      ttsDesc: '回复时用语音念出来，可选本地模型或千问。',
       ttsBackend: '播报方式',
       ttsBackendLocal: '本地模型',
       ttsBackendQwen: '千问',
@@ -174,13 +183,27 @@ window.__ModuleLoader__.load({
       qwenVoiceStandard: '普通话与多语种',
       qwenVoiceDialect: '方言',
       qwenSpeed: '语速',
+      qwenSpeedHint: '0.5 最慢，2.0 最快。',
       questionPrompt: '提问提示语',
+      questionPromptHint: '打开提问卡片时念这句话，留空则不播报。',
       ttsSpeed: '语速',
+      ttsSpeedHint: '1.0 为原速，数值越大语速越快。',
       ttsVolume: '音量',
       ttsVolumeHint: '100% 为模型原始音量，最高可放大到 200%。',
       downloadTts: '下载 TTS 语音播报模型',
       idleTitle: '空闲后取消固定',
+      idleDesc: '悬浮球被固定后，闲置一段时间会自动取消固定。',
       idleSeconds: '空闲时长（秒）',
+      idleHint: '从最后一次操作悬浮球开始计算。',
+      voiceWakeModel: '唤醒模型',
+      voiceAsrModel: '识别模型',
+      voiceTtsModel: '播报模型',
+      voiceTtsLocalModel: '本地播报模型',
+      voiceModelReady: '已就绪',
+      voiceModelMissing: '未下载 · {size}',
+      voiceModelDownloading: '正在下载…',
+      voiceModelOptional: '千问播报不需要这个模型',
+      voiceRedownload: '重新下载',
       modelMissingWake: '要下载语音唤醒模型。',
       modelMissingTts: '要下载 TTS 模型。',
       modelMissingAsr: '要启动 ASR 语音模型。',
@@ -330,20 +353,28 @@ window.__ModuleLoader__.load({
       voiceIntro: 'Wake word, voice input, and speech can each be turned off. A column whose model is not ready does not run.',
       voiceMicBody: 'The microphone is not available, so wake word and voice input do not run. The rest of the ball still works.',
       voiceMicOpen: 'Open Microphone settings',
+      voiceOn: 'On',
+      voiceOff: 'Off',
       wakeTitle: 'Wake word',
       wakeToggle: 'Wake word',
+      wakeDesc: 'Say a wake word and the floating ball wakes up.',
       wakeThreshold: 'Sensitivity',
+      wakeThresholdHint: 'Lower wakes more easily. Raise it in noisy rooms to cut false wakes.',
       wakeScore: 'Boost',
+      wakeScoreHint: 'How strongly a wake word is boosted. Raise it in noisy rooms.',
       wakeChunk: 'Chunk',
       wakeChunk8: '160 ms',
       wakeChunk16: '320 ms',
+      wakeChunkHint: 'Audio window per decision. Longer saves power and reacts a little slower.',
       wakeCooldown: 'Cooldown (seconds)',
+      wakeCooldownHint: 'After one wake, new wake words are ignored for this long.',
       wakeWords: 'Wake words',
-      wakeWordsHint: 'One per line',
+      wakeWordsHint: 'One per line. Empty means no wake word.',
       wakeReply: 'Reply after wake',
       downloadWake: 'Download wake-word model',
       commandTitle: 'Voice input',
       commandToggle: 'Voice input',
+      commandDesc: 'Speech becomes text for the ball; you can also interject or dismiss it.',
       interjectKeyword: 'Interjection keyword',
       interjectHint: 'Matched by pinyin; homophones work automatically, no aliases needed.',
       dismissPhrases: 'Dismiss phrases',
@@ -352,6 +383,7 @@ window.__ModuleLoader__.load({
       downloadAsr: 'Start ASR speech model',
       ttsTitle: 'TTS',
       ttsToggle: 'TTS',
+      ttsDesc: 'Read replies aloud with the local model or Qwen.',
       ttsBackend: 'Speech backend',
       ttsBackendLocal: 'Local model',
       ttsBackendQwen: 'Qwen',
@@ -361,13 +393,27 @@ window.__ModuleLoader__.load({
       qwenVoiceStandard: 'Mandarin and multilingual',
       qwenVoiceDialect: 'Dialects',
       qwenSpeed: 'Speed',
+      qwenSpeedHint: '0.5 is slowest, 2.0 is fastest.',
       questionPrompt: 'Question prompt',
+      questionPromptHint: 'Spoken when the question card opens. Empty means silence.',
       ttsSpeed: 'Speed',
+      ttsSpeedHint: '1.0 is normal speed; higher speaks faster.',
       ttsVolume: 'Volume',
       ttsVolumeHint: '100% is the model\'s own level; up to 200% boosts it.',
       downloadTts: 'Download TTS speech model',
       idleTitle: 'Unpin after idle',
+      idleDesc: 'While pinned, the ball unpins itself after this much idle time.',
       idleSeconds: 'Idle time (seconds)',
+      idleHint: 'Counted from the last interaction with the ball.',
+      voiceWakeModel: 'Wake model',
+      voiceAsrModel: 'Recognition model',
+      voiceTtsModel: 'Speech model',
+      voiceTtsLocalModel: 'Local speech model',
+      voiceModelReady: 'Ready',
+      voiceModelMissing: 'Not downloaded · {size}',
+      voiceModelDownloading: 'Downloading…',
+      voiceModelOptional: 'Qwen does not need this model',
+      voiceRedownload: 'Download again',
       modelMissingWake: 'Download the wake-word model.',
       modelMissingTts: 'Download the TTS model.',
       modelMissingAsr: 'Start the ASR speech model.',
@@ -1416,14 +1462,76 @@ window.__ModuleLoader__.load({
       return String(value).split(/\n/).map((line) => line.trim()).filter(Boolean)
     }
 
+    /** Inline line icons for the voice panels: they inherit the surrounding colour and size. */
+    function voiceIcon(name) {
+      const paths = {
+        voice: [
+          'M12 3.5a2.7 2.7 0 0 1 2.7 2.7v5.3a2.7 2.7 0 0 1-5.4 0V6.2A2.7 2.7 0 0 1 12 3.5Z',
+          'M6.5 11.1v.5a5.5 5.5 0 0 0 11 0v-.5',
+          'M12 17.4v3.1',
+          'M9.5 20.5h5',
+        ],
+        wake: [
+          'M12 3.6a2.6 2.6 0 0 1 2.6 2.6v4.9a2.6 2.6 0 0 1-5.2 0V6.2A2.6 2.6 0 0 1 12 3.6Z',
+          'M7 10.9v.5a5 5 0 0 0 10 0v-.5',
+          'M12 16.4v2.1',
+          'M9.9 19.7h4.2',
+          'M19.2 4.2a8.7 8.7 0 0 1 0 9.3',
+          'M21.4 2.4a11.6 11.6 0 0 1 0 12.9',
+        ],
+        command: [
+          'M4.5 10.5v3',
+          'M8.3 7.5v9',
+          'M12 4.8v14.4',
+          'M15.7 8.2v7.6',
+          'M19.5 10.5v3',
+        ],
+        tts: [
+          'M4 9.4h3.3L12 5.6v12.8L7.3 14.6H4Z',
+          'M15.7 9.1a4.1 4.1 0 0 1 0 5.8',
+          'M18.3 6.5a7.8 7.8 0 0 1 0 11',
+        ],
+        idle: [
+          'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z',
+          'M12 7.2v5l3.2 1.9',
+        ],
+        micOff: [
+          'M4 4l16 16',
+          'M9.4 5.1A2.6 2.6 0 0 1 14.6 7v3.7',
+          'M17 9.4v2a5 5 0 0 1-1.3 3.4',
+          'M7 10.9v.5a5 5 0 0 0 7.4 4.5',
+          'M12 16.4v2.1',
+          'M9.9 19.7h4.2',
+        ],
+      }
+      const lines = paths[name] || paths.voice
+      return h('svg', {
+        viewBox: '0 0 24 24',
+        width: 20,
+        height: 20,
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.6,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': 'true',
+        focusable: 'false',
+      }, lines.map((d, index) => h('path', { key: index, d })))
+    }
+
     /**
      * Voice group on the floating-ball page. A missing model looks unavailable, but the
      * control still takes a click and explains which model to prepare. Native `disabled`
      * would swallow that click.
+     *
+     * The three columns are cards of their own: an icon and a switch in the header, the
+     * adjustable values below. Every bounded value is a slider, so nobody has to type a
+     * number whose unit and range they only learn from an error message.
      */
     function VoiceCard({ text, snap, disabled, mutate }) {
       const [dialog, setDialog] = React.useState(null)
       const draftRef = React.useRef({})
+      const settledRef = React.useRef({})
       const [, bump] = React.useState(0)
       const voice = normalizeVoice(snap.voice)
       const models = {
@@ -1493,15 +1601,105 @@ window.__ModuleLoader__.load({
         }
       }
 
-      function textRow(label, key, missing, wide) {
-        const value = shown(key)
-        return h('label', { className: 'dsh-orb-set-voice-row' },
-          h('span', null, label),
+      /** Small values read better with their unit attached: 10 分钟, not 600. */
+      function secondsLabel(value) {
+        const total = Math.round(value)
+        if (total < 60) return `${total} 秒`
+        const minutes = Math.floor(total / 60)
+        const rest = total % 60
+        return rest === 0 ? `${minutes} 分钟` : `${minutes} 分 ${rest} 秒`
+      }
+
+      function fieldHead(label, valueText) {
+        return h('span', { className: 'dsh-orb-set-voice-field-head' },
+          h('span', { className: 'dsh-orb-set-voice-field-label' }, label),
+          valueText === null ? null : h('span', { className: 'dsh-orb-set-voice-field-value' }, valueText))
+      }
+
+      /**
+       * A stored value shown as a slider. `factor` converts display units to what the host
+       * stores: 1000 for milliseconds, 0.01 for the volume fraction, 1 for the rest. A drag
+       * previews live; release, arrow keys, and blur all write once.
+       */
+      function rangeField(label, key, missing, spec, wide) {
+        const stepText = String(spec.step)
+        const dot = stepText.indexOf('.')
+        const stepDecimals = dot === -1 ? 0 : stepText.length - dot - 1
+        const factor = spec.factor ?? 1
+        const raw = Number(shown(key))
+        const stored = Number.isFinite(raw) ? raw : (spec.fallback ?? spec.min * factor)
+        let display = stored / factor
+        if (!Number.isFinite(display)) display = spec.min
+        display = Math.min(spec.max, Math.max(spec.min, Number(display.toFixed(stepDecimals))))
+        const percent = spec.max === spec.min ? 0 : ((display - spec.min) / (spec.max - spec.min)) * 100
+        const shownValue = spec.format(display)
+        const storedFrom = (next) => {
+          const stepped = Math.round((next - spec.min) / spec.step) * spec.step + spec.min
+          return Number((stepped * factor).toFixed(spec.decimals ?? 2))
+        }
+        const commit = (event) => {
+          if (missing.length) return
+          let next = display
+          if (event && event.target && event.target.value !== undefined && event.target.value !== '') {
+            const parsed = Number(event.target.value)
+            if (Number.isFinite(parsed)) next = parsed
+          }
+          next = Math.min(spec.max, Math.max(spec.min, next))
+          const nextStored = storedFrom(next)
+          // A release already saved this value; the blur that follows it must not save twice.
+          if (settledRef.current[key] === nextStored) return
+          settledRef.current[key] = nextStored
+          remember(key, nextStored)
+          save({})
+        }
+        return h('label', { className: `dsh-orb-set-voice-field${wide ? ' is-wide' : ''}` },
+          fieldHead(label, shownValue),
           h('input', {
-            className: `dsh-orb-set-input dsh-orb-set-input-wide${missing.length ? ' is-locked' : ''}`,
+            type: 'range',
+            className: `dsh-orb-set-voice-field-range${missing.length ? ' is-locked' : ''}`,
+            'aria-label': label,
+            'aria-valuetext': shownValue,
+            'aria-disabled': missing.length ? 'true' : 'false',
+            min: spec.min,
+            max: spec.max,
+            step: spec.step,
+            value: String(display),
+            style: { '--dsh-orb-voice-fill': `${Math.max(0, Math.min(100, percent))}%` },
+            onChange: (event) => {
+              if (missing.length) return
+              const next = Number(event.target.value)
+              if (!Number.isFinite(next)) return
+              delete settledRef.current[key]
+              remember(key, storedFrom(next))
+            },
+            onPointerUp: commit,
+            onKeyUp: (event) => {
+              if (!event) return
+              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home'
+                || event.key === 'End' || event.key === 'PageUp' || event.key === 'PageDown') commit(event)
+            },
+            onBlur: commit,
+            ...lockedProps(missing),
+          }),
+          h('span', { className: 'dsh-orb-set-voice-field-scale' },
+            h('span', null, spec.format(spec.min)),
+            h('span', null, spec.format(spec.max))),
+          spec.hint ? h('span', { className: 'dsh-orb-set-voice-field-hint' }, spec.hint) : null)
+      }
+
+      function textInput(label, key, missing, hint, options) {
+        const value = shown(key)
+        const secret = options && options.secret === true
+        return h('label', { className: 'dsh-orb-set-voice-field is-wide' },
+          h('span', { className: 'dsh-orb-set-voice-field-label' }, label),
+          h('input', {
+            className: `dsh-orb-set-voice-input${missing.length ? ' is-locked' : ''}`,
+            type: secret ? 'password' : 'text',
+            autoComplete: 'off',
+            spellCheck: false,
             'aria-label': label,
             'aria-disabled': missing.length ? 'true' : 'false',
-            value: Array.isArray(value) ? value.join('\n') : String(value ?? ''),
+            value: String(value ?? ''),
             onChange: (event) => {
               if (missing.length) return
               remember(key, event.target.value)
@@ -1512,19 +1710,20 @@ window.__ModuleLoader__.load({
               save({})
             },
             ...lockedProps(missing),
-            ...(wide ? {} : {}),
-          }))
+          }),
+          hint ? h('span', { className: 'dsh-orb-set-voice-field-hint' }, hint) : null)
       }
 
-      function linesRow(label, key, missing) {
-        return h('label', { className: 'dsh-orb-set-voice-row' },
-          h('span', null, label),
+      function linesInput(label, key, missing, hint) {
+        const value = shown(key)
+        return h('label', { className: 'dsh-orb-set-voice-field is-wide' },
+          h('span', { className: 'dsh-orb-set-voice-field-label' }, label),
           h('textarea', {
-            className: `dsh-orb-set-input dsh-orb-set-input-wide${missing.length ? ' is-locked' : ''}`,
+            className: `dsh-orb-set-voice-input dsh-orb-set-voice-textarea${missing.length ? ' is-locked' : ''}`,
             'aria-label': label,
             'aria-disabled': missing.length ? 'true' : 'false',
             rows: 2,
-            value: Array.isArray(shown(key)) ? shown(key).join('\n') : String(shown(key) ?? ''),
+            value: Array.isArray(value) ? value.join('\n') : String(value ?? ''),
             onChange: (event) => {
               if (missing.length) return
               remember(key, event.target.value)
@@ -1535,102 +1734,44 @@ window.__ModuleLoader__.load({
               save({})
             },
             ...lockedProps(missing),
-          }))
-      }
-
-      function numberRow(label, key, missing, spec) {
-        const raw = Number(shown(key))
-        const display = spec.scale ? (Number.isFinite(raw) ? raw / spec.scale : '') : raw
-        return h('label', { className: 'dsh-orb-set-voice-row' },
-          h('span', null, label),
-          h('input', {
-            className: `dsh-orb-set-input${missing.length ? ' is-locked' : ''}`,
-            type: 'number',
-            'aria-label': label,
-            'aria-disabled': missing.length ? 'true' : 'false',
-            min: spec.min,
-            max: spec.max,
-            step: spec.step,
-            value: String(display),
-            onChange: (event) => {
-              if (missing.length) return
-              const next = Number(event.target.value)
-              if (!Number.isFinite(next)) return
-              remember(key, spec.scale ? Math.round(next * spec.scale) : next)
-            },
-            onBlur: (event) => {
-              if (missing.length) return
-              const next = Number(event.target.value)
-              if (!Number.isFinite(next)) return
-              remember(key, spec.scale ? Math.round(next * spec.scale) : next)
-              save({})
-            },
-            ...lockedProps(missing),
-          }))
-      }
-
-      /** A slider whose stored value is a fraction and whose visible unit is a whole percent. */
-      function percentRow(label, key, missing, spec) {
-        const raw = Number(shown(key))
-        const percent = Math.round((Number.isFinite(raw) ? raw : (spec.fallback ?? 1)) * spec.scale)
-        const commit = (event) => {
-          if (missing.length) return
-          const next = Number(event.target.value)
-          if (!Number.isFinite(next)) return
-          remember(key, Math.round(next) / spec.scale)
-          save({})
-        }
-        return h('label', { className: 'dsh-orb-set-voice-row' },
-          h('span', null, label),
-          h('input', {
-            className: `dsh-orb-set-range${missing.length ? ' is-locked' : ''}`,
-            type: 'range',
-            'aria-label': label,
-            'aria-valuetext': `${percent}%`,
-            'aria-disabled': missing.length ? 'true' : 'false',
-            min: spec.min,
-            max: spec.max,
-            step: spec.step,
-            value: String(percent),
-            onChange: (event) => {
-              if (missing.length) return
-              const next = Number(event.target.value)
-              if (!Number.isFinite(next)) return
-              remember(key, Math.round(next) / spec.scale)
-            },
-            // Like the other fields, a drag previews live and the setting is written on blur.
-            onBlur: commit,
-            ...lockedProps(missing),
           }),
-          h('span', { className: 'dsh-orb-set-muted dsh-orb-set-range-value' }, `${percent}%`))
+          hint ? h('span', { className: 'dsh-orb-set-voice-field-hint' }, hint) : null)
       }
 
-      function secretRow(label, key, missing) {
-        return h('label', { className: 'dsh-orb-set-voice-row' },
-          h('span', null, label),
-          h('input', {
-            className: `dsh-orb-set-input dsh-orb-set-input-wide${missing.length ? ' is-locked' : ''}`,
-            type: 'password',
-            autoComplete: 'off',
-            spellCheck: false,
+      /** Two or three fixed choices read as buttons, not as another form control to decipher. */
+      function segmentedField(label, options, current, missing, pick, hint, wide) {
+        return h('div', { className: `dsh-orb-set-voice-field${wide ? ' is-wide' : ''}` },
+          h('span', { className: 'dsh-orb-set-voice-field-label' }, label),
+          h('div', {
+            className: 'dsh-orb-set-voice-seg',
+            role: 'radiogroup',
             'aria-label': label,
             'aria-disabled': missing.length ? 'true' : 'false',
-            value: String(shown(key) ?? ''),
-            onChange: (event) => {
-              if (missing.length) return
-              remember(key, event.target.value)
+          }, options.map((option) => h('button', {
+            key: String(option.value),
+            type: 'button',
+            role: 'radio',
+            className: `dsh-orb-set-voice-seg-item${option.value === current ? ' is-active' : ''}${missing.length ? ' is-locked' : ''}`,
+            'aria-checked': option.value === current ? 'true' : 'false',
+            'aria-disabled': missing.length ? 'true' : 'false',
+            onMouseDown: (event) => {
+              if (missing.length === 0) return
+              event.preventDefault()
+              openLock(missing)
             },
-            onBlur: (event) => {
-              if (missing.length) return
-              remember(key, event.target.value)
-              save({})
+            onClick: () => {
+              if (missing.length) {
+                openLock(missing)
+                return
+              }
+              pick(option.value)
             },
-            ...lockedProps(missing),
-          }))
+          }, option.label))),
+          hint ? h('span', { className: 'dsh-orb-set-voice-field-hint' }, hint) : null)
       }
 
       /** The host owns the 48 names; the page only groups and formats them. */
-      function qwenVoiceRow(missing) {
+      function qwenVoiceField() {
         const listed = Array.isArray(snap.qwenVoices)
           ? snap.qwenVoices.filter((item) => item && typeof item.voice === 'string')
           : []
@@ -1648,33 +1789,59 @@ window.__ModuleLoader__.load({
           return [h('optgroup', { key: group.id, label: group.label },
             items.map((item) => h('option', { key: item.voice, value: item.voice }, item.label || item.voice)))]
         })
-        return h('label', { className: 'dsh-orb-set-voice-row' },
-          h('span', null, text.qwenVoice),
-          h('select', {
-            className: 'dsh-orb-set-select',
-            'aria-label': text.qwenVoice,
-            'aria-disabled': missing.length ? 'true' : 'false',
-            value: current,
-            ...lockedProps(missing),
-            onChange: (event) => {
-              if (missing.length) return
-              const next = event.target.value
-              remember('qwenVoice', next)
-              save({ qwenVoice: next })
-            },
-          }, options))
+        return h('label', { className: 'dsh-orb-set-voice-field is-wide' },
+          h('span', { className: 'dsh-orb-set-voice-field-label' }, text.qwenVoice),
+          h('span', { className: 'dsh-orb-set-voice-select' },
+            h('select', {
+              className: 'dsh-orb-set-voice-input',
+              'aria-label': text.qwenVoice,
+              value: current,
+              onChange: (event) => {
+                const next = event.target.value
+                remember('qwenVoice', next)
+                save({ qwenVoice: next })
+              },
+            }, options)))
       }
 
-      function downloadBlock(kind, label) {
+      const sizeText = (bytes) => text.voiceSize.replaceAll('{size}', String(Math.round(bytes / (1024 * 1024))))
+
+      function modelFooter(kind, label) {
         const model = models[kind]
-        if (kind === 'asr' && model.present) return null
         const percent = Math.max(0, Math.min(100, Math.round(model.progress * 100)))
-        return h('div', { className: 'dsh-orb-set-voice-download' },
-          h('button', {
+        const name = kind === 'wake'
+          ? text.voiceWakeModel
+          : kind === 'asr'
+            ? text.voiceAsrModel
+            : backend === 'qwen'
+              ? text.voiceTtsLocalModel
+              : text.voiceTtsModel
+        const optional = kind === 'tts' && backend === 'qwen' && !model.present && !model.downloading
+        const state = model.downloading
+          ? text.voiceModelDownloading
+          : optional
+            ? text.voiceModelOptional
+            : model.present
+              ? text.voiceModelReady
+              : text.voiceModelMissing.replaceAll('{size}', sizeText(model.bytes))
+        const action = kind === 'asr' && model.present
+          ? null
+          : h('button', {
             type: 'button',
-            className: `dsh-orb-set-button${model.present ? ' dsh-orb-set-ghost' : ' dsh-orb-set-primary'}`,
+            className: `dsh-orb-set-button dsh-orb-set-voice-action${model.present || optional ? ' dsh-orb-set-ghost' : ' dsh-orb-set-primary'}`,
             onClick: () => onDownload(kind),
-          }, label),
+          }, model.present ? text.voiceRedownload : label)
+        return h('div', { className: 'dsh-orb-set-voice-model-block' },
+          h('div', { className: 'dsh-orb-set-voice-model' },
+            h('div', { className: 'dsh-orb-set-voice-model-info' },
+              h('span', {
+                className: `dsh-orb-set-voice-model-dot${model.present ? ' is-ready' : ''}${model.downloading ? ' is-active' : ''}`,
+                'aria-hidden': 'true',
+              }),
+              h('div', { className: 'dsh-orb-set-voice-model-text' },
+                h('span', { className: 'dsh-orb-set-voice-model-name' }, name),
+                h('span', { className: 'dsh-orb-set-voice-model-state' }, state))),
+            action),
           model.downloading ? h('div', {
             className: 'dsh-orb-set-voice-progress',
             role: 'progressbar',
@@ -1683,9 +1850,35 @@ window.__ModuleLoader__.load({
             'aria-valuenow': percent,
             'aria-label': label,
           },
-            h('span', { style: { width: `${percent}%` } }),
-            h('p', null, text.voiceProgress.replaceAll('{percent}', String(percent)))) : null,
+            h('div', { className: 'dsh-orb-set-voice-progress-track' },
+              h('span', { style: { width: `${percent}%` } })),
+            h('p', { className: 'dsh-orb-set-voice-progress-text' }, text.voiceProgress.replaceAll('{percent}', String(percent)))) : null,
           model.error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, model.error) : null)
+      }
+
+      function voicePanel(icon, title, description, control, body, footer) {
+        return h('section', { className: 'dsh-orb-set-voice-panel' },
+          h('header', { className: 'dsh-orb-set-voice-panel-head' },
+            h('span', { className: 'dsh-orb-set-voice-panel-icon', 'aria-hidden': 'true' }, voiceIcon(icon)),
+            h('div', { className: 'dsh-orb-set-voice-panel-heading' },
+              h('h4', null, title),
+              h('p', null, description)),
+            control),
+          h('div', { className: 'dsh-orb-set-voice-panel-body' }, body),
+          footer)
+      }
+
+      function panelSwitch(label, checked, missing, onChange) {
+        return h('div', { className: 'dsh-orb-set-voice-panel-switch' },
+          h('span', { className: 'dsh-orb-set-voice-panel-state' }, checked ? text.voiceOn : text.voiceOff),
+          h(Toggle, {
+            checked,
+            label,
+            disabled,
+            locked: missing.length > 0,
+            onLocked: () => openLock(missing),
+            onChange,
+          }))
       }
 
       const backend = shown('ttsBackend') === 'qwen' ? 'qwen' : 'local'
@@ -1694,8 +1887,7 @@ window.__ModuleLoader__.load({
       const commandLocks = voiceLocks('command', models, backend)
       const dismissReplyLocks = voiceLocks('dismiss-reply', models, backend)
       const ttsLocks = voiceLocks('tts', models, backend)
-      const chunkMissing = wakeLocks
-      const sizeText = (bytes) => text.voiceSize.replaceAll('{size}', String(Math.round(bytes / (1024 * 1024))))
+      const currentChunk = Number(shown('wakeChunk')) === 16 ? 16 : 8
 
       const dialogNode = dialog === null ? null : h('div', { className: 'dsh-orb-set-dialog-backdrop' },
         h('div', { className: 'dsh-orb-set-dialog', role: 'dialog' },
@@ -1727,109 +1919,129 @@ window.__ModuleLoader__.load({
               h('button', { type: 'button', className: 'dsh-orb-set-button dsh-orb-set-primary', onClick: () => { void startDownload(dialog.kind) } }, text.voiceDownload)),
           ] : null))
 
+      const wakePanel = voicePanel('wake', text.wakeTitle, text.wakeDesc,
+        panelSwitch(text.wakeToggle, voice.wakeEnabled === true, wakeLocks, (enabled) => save({ wakeEnabled: enabled })),
+        h('div', { className: 'dsh-orb-set-voice-fields' },
+          rangeField(text.wakeThreshold, 'wakeThreshold', wakeLocks, {
+            min: 0.05,
+            max: 0.9,
+            step: 0.01,
+            fallback: 0.25,
+            format: (value) => value.toFixed(2),
+            hint: text.wakeThresholdHint,
+          }),
+          rangeField(text.wakeScore, 'wakeScore', wakeLocks, {
+            min: 0.5,
+            max: 4,
+            step: 0.1,
+            fallback: 1,
+            format: (value) => value.toFixed(1),
+            hint: text.wakeScoreHint,
+          }),
+          segmentedField(text.wakeChunk, [
+            { value: 8, label: text.wakeChunk8 },
+            { value: 16, label: text.wakeChunk16 },
+          ], currentChunk, wakeLocks, (next) => {
+            remember('wakeChunk', Number(next))
+            save({ wakeChunk: Number(next) })
+          }, text.wakeChunkHint),
+          rangeField(text.wakeCooldown, 'wakeCooldownMs', wakeLocks, {
+            min: 0.5,
+            max: 5,
+            step: 0.1,
+            factor: 1000,
+            decimals: 0,
+            fallback: 1500,
+            format: (value) => `${value.toFixed(1)} 秒`,
+            hint: text.wakeCooldownHint,
+          }),
+          linesInput(text.wakeWords, 'wakeWords', wakeLocks, text.wakeWordsHint),
+          textInput(text.wakeReply, 'wakeReply', wakeReplyLocks, null)),
+        modelFooter('wake', text.downloadWake))
+
+      const commandPanel = voicePanel('command', text.commandTitle, text.commandDesc,
+        panelSwitch(text.commandToggle, voice.commandEnabled === true, commandLocks, (enabled) => save({ commandEnabled: enabled })),
+        h('div', { className: 'dsh-orb-set-voice-fields' },
+          textInput(text.interjectKeyword, 'interjectKeyword', commandLocks, text.interjectHint),
+          linesInput(text.dismissPhrases, 'dismissPhrases', commandLocks, text.dismissHint),
+          textInput(text.dismissReply, 'dismissReply', dismissReplyLocks, null)),
+        modelFooter('asr', text.downloadAsr))
+
+      const ttsPanel = voicePanel('tts', text.ttsTitle, text.ttsDesc,
+        panelSwitch(text.ttsToggle, voice.ttsEnabled === true, ttsLocks, (enabled) => save({ ttsEnabled: enabled })),
+        h('div', { className: 'dsh-orb-set-voice-fields' },
+          segmentedField(text.ttsBackend, [
+            { value: 'local', label: text.ttsBackendLocal },
+            { value: 'qwen', label: text.ttsBackendQwen },
+          ], backend, [], (next) => {
+            remember('ttsBackend', next)
+            save({ ttsBackend: next })
+          }, null, true),
+          rangeField(text.ttsVolume, 'ttsVolume', ttsLocks, {
+            min: 0,
+            max: 200,
+            step: 1,
+            factor: 0.01,
+            decimals: 2,
+            fallback: 1,
+            format: (value) => `${Math.round(value)}%`,
+            hint: text.ttsVolumeHint,
+          }),
+          backend === 'qwen'
+            ? rangeField(text.qwenSpeed, 'qwenSpeed', [], {
+              min: 0.5,
+              max: 2,
+              step: 0.1,
+              fallback: 1.4,
+              format: (value) => `${value.toFixed(1)}×`,
+              hint: text.qwenSpeedHint,
+            })
+            : rangeField(text.ttsSpeed, 'ttsSpeed', ttsLocks, {
+              min: 1,
+              max: 3,
+              step: 0.1,
+              fallback: 1.5,
+              format: (value) => `${value.toFixed(1)}×`,
+              hint: text.ttsSpeedHint,
+            }),
+          textInput(text.questionPrompt, 'questionPrompt', ttsLocks, text.questionPromptHint),
+          backend === 'qwen'
+            ? textInput(text.qwenApiKey, 'qwenApiKey', [], String(shown('qwenApiKey') ?? '').trim() === '' ? text.qwenApiKeyHint : null, { secret: true })
+            : null,
+          backend === 'qwen' ? qwenVoiceField() : null),
+        modelFooter('tts', text.downloadTts))
+
+      const idlePanel = voicePanel('idle', text.idleTitle, text.idleDesc, null,
+        h('div', { className: 'dsh-orb-set-voice-fields' },
+          rangeField(text.idleSeconds, 'idleMs', [], {
+            min: 5,
+            max: 600,
+            step: 1,
+            factor: 1000,
+            decimals: 0,
+            fallback: 30000,
+            format: secondsLabel,
+            hint: text.idleHint,
+          }, true)))
+
       return h('section', { className: 'dsh-orb-set-card dsh-orb-set-voice' },
-        h('h3', null, text.voiceTitle),
-        h('p', null, text.voiceIntro),
-        snap.voiceMic === false ? h('div', { className: 'dsh-orb-set-voice-row' },
-          h('p', null, text.voiceMicBody),
+        h('div', { className: 'dsh-orb-set-voice-head' },
+          h('span', { className: 'dsh-orb-set-voice-head-icon', 'aria-hidden': 'true' }, voiceIcon('voice')),
+          h('div', { className: 'dsh-orb-set-voice-head-text' },
+            h('h3', null, text.voiceTitle),
+            h('p', null, text.voiceIntro))),
+        snap.voiceMic === false ? h('div', { className: 'dsh-orb-set-voice-mic' },
+          h('span', { className: 'dsh-orb-set-voice-mic-icon', 'aria-hidden': 'true' }, voiceIcon('micOff')),
+          h('p', { className: 'dsh-orb-set-voice-mic-text' }, text.voiceMicBody),
           h('button', {
             type: 'button',
-            className: 'dsh-orb-set-button',
+            className: 'dsh-orb-set-button dsh-orb-set-voice-action',
             onClick: () => { void mutate('/.dsh-orb/voice/mic', {}) },
           }, text.voiceMicOpen)) : null,
-        h('div', { className: 'dsh-orb-set-voice-group' },
-          h('h4', null, text.wakeTitle),
-          h('div', { className: 'dsh-orb-set-voice-row' },
-            h('span', null, text.wakeToggle),
-            h(Toggle, {
-              checked: voice.wakeEnabled === true,
-              label: text.wakeToggle,
-              disabled,
-              locked: wakeLocks.length > 0,
-              onLocked: () => openLock(wakeLocks),
-              onChange: (enabled) => save({ wakeEnabled: enabled }),
-            })),
-          numberRow(text.wakeThreshold, 'wakeThreshold', wakeLocks, { min: 0.05, max: 0.9, step: 0.01 }),
-          numberRow(text.wakeScore, 'wakeScore', wakeLocks, { min: 0.5, max: 4, step: 0.1 }),
-          h('label', { className: 'dsh-orb-set-voice-row' },
-            h('span', null, text.wakeChunk),
-            h('select', {
-              'aria-label': text.wakeChunk,
-              'aria-disabled': chunkMissing.length ? 'true' : 'false',
-              className: chunkMissing.length ? 'is-locked' : undefined,
-              value: String(shown('wakeChunk')),
-              ...lockedProps(chunkMissing),
-              onChange: (event) => {
-                if (chunkMissing.length) return
-                save({ wakeChunk: Number(event.target.value) })
-              },
-            },
-              h('option', { value: '8' }, text.wakeChunk8),
-              h('option', { value: '16' }, text.wakeChunk16))),
-          numberRow(text.wakeCooldown, 'wakeCooldownMs', wakeLocks, { min: 0.5, max: 5, step: 0.1, scale: 1000 }),
-          linesRow(text.wakeWords, 'wakeWords', wakeLocks),
-          textRow(text.wakeReply, 'wakeReply', wakeReplyLocks),
-          downloadBlock('wake', text.downloadWake)),
-        h('div', { className: 'dsh-orb-set-voice-group' },
-          h('h4', null, text.commandTitle),
-          h('div', { className: 'dsh-orb-set-voice-row' },
-            h('span', null, text.commandToggle),
-            h(Toggle, {
-              checked: voice.commandEnabled === true,
-              label: text.commandToggle,
-              disabled,
-              locked: commandLocks.length > 0,
-              onLocked: () => openLock(commandLocks),
-              onChange: (enabled) => save({ commandEnabled: enabled }),
-            })),
-          textRow(text.interjectKeyword, 'interjectKeyword', commandLocks),
-          h('p', { className: 'dsh-orb-set-muted' }, text.interjectHint),
-          linesRow(text.dismissPhrases, 'dismissPhrases', commandLocks),
-          h('p', { className: 'dsh-orb-set-muted' }, text.dismissHint),
-          textRow(text.dismissReply, 'dismissReply', dismissReplyLocks),
-          downloadBlock('asr', text.downloadAsr)),
-        h('div', { className: 'dsh-orb-set-voice-group' },
-          h('h4', null, text.ttsTitle),
-          h('label', { className: 'dsh-orb-set-voice-row' },
-            h('span', null, text.ttsBackend),
-            h('select', {
-              className: 'dsh-orb-set-select',
-              'aria-label': text.ttsBackend,
-              value: backend,
-              onChange: (event) => {
-                const next = event.target.value === 'qwen' ? 'qwen' : 'local'
-                remember('ttsBackend', next)
-                save({ ttsBackend: next })
-              },
-            },
-              h('option', { value: 'local' }, text.ttsBackendLocal),
-              h('option', { value: 'qwen' }, text.ttsBackendQwen))),
-          h('div', { className: 'dsh-orb-set-voice-row' },
-            h('span', null, text.ttsToggle),
-            h(Toggle, {
-              checked: voice.ttsEnabled === true,
-              label: text.ttsToggle,
-              disabled,
-              locked: ttsLocks.length > 0,
-              onLocked: () => openLock(ttsLocks),
-              onChange: (enabled) => save({ ttsEnabled: enabled }),
-            })),
-          percentRow(text.ttsVolume, 'ttsVolume', ttsLocks, { min: 0, max: 200, step: 1, scale: 100, fallback: 1 }),
-          h('p', { className: 'dsh-orb-set-muted' }, text.ttsVolumeHint),
-          textRow(text.questionPrompt, 'questionPrompt', ttsLocks),
-          backend === 'qwen'
-            ? h('div', { className: 'dsh-orb-set-voice-backend' },
-              secretRow(text.qwenApiKey, 'qwenApiKey', []),
-              String(shown('qwenApiKey') ?? '').trim() === ''
-                ? h('p', { className: 'dsh-orb-set-muted' }, text.qwenApiKeyHint)
-                : null,
-              qwenVoiceRow([]),
-              numberRow(text.qwenSpeed, 'qwenSpeed', [], { min: 0.5, max: 2, step: 0.1 }))
-            : numberRow(text.ttsSpeed, 'ttsSpeed', ttsLocks, { min: 1, max: 3, step: 0.1 }),
-          downloadBlock('tts', text.downloadTts)),
-        h('div', { className: 'dsh-orb-set-voice-group' },
-          h('h4', null, text.idleTitle),
-          numberRow(text.idleSeconds, 'idleMs', [], { min: 5, max: 600, step: 1, scale: 1000 })),
+        wakePanel,
+        commandPanel,
+        ttsPanel,
+        idlePanel,
         dialogNode)
     }
 
@@ -1965,12 +2177,8 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-tcc { margin-top: 12px; }
 .dsh-orb-set-status { font-weight: 600; }
 .dsh-orb-set-fields:disabled { opacity: 0.55; }
-.dsh-orb-set-input { width: 72px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 8px; padding: 6px 8px; font: inherit; }
-.dsh-orb-set-range { flex: 1; min-width: 0; max-width: 220px; accent-color: var(--dsw-alias-button-info-fill, #2f6fed); }
-.dsh-orb-set-range-value { flex: none; min-width: 40px; text-align: end; font-variant-numeric: tabular-nums; }
 .dsh-orb-set-label { display: flex; align-items: center; gap: 12px; font-weight: 600; }
 .dsh-orb-set-select { min-width: 190px; }
-.dsh-orb-set-input-wide { width: auto; min-width: 0; flex: 1; }
 .dsh-orb-set-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; cursor: pointer; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 8px; padding: 6px 8px; font: inherit; }
 .dsh-orb-set-path:disabled { opacity: 0.55; cursor: default; }
 .dsh-orb-set-pick { flex: none; white-space: nowrap; }
@@ -1987,14 +2195,75 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 .dsh-orb-set-primary { background: var(--dsw-alias-button-info-fill, #2f6fed); color: var(--dsw-static-neutral-bluish-00, white); border-color: transparent; }
 .dsh-orb-set-muted { color: color-mix(in srgb, currentColor 58%, transparent); }
-.dsh-orb-set-voice-group { margin-top: 16px; padding-top: 12px; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
-.dsh-orb-set-voice-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-top: 10px; }
-.dsh-orb-set-voice-row > span { font-size: 13px; }
+/* Voice: three switchable panels, sliders for every bounded value. */
+.dsh-orb-set-voice { padding: 16px 16px 18px; }
+.dsh-orb-set-voice-head { display: flex; align-items: flex-start; gap: 12px; }
+.dsh-orb-set-voice-head-icon { flex: none; width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: var(--dsw-alias-button-info-fill, #2f6fed); background: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 12%, transparent); }
+.dsh-orb-set-voice-head-text { flex: 1; min-width: 0; }
+.dsh-orb-set .dsh-orb-set-voice-head-text h3 { font-size: 15px; }
+.dsh-orb-set .dsh-orb-set-voice-head-text p { margin-top: 3px; font-size: 12.5px; line-height: 1.45; color: color-mix(in srgb, currentColor 62%, transparent); }
+.dsh-orb-set-voice-panel { margin-top: 12px; padding: 14px 15px 15px; border: 1px solid color-mix(in srgb, currentColor 8%, transparent); border-radius: 13px; background: color-mix(in srgb, currentColor 2.6%, transparent); }
+.dsh-orb-set-voice-panel-head { display: flex; align-items: center; gap: 11px; }
+.dsh-orb-set-voice-panel-icon { flex: none; width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--dsw-alias-button-info-fill, #2f6fed); background: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 11%, transparent); }
+.dsh-orb-set-voice-panel-icon svg { width: 19px; height: 19px; }
+.dsh-orb-set-voice-panel-heading { flex: 1; min-width: 0; }
+.dsh-orb-set .dsh-orb-set-voice-panel-heading h4 { font-size: 13.5px; font-weight: 600; }
+.dsh-orb-set .dsh-orb-set-voice-panel-heading p { margin-top: 2px; font-size: 12px; line-height: 1.45; color: color-mix(in srgb, currentColor 58%, transparent); }
+.dsh-orb-set-voice-panel-switch { flex: none; display: flex; align-items: center; gap: 8px; }
+.dsh-orb-set-voice-panel-state { font-size: 11px; color: color-mix(in srgb, currentColor 55%, transparent); }
+.dsh-orb-set-voice-panel-body { margin-top: 13px; }
+.dsh-orb-set-voice-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px 20px; align-items: start; }
+.dsh-orb-set-voice-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 12px; }
+.dsh-orb-set-voice-field.is-wide { grid-column: 1 / -1; }
+.dsh-orb-set-voice-field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.dsh-orb-set-voice-field-label { font-size: 12.5px; font-weight: 500; color: color-mix(in srgb, currentColor 84%, transparent); }
+.dsh-orb-set-voice-field-value { flex: none; font-size: 11.5px; font-weight: 600; line-height: 1.4; padding: 1px 8px; border-radius: 999px; color: var(--dsw-alias-button-info-fill, #2f6fed); background: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 10%, transparent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dsh-orb-set-voice-field-scale { display: flex; justify-content: space-between; gap: 8px; font-size: 10.5px; line-height: 1.2; color: color-mix(in srgb, currentColor 52%, transparent); font-variant-numeric: tabular-nums; }
+.dsh-orb-set-voice-field-hint { font-size: 11px; line-height: 1.5; color: color-mix(in srgb, currentColor 56%, transparent); }
+.dsh-orb-set-voice-field-range { -webkit-appearance: none; appearance: none; width: 100%; height: 20px; margin: 0; padding: 0; background: transparent; cursor: pointer; }
+.dsh-orb-set-voice-field-range::-webkit-slider-runnable-track { height: 5px; border-radius: 999px; background: linear-gradient(90deg, var(--dsw-alias-button-info-fill, #2f6fed) 0 var(--dsh-orb-voice-fill, 0%), color-mix(in srgb, currentColor 13%, transparent) var(--dsh-orb-voice-fill, 0%) 100%); }
+.dsh-orb-set-voice-field-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; margin-top: -5.5px; border-radius: 50%; border: 2px solid var(--dsw-alias-button-info-fill, #2f6fed); background: var(--dsw-alias-bg-overlay, #fff); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22); transition: transform 120ms ease, box-shadow 120ms ease; }
+.dsh-orb-set-voice-field-range:hover::-webkit-slider-thumb { transform: scale(1.08); }
+.dsh-orb-set-voice-field-range:focus { outline: none; }
+.dsh-orb-set-voice-field-range:focus-visible { outline: none; }
+.dsh-orb-set-voice-field-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 20%, transparent); }
+.dsh-orb-set-voice-field-range::-moz-range-track { height: 5px; border-radius: 999px; background: color-mix(in srgb, currentColor 13%, transparent); }
+.dsh-orb-set-voice-field-range::-moz-range-progress { height: 5px; border-radius: 999px; background: var(--dsw-alias-button-info-fill, #2f6fed); }
+.dsh-orb-set-voice-field-range::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--dsw-alias-button-info-fill, #2f6fed); background: var(--dsw-alias-bg-overlay, #fff); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22); }
+.dsh-orb-set-voice-input { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 9px; background: color-mix(in srgb, currentColor 2.5%, transparent); color: inherit; font: inherit; font-size: 12.5px; line-height: 1.45; padding: 7px 10px; transition: border-color 120ms ease, box-shadow 120ms ease; }
+.dsh-orb-set-voice-input:focus { outline: none; border-color: var(--dsw-alias-button-info-fill, #2f6fed); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 15%, transparent); }
+.dsh-orb-set textarea.dsh-orb-set-voice-input { min-height: 56px; resize: vertical; }
+.dsh-orb-set-voice-select { position: relative; display: block; }
+.dsh-orb-set-voice-select::after { content: ''; position: absolute; right: 13px; top: 50%; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-70%) rotate(45deg); opacity: 0.5; pointer-events: none; }
+.dsh-orb-set-voice-select select { appearance: none; -webkit-appearance: none; padding-right: 30px; }
+.dsh-orb-set-voice-seg { display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: color-mix(in srgb, currentColor 6%, transparent); }
+.dsh-orb-set-voice-seg-item { flex: 1; min-width: 0; border: 0; border-radius: 7px; background: transparent; color: color-mix(in srgb, currentColor 68%, transparent); font: inherit; font-size: 12px; font-weight: 500; padding: 6px 8px; cursor: pointer; white-space: nowrap; transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease; }
+.dsh-orb-set-voice-seg-item:hover:not(.is-active) { background: color-mix(in srgb, currentColor 5%, transparent); color: inherit; }
+.dsh-orb-set-voice-seg-item.is-active { background: var(--dsw-alias-button-info-fill, #2f6fed); color: var(--dsw-static-neutral-bluish-00, #fff); box-shadow: 0 1px 4px color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 35%, transparent); }
+.dsh-orb-set-voice-model-block { margin-top: 14px; padding-top: 12px; border-top: 1px dashed color-mix(in srgb, currentColor 13%, transparent); }
+.dsh-orb-set-voice-model { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dsh-orb-set-voice-model-info { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.dsh-orb-set-voice-model-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: color-mix(in srgb, currentColor 28%, transparent); }
+.dsh-orb-set-voice-model-dot.is-ready { background: #12b76a; box-shadow: 0 0 0 3px color-mix(in srgb, #12b76a 16%, transparent); }
+.dsh-orb-set-voice-model-dot.is-active { background: var(--dsw-alias-button-info-fill, #2f6fed); animation: dsh-orb-set-voice-pulse 1.4s ease-in-out infinite; }
+@keyframes dsh-orb-set-voice-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 32%, transparent); } 50% { box-shadow: 0 0 0 5px transparent; } }
+.dsh-orb-set-voice-model-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.dsh-orb-set-voice-model-name { font-size: 12.5px; font-weight: 600; }
+.dsh-orb-set-voice-model-state { font-size: 11.5px; color: color-mix(in srgb, currentColor 58%, transparent); }
+.dsh-orb-set .dsh-orb-set-voice-action { flex: none; padding: 6px 11px; border-radius: 8px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.dsh-orb-set-voice-model .dsh-orb-set-ghost { border-color: color-mix(in srgb, currentColor 18%, transparent); color: color-mix(in srgb, currentColor 78%, transparent); }
+.dsh-orb-set-voice-progress { margin-top: 10px; }
+.dsh-orb-set-voice-progress-track { height: 5px; border-radius: 999px; background: color-mix(in srgb, currentColor 12%, transparent); overflow: hidden; }
+.dsh-orb-set-voice-progress-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 65%, #fff), var(--dsw-alias-button-info-fill, #2f6fed)); transition: width 240ms ease; }
+.dsh-orb-set .dsh-orb-set-voice-progress-text { margin: 5px 0 0; font-size: 11px; color: color-mix(in srgb, currentColor 55%, transparent); }
+.dsh-orb-set-voice-mic { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; border-radius: 11px; border: 1px solid color-mix(in srgb, #d97706 22%, transparent); background: color-mix(in srgb, #d97706 8%, transparent); }
+.dsh-orb-set-voice-mic-icon { flex: none; display: flex; color: var(--dsw-alias-state-warning-primary, #b45309); }
+.dsh-orb-set .dsh-orb-set-voice-mic-text { flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 1.45; color: inherit; }
 .dsh-orb-set .is-locked { opacity: 0.45; }
-.dsh-orb-set-voice-download { margin-top: 12px; }
-.dsh-orb-set-voice-progress { margin-top: 8px; }
-.dsh-orb-set-voice-progress > span { display: block; height: 6px; border-radius: 999px; background: var(--dsw-alias-button-info-fill, #2f6fed); }
-.dsh-orb-set textarea.dsh-orb-set-input { min-height: 52px; resize: vertical; }
+@media (max-width: 560px) {
+  .dsh-orb-set-voice-panel-switch .dsh-orb-set-voice-panel-state { display: none; }
+  .dsh-orb-set-voice-model { flex-wrap: wrap; }
+}
 `
 
     /** Settings-section id of this page; the ball's menu row asks the shell to show exactly this one. */
