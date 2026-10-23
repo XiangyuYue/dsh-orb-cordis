@@ -426,6 +426,7 @@ export class VoiceController {
       this.micKnown = true
       this.micOpen = record?.open === true
       this.echoCancel = record?.aec === true
+      debug(`mic open=${this.micOpen} aec=${this.echoCancel}`)
       this.pushListen(false)
       return
     }

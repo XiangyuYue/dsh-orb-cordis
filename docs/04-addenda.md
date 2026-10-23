@@ -341,3 +341,14 @@ Windows 上的实测反馈:在浏览器里点球、输入、回车提交后,**Ag
 - **实现**:见 `packages/host/src/voice.ts` 的 `interject()`/`resumeAfterInterjectFailure()`、`packages/host/src/orb.ts` 的 `pendingInterject`/`onInterject()`/`startPendingInterject()`/`consume('turn/end')`。不调 `stopTurn()`(它会手动 `finishTurn`,旧轮迟到的 `turn/end` 可能误停新轮);`turn/end` 之后再 `submitPrompt()`。
 - **交互细节**:连续插话以最新一句为准;停止、退下、手动打字、切会话都会清 pending 并删气泡;硬插话由 Host 直接发送,不经过页面 `voice-prompt`,因此不拼划词 chip、不走页面的 TCC 门。命令模式的普通语音输入不变。
 - **测试**:`runtime.test.ts` 新增执行中硬停、只剩余收尾、`cancel` 失败、连续插话、`prompt` 失败五例;`voice.test.ts` 增加插话后 `muted/off`、旧轮结束后新任务恢复播报、`resumeAfterInterjectFailure()` 三处断言。
+
+## 26. TTS 播报时插话失效:装配包漏了 macOS 采集程序(2026-10-23)
+
+现象:Agent 正文正在播放时,用户说「大肥鱼,……」没有任何反应;停下播报后同样的句子可以正常插话。语音唤醒、普通语音输入、退下都正常,所以看起来像「回声消除被关掉了」。
+
+- **根因:回声消除代码没丢,采集程序没装进包。** `packages/bundle/scripts/assemble.mjs` 只把 `voice/lib` 拷进 `dist/voice/`,没有拷 `packages/voice/prebuilds/`。子进程的 `captureBinary()` 在 `dist/voice/prebuilds/...` 下找不到 `dsh-orb-voice-capture`,于是改用 `node-cpal`,并且如实上报 `mic: { open: true, aec: false }`;Host 的 `listenMode()` 在 `bodyBusy && !echoCancel` 时按既有降级规则返回 `off`。所以不是 VPIO 失效,是 VPIO 根本没被拉起来。
+- **修法:** `assemble.mjs` 现在把整个 `voice/prebuilds` 装到 `dist/voice/prebuilds`(子进程的 `./prebuilds` 查找路径),并对 Darwin/Windows 采集程序显式 `chmod 755`。`bundle/tests/install.test.mjs` 在链接安装和 tarball 解包两条路径都断言采集程序存在且可执行,避免以后再把装配链改漏。
+- **可观测性:** `child.ts` 在找不到采集程序时写 debug 日志 `capture helper missing; node-cpal has no echo cancellation`,在 `ready` 时写 `mic open source=native|cpal aec=...`;`host/src/voice.ts` 同步记录收到的 `mic` 事件。以后同类问题打开 `dsh-orb-voice-debug.on` 就能一眼看出降级原因。
+- **验证:** `pnpm build`;`node --test packages/bundle/tests/install.test.mjs` 4/4;host+voice 122/122;`pnpm typecheck` 通过。
+- **装机:** 备份 `~/.dsh/profiles/desktop/node_modules/dsh-orb/dist/voice` 后,把新 `packages/bundle/dist/voice/` 同步进 profile(含 `prebuilds`),然后只 `kill` 掉语音子进程(host 会在 1 秒内重新 fork),**不必重启应用**。debug 日志确认新子进程为 `mic open source=native aec=true`,且 `dsh-orb-voice-capture` 作为子进程 PID 存在。此后 `echoCancel` 为真,正文播放期间听法回到 `interject`,插话恢复。
+- **未做:** Windows 采集程序的 `.exe` 仍未入库;本次只修复 macOS 的装配遗漏。若在 Windows 上打包,`prebuilds/win32-x64` 需要先由 `build:native:win` 生成并一起提交。

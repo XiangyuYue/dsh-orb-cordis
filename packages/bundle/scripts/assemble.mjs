@@ -81,6 +81,18 @@ await copyFrom('native-selection', 'prebuilds/darwin-universal', join(dist, 'nat
 // speak-text chunk, and a missing chunk only fails when the child is forked.
 await copyFrom('voice', 'lib', join(dist, 'voice'))
 
+// The child spawns the capture helper from ./prebuilds next to itself. Without
+// the helper it falls back to node-cpal, which reports aec:false and makes the
+// host stop listening while our own TTS is playing, so interjection goes dead.
+await copyFrom('voice', 'prebuilds', join(dist, 'voice', 'prebuilds'))
+for (const binary of [
+  'darwin-universal/dsh-orb-voice-capture',
+  'win32-x64/dsh-orb-voice-capture.exe',
+]) {
+  const file = join(dist, 'voice', 'prebuilds', binary)
+  if (existsSync(file)) await chmod(file, 0o755)
+}
+
 await rewrite(join(dist, 'host', 'index.js'), SELECTION_SPECIFIER, SELECTION_RELATIVE, 1)
 
 if (!inPlace) {

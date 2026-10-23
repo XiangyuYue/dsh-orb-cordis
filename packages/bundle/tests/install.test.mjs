@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, basename, join } from 'node:path'
@@ -72,8 +72,15 @@ function checkInstalled(profile, root) {
     'dist/native-selection/src/index.js',
     'dist/native-selection/prebuilds/darwin-universal/libmacos-selection.dylib',
     'dist/computer-use/macos-sck-capture',
+    // The voice child spawns this beside itself. Without it capture falls back to
+    // node-cpal (aec:false) and the host stops listening during TTS, so interjection dies.
+    'dist/voice/prebuilds/darwin-universal/dsh-orb-voice-capture',
   ]) {
     assert.ok(existsSync(join(root, rel)), rel)
+  }
+  const capture = join(root, 'dist/voice/prebuilds/darwin-universal/dsh-orb-voice-capture')
+  if (process.platform !== 'win32') {
+    assert.equal(statSync(capture).mode & 0o111, 0o111, 'voice capture helper is not executable')
   }
   const host = readFileSync(join(root, 'dist/host/index.js'), 'utf8')
   assert.match(host, /new URL\("\.\.\/helper", import\.meta\.url\)/)
@@ -166,6 +173,7 @@ describe('dsh-orb install layout', () => {
         'dist/voice/child.js',
         'dist/voice/decode-worker.mjs',
         'dist/voice/tts-worker.js',
+        'dist/voice/prebuilds/darwin-universal/dsh-orb-voice-capture',
         'node_modules/sherpa-onnx-node/package.json',
         'node_modules/sherpa-onnx-darwin-arm64/sherpa-onnx.node',
         'node_modules/sherpa-onnx-darwin-x64/sherpa-onnx.node',

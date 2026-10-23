@@ -503,6 +503,7 @@ class Engine {
     const binary = this.useCpal ? undefined : captureBinary()
     if (!binary) {
       this.useCpal = true
+      debug('capture helper missing; node-cpal has no echo cancellation')
       this.openCpal()
       return
     }
@@ -516,6 +517,7 @@ class Engine {
       onPcm: (samples) => this.onAudio(samples),
       onReady: ({ aec }) => {
         this.sawReady = true
+        debug(`mic open source=native aec=${aec}`)
         emit({ type: 'mic', open: true, aec })
       },
       onFailure: (reason, detail) => this.onCaptureFailure(reason, detail),
@@ -529,6 +531,7 @@ class Engine {
       onPcm: (samples) => this.onAudio(samples),
       onReady: ({ aec }) => {
         this.sawReady = true
+        debug(`mic open source=cpal aec=${aec}`)
         emit({ type: 'mic', open: true, aec })
       },
       onFailure: (reason, detail) => this.onCaptureFailure(reason, detail),
