@@ -203,11 +203,9 @@ window.__ModuleLoader__.load({
       voiceWakeModel: '唤醒模型',
       voiceAsrModel: '识别模型',
       voiceTtsModel: '播报模型',
-      voiceTtsLocalModel: '本地播报模型',
       voiceModelReady: '已就绪',
       voiceModelMissing: '未下载 · {size}',
       voiceModelDownloading: '正在下载…',
-      voiceModelOptional: '千问播报不需要这个模型',
       voiceRedownload: '重新下载',
       modelMissingWake: '要下载语音唤醒模型。',
       modelMissingTts: '要下载 TTS 模型。',
@@ -418,11 +416,9 @@ window.__ModuleLoader__.load({
       voiceWakeModel: 'Wake model',
       voiceAsrModel: 'Recognition model',
       voiceTtsModel: 'Speech model',
-      voiceTtsLocalModel: 'Local speech model',
       voiceModelReady: 'Ready',
       voiceModelMissing: 'Not downloaded · {size}',
       voiceModelDownloading: 'Downloading…',
-      voiceModelOptional: 'Qwen does not need this model',
       voiceRedownload: 'Download again',
       modelMissingWake: 'Download the wake-word model.',
       modelMissingTts: 'Download the TTS model.',
@@ -1859,22 +1855,17 @@ window.__ModuleLoader__.load({
           ? text.voiceWakeModel
           : kind === 'asr'
             ? text.voiceAsrModel
-            : backend === 'qwen'
-              ? text.voiceTtsLocalModel
-              : text.voiceTtsModel
-        const optional = kind === 'tts' && backend === 'qwen' && !model.present && !model.downloading
+            : text.voiceTtsModel
         const state = model.downloading
           ? text.voiceModelDownloading
-          : optional
-            ? text.voiceModelOptional
-            : model.present
-              ? text.voiceModelReady
-              : text.voiceModelMissing.replaceAll('{size}', sizeText(model.bytes))
+          : model.present
+            ? text.voiceModelReady
+            : text.voiceModelMissing.replaceAll('{size}', sizeText(model.bytes))
         const action = kind === 'asr' && model.present
           ? null
           : h('button', {
             type: 'button',
-            className: `dsh-orb-set-button dsh-orb-set-voice-action${model.present || optional ? ' dsh-orb-set-ghost' : ' dsh-orb-set-primary'}`,
+            className: `dsh-orb-set-button dsh-orb-set-voice-action${model.present ? ' dsh-orb-set-ghost' : ' dsh-orb-set-primary'}`,
             onClick: () => onDownload(kind),
           }, model.present ? text.voiceRedownload : label)
         return h('div', { className: 'dsh-orb-set-voice-model-block' },
@@ -2055,7 +2046,8 @@ window.__ModuleLoader__.load({
             ? textInput(text.qwenApiKey, 'qwenApiKey', [], String(shown('qwenApiKey') ?? '').trim() === '' ? text.qwenApiKeyHint : null, { secret: true })
             : null,
           backend === 'qwen' ? qwenVoiceField() : null),
-        modelFooter('tts', text.downloadTts))
+        // Qwen has no local files; its footer (status + download) belongs to the local backend only.
+        backend === 'local' ? modelFooter('tts', text.downloadTts) : null)
 
       // The master switch is the whole card's gate. Off hides every column, but the three
       // column switches keep their stored values, so the next switch-on restores the mix.

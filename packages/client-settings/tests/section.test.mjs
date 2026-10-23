@@ -1359,6 +1359,7 @@ describe('settings section', () => {
     assert.equal(find(view, (node) => node.props?.['aria-label'] === 'API Key').length, 0)
     assert.equal(find(view, (node) => node.props?.['aria-label'] === '语速').length, 1)
     assert.equal(find(view, (node) => node.props?.['aria-label'] === '音量').length, 1)
+    assert.equal(find(ttsPanel(view), (node) => String(node.props?.className).includes('dsh-orb-set-voice-model-block')).length, 1, 'the local backend shows its model row')
 
     find(backend, (node) => node.props?.role === 'radio' && node.children?.includes('千问'))[0].props.onClick()
     await settle()
@@ -1401,12 +1402,10 @@ describe('settings section', () => {
     find(view, (node) => node.type === 'input' && node.props?.['aria-label'] === '音量')[0].props.onBlur({ target: { value: '150' } })
     await settle()
     assert.equal(JSON.parse(page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1).options.body).ttsVolume, 1.5)
-    const ttsPanel = find(view, (node) => String(node.props?.className).includes('dsh-orb-set-voice-panel')
-      && find(node, (child) => child.type === 'h4' && child.children?.includes('TTS')).length === 1)[0]
-    assert.ok(ttsPanel)
-    const ttsRedownload = find(ttsPanel, (node) => node.type === 'button' && node.children?.includes('重新下载'))[0]
-    assert.ok(ttsRedownload, 'the ready local model offers a re-download')
-    assert.match(ttsRedownload.props.className, /dsh-orb-set-ghost/)
+    const qwenPanel = ttsPanel(view)
+    assert.ok(qwenPanel)
+    assert.equal(find(qwenPanel, (node) => String(node.props?.className).includes('dsh-orb-set-voice-model-block')).length, 0, 'qwen hides the local model row')
+    assert.equal(find(qwenPanel, (node) => node.type === 'button' && node.children?.includes('重新下载')).length, 0)
   })
 
   it('unlocks speech controls for qwen even without the local model', async () => {
@@ -1422,6 +1421,7 @@ describe('settings section', () => {
       const field = find(view, (node) => node.props?.['aria-label'] === label)[0]
       assert.equal(String(field.props.className).includes('is-locked'), false, label)
     }
+    assert.equal(find(ttsPanel(view), (node) => String(node.props?.className).includes('dsh-orb-set-voice-model-block')).length, 0, 'qwen hides the missing local model row')
     tts.props.onClick()
     await settle()
     const saved = page.calls.filter((call) => call.path === '/.dsh-orb/voice').at(-1)
@@ -1440,6 +1440,11 @@ describe('settings section', () => {
     assert.equal(String(localSpeed.props.max), '3')
     const localVolume = find(view, (node) => node.props?.['aria-label'] === '音量')[0]
     assert.equal(String(localVolume.props.className).includes('is-locked'), true, 'the local volume waits for the model')
+    const localModel = find(ttsPanel(view), (node) => String(node.props?.className).includes('dsh-orb-set-voice-model-block'))[0]
+    assert.ok(localModel, 'the local backend brings the model row back')
+    const ttsDownload = find(localModel, (node) => node.type === 'button' && node.children?.includes('下载 TTS 语音播报模型'))[0]
+    assert.ok(ttsDownload)
+    assert.match(ttsDownload.props.className, /dsh-orb-set-primary/)
     const locked = find(view, (node) => node.props?.['aria-label'] === 'TTS' && node.props.role === 'switch')[0]
     assert.equal(locked.props['aria-disabled'], 'true')
     locked.props.onClick()
@@ -1452,6 +1457,12 @@ describe('settings section', () => {
 function readyVoiceModels() {
   const model = { present: true, downloading: false, progress: 0 }
   return { wake: { ...model }, tts: { ...model }, asr: { ...model } }
+}
+
+/** The TTS panel, found by its heading rather than by position in the voice card. */
+function ttsPanel(view) {
+  return find(view, (node) => String(node.props?.className).includes('dsh-orb-set-voice-panel')
+    && find(node, (child) => child.type === 'h4' && child.children?.includes('TTS')).length === 1)[0]
 }
 
 async function settle() {
