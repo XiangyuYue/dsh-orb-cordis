@@ -829,6 +829,9 @@ window.__ModuleLoader__.load({
             disabled,
             onSelect: (selection) => { void mutate('/.dsh-orb/background-model', selection) },
           })),
+          // Voice sits right after the two Agent cards: it is the other per-session choice
+          // people come here to make, not a trailing detail of the coordinate and frame rows.
+          h(VoiceCard, { text, snap, disabled, mutate }),
           card(text.millifractionTitle, text.millifractionDescription, h(Toggle, {
             checked: snap.millifractionEnabled === true,
             label: text.millifractionToggle,
@@ -848,8 +851,7 @@ window.__ModuleLoader__.load({
               void mutate('/.dsh-orb/observation-frame', { enabled })
             },
           })),
-          snap.tcc && snap.tcc.applicable ? tccCard(text, snap, disabled, mutate) : null,
-          h(VoiceCard, { text, snap, disabled, mutate })),
+          snap.tcc && snap.tcc.applicable ? tccCard(text, snap, disabled, mutate) : null),
         h(WorkspaceCard, { text, snap, refreshSettings }),
         h(HistoryCard, { text, snap, mutate, refreshHistory }))
     }

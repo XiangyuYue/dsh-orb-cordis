@@ -1031,6 +1031,19 @@ describe('settings section', () => {
     assert.equal(fieldset().props.disabled, false, 'the dropped answer must still release the fields')
   })
 
+  it('puts voice settings directly after the two Agent cards', async () => {
+    const page = loadSection()
+    let view = page.render()
+    await page.flush()
+    view = page.render()
+    const fields = find(view, (node) => node.type === 'fieldset')[0]
+    const titles = (fields.children || [])
+      .filter((node) => node.type === 'section')
+      .map((node) => find(node, (child) => child.type === 'h3')[0]?.children?.[0])
+    assert.deepEqual(titles.slice(0, 5), ['启用悬浮球', '悬浮球头像', '悬浮球 Agent', '后台 Agent', '语音'])
+    assert.equal(titles[5], '千分比坐标', 'coordinate and frame cards stay below the voice panel')
+  })
+
   it('uses sliders for every bounded voice value and writes once when one is released', async () => {
     const page = loadSection()
     page.snapshot.voiceModels = readyVoiceModels()
