@@ -182,7 +182,9 @@ window.__ModuleLoader__.load({
       ttsBackend: '播报方式',
       ttsBackendLocal: '本地模型',
       ttsBackendQwen: '千问',
-      qwenApiKey: 'API Key',
+      qwenApiKey: '阿里云百炼 API Key',
+      qwenApiKeyNote: '云端 TTS 使用阿里云百炼的千问语音合成，不是 DeepSeek API。',
+      qwenApiKeyLink: '去百炼控制台获取 API Key',
       qwenApiKeyHint: '留空时不播报。',
       qwenVoice: '音色',
       qwenVoiceStandard: '普通话与多语种',
@@ -395,7 +397,9 @@ window.__ModuleLoader__.load({
       ttsBackend: 'Speech backend',
       ttsBackendLocal: 'Local model',
       ttsBackendQwen: 'Qwen',
-      qwenApiKey: 'API Key',
+      qwenApiKey: 'Alibaba Cloud Bailian API Key',
+      qwenApiKeyNote: 'Cloud TTS uses Qwen on Alibaba Cloud Bailian, not the DeepSeek API.',
+      qwenApiKeyLink: 'Get an API key in Bailian',
       qwenApiKeyHint: 'Nothing is spoken while this is empty.',
       qwenVoice: 'Voice',
       qwenVoiceStandard: 'Mandarin and multilingual',
@@ -437,6 +441,8 @@ window.__ModuleLoader__.load({
     // outbound link: the desktop shell hands http(s) window opens to the system
     // browser, and a page served in a browser just opens a tab.
     const AVATAR_GALLERY_URL = 'https://dshgif.hicp.fun/'
+    /** Alibaba Cloud Bailian (DashScope) API-key page; the cloud TTS is Qwen, not DeepSeek. */
+    const BAILIAN_API_KEY_URL = 'https://bailian.console.aliyun.com/?apiKey=1#/api-key'
 
     /**
      * Upload cap, mirroring the host's MAX_AVATAR_BYTES. The check here is for the
@@ -1732,8 +1738,10 @@ window.__ModuleLoader__.load({
       function textInput(label, key, missing, hint, options) {
         const value = shown(key)
         const secret = options && options.secret === true
+        const note = options && options.note ? options.note : null
         return h('label', { className: 'dsh-orb-set-voice-field is-wide' },
           h('span', { className: 'dsh-orb-set-voice-field-label' }, label),
+          note,
           h('input', {
             className: `dsh-orb-set-voice-input${missing.length ? ' is-locked' : ''}`,
             type: secret ? 'password' : 'text',
@@ -2043,7 +2051,18 @@ window.__ModuleLoader__.load({
             }),
           textInput(text.questionPrompt, 'questionPrompt', ttsLocks, text.questionPromptHint),
           backend === 'qwen'
-            ? textInput(text.qwenApiKey, 'qwenApiKey', [], String(shown('qwenApiKey') ?? '').trim() === '' ? text.qwenApiKeyHint : null, { secret: true })
+            ? textInput(text.qwenApiKey, 'qwenApiKey', [], String(shown('qwenApiKey') ?? '').trim() === '' ? text.qwenApiKeyHint : null, {
+              secret: true,
+              note: h('span', { className: 'dsh-orb-set-voice-field-hint' },
+                text.qwenApiKeyNote,
+                ' ',
+                h('a', {
+                  className: 'dsh-orb-set-voice-link',
+                  href: BAILIAN_API_KEY_URL,
+                  target: '_blank',
+                  rel: 'noopener noreferrer',
+                }, text.qwenApiKeyLink)),
+            })
             : null,
           backend === 'qwen' ? qwenVoiceField() : null),
         // Qwen has no local files; its footer (status + download) belongs to the local backend only.
@@ -2305,6 +2324,9 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-voice-field-value { flex: none; font-size: 11.5px; font-weight: 600; line-height: 1.4; padding: 1px 8px; border-radius: 999px; color: var(--dsw-alias-button-info-fill, #2f6fed); background: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 10%, transparent); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dsh-orb-set-voice-field-scale { display: flex; justify-content: space-between; gap: 8px; font-size: 10.5px; line-height: 1.2; color: color-mix(in srgb, currentColor 52%, transparent); font-variant-numeric: tabular-nums; }
 .dsh-orb-set-voice-field-hint { font-size: 11px; line-height: 1.5; color: color-mix(in srgb, currentColor 56%, transparent); }
+.dsh-orb-set-voice-link { color: var(--dsw-alias-button-info-fill, #2f6fed); text-decoration: none; font-weight: 500; }
+.dsh-orb-set-voice-link:hover { text-decoration: underline; }
+.dsh-orb-set-voice-link:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill, #2f6fed); outline-offset: 2px; border-radius: 4px; }
 .dsh-orb-set-voice-field-range { -webkit-appearance: none; appearance: none; width: 100%; height: 20px; margin: 0; padding: 0; background: transparent; cursor: pointer; }
 .dsh-orb-set-voice-field-range::-webkit-slider-runnable-track { height: 5px; border-radius: 999px; background: linear-gradient(90deg, var(--dsw-alias-button-info-fill, #2f6fed) 0 var(--dsh-orb-voice-fill, 0%), color-mix(in srgb, currentColor 13%, transparent) var(--dsh-orb-voice-fill, 0%) 100%); }
 .dsh-orb-set-voice-field-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; margin-top: -5.5px; border-radius: 50%; border: 2px solid var(--dsw-alias-button-info-fill, #2f6fed); background: var(--dsw-alias-bg-overlay, #fff); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22); transition: transform 120ms ease, box-shadow 120ms ease; }

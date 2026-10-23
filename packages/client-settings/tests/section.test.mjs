@@ -1356,7 +1356,7 @@ describe('settings section', () => {
     assert.ok(backend)
     const localOption = find(backend, (node) => node.props?.role === 'radio' && node.children?.includes('本地模型'))[0]
     assert.equal(localOption.props['aria-checked'], 'true')
-    assert.equal(find(view, (node) => node.props?.['aria-label'] === 'API Key').length, 0)
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '阿里云百炼 API Key').length, 0)
     assert.equal(find(view, (node) => node.props?.['aria-label'] === '语速').length, 1)
     assert.equal(find(view, (node) => node.props?.['aria-label'] === '音量').length, 1)
     assert.equal(find(ttsPanel(view), (node) => String(node.props?.className).includes('dsh-orb-set-voice-model-block')).length, 1, 'the local backend shows its model row')
@@ -1369,10 +1369,16 @@ describe('settings section', () => {
 
     view = page.render()
     assert.equal(find(view, (node) => node.props?.['aria-label'] === '音量').length, 1, 'the shared volume stays visible for qwen')
-    const key = find(view, (node) => node.props?.['aria-label'] === 'API Key')[0]
+    const key = find(view, (node) => node.props?.['aria-label'] === '阿里云百炼 API Key')[0]
     assert.ok(key)
     assert.equal(key.props.type, 'password')
     assert.equal(find(view, (node) => node.children?.includes('留空时不播报。')).length, 1)
+    assert.equal(find(view, (node) => node.children?.includes('云端 TTS 使用阿里云百炼的千问语音合成，不是 DeepSeek API。')).length, 1)
+    const bailian = find(view, (node) => node.type === 'a' && node.props?.href === 'https://bailian.console.aliyun.com/?apiKey=1#/api-key')[0]
+    assert.ok(bailian)
+    assert.equal(bailian.props.target, '_blank')
+    assert.equal(bailian.props.rel, 'noopener noreferrer')
+    assert.equal(bailian.children?.includes('去百炼控制台获取 API Key'), true)
     const voice = find(view, (node) => node.type === 'select' && node.props?.['aria-label'] === '音色')[0]
     assert.ok(voice)
     assert.equal(voice.props.value, 'Cherry')
@@ -1433,7 +1439,7 @@ describe('settings section', () => {
     view = page.render()
     await page.flush()
     view = page.render()
-    assert.equal(find(view, (node) => node.props?.['aria-label'] === 'API Key').length, 0)
+    assert.equal(find(view, (node) => node.props?.['aria-label'] === '阿里云百炼 API Key').length, 0)
     assert.equal(find(view, (node) => node.props?.['aria-label'] === '音色').length, 0)
     const localSpeed = find(view, (node) => node.props?.['aria-label'] === '语速')[0]
     assert.equal(String(localSpeed.props.min), '1')
