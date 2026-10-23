@@ -84,7 +84,43 @@ export function listenMode(input: ListenInput): ListenMode {
   return 'off'
 }
 
-/** 子进程要不要占着麦克风设备。提问卡在等时一律放开。 */
-export function holdsDevice(input: MicInput & { readonly questionOpen: boolean }): boolean {
-  return !input.questionOpen && needsMicrophone(input)
+export interface DeviceInput extends MicInput {
+  /** The panel is pinned. Hover-open does not count. */
+  readonly pinned: boolean
+  /** The floating-ball agent is in a turn. */
+  readonly agentBusy: boolean
+  /** A question card is waiting for a click. */
+  readonly questionOpen: boolean
+  /** queue.bodyBusy */
+  readonly bodyBusy: boolean
+  /** commandEnabled, and the interject keyword is not empty. */
+  readonly interjectEnabled: boolean
+  /** This capture of the child process includes echo cancellation. */
+  readonly echoCancel: boolean
+}
+
+/**
+ * 子进程要不要占着麦克风设备。
+ *
+ * 光看“哪一列开着”不够：唤醒只在收起时可达，语音输入只在固定时可达。只开唤醒
+ * 却把球固定，或只开语音输入却把球收起，当前固定状态没有任何解码器能跑，继续占
+ * 着设备只会让系统麦克风指示白亮。提问卡仍然一律放开。
+ *
+ * 执行中和播报中不看固定状态：只要插话这一列能跑（有语音输入、有关键词，
+ * 且正文播报时带回声消除），设备就要留着。回复、停止这类短暂的 off 不单独处理：
+ * 按同一套“当前固定状态有没有可达的列”判断，能恢复的列在就保持，不能恢复的就放开。
+ */
+export function holdsDevice(input: DeviceInput): boolean {
+  if (input.questionOpen) return false
+  const wakeReady = input.wakeEnabled && hasWakeWord(input.wakeWords) && input.wakeModel
+  const commandReady = input.commandEnabled && input.asrModel
+  if (!wakeReady && !commandReady) return false
+  if (input.agentBusy || input.bodyBusy) {
+    if (!commandReady || !input.interjectEnabled) return false
+    // 没有回声消除时，正文播报期间不听，设备也不必占着。
+    if (input.bodyBusy && !input.echoCancel) return false
+    return true
+  }
+  // 收起时只有唤醒可达，固定时只有语音输入可达。
+  return input.pinned ? commandReady : wakeReady
 }

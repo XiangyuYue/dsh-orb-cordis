@@ -215,19 +215,45 @@ export function listenMode(input: ListenInput): ListenMode {
   return 'off'
 }
 
+export interface DeviceInput extends MicInput {
+  readonly pinned: boolean
+  readonly agentBusy: boolean
+  readonly questionOpen: boolean
+  readonly bodyBusy: boolean
+  readonly interjectEnabled: boolean
+  readonly echoCancel: boolean
+}
+
 /** 子进程要不要占着麦克风设备。提问卡在等时一律放开。 */
-export function holdsDevice(input: MicInput & { readonly questionOpen: boolean }): boolean {
-  return !input.questionOpen && needsMicrophone(input)
+export function holdsDevice(input: DeviceInput): boolean {
+  if (input.questionOpen) return false
+  const wakeReady = input.wakeEnabled && hasWakeWord(input.wakeWords) && input.wakeModel
+  const commandReady = input.commandEnabled && input.asrModel
+  if (!wakeReady && !commandReady) return false
+  if (input.agentBusy || input.bodyBusy) {
+    if (!commandReady || !input.interjectEnabled) return false
+    if (input.bodyBusy && !input.echoCancel) return false
+    return true
+  }
+  // 收起时只有唤醒可达，固定时只有语音输入可达。
+  return input.pinned ? commandReady : wakeReady
 }
 ```
+
+`device` 不再只看“哪一列开着”，而是看**当前固定状态下哪一列真的可达**：
+
+- 只开唤醒、把球固定：`wake` 不可达，`device` 为假，麦克风释放。
+- 只开语音输入、把球收起：`command` 不可达，`device` 为假，麦克风释放。
+- 执行中、播报中不看固定状态：插话列能跑就占麦。
+- 回复、停止这类短暂的 `off` 不单独处理：当前固定状态下还有能恢复的列就保持，没有就释放，避免反复开关设备。
 
 各行和需求的对应：
 
 - 第 1 节表格第三行不看 `pinned`：执行中单击球取消固定后，仍然是 `interject`。
-- 插话关键词留空、语音输入关掉或 ASR 不在时，`interjectEnabled` 为假，执行和播报期间回到 `off`，麦克风设备按 06 的 `needsMicrophone` 规则保留或释放（需求第 1 节末段「按 05 关掉」）。
+- 插话关键词留空、语音输入关掉或 ASR 不在时，`interjectEnabled` 为假，执行和播报期间回到 `off`，设备按上面的可达规则释放。
 - 唤醒回复语和退下回复语在播时为 `off`（需求第 1 节、第 5 节）。
 - 提问卡在等时为 `off`，并且 `holdsDevice` 为假（需求第 4 节）。
-- 停止或退下之后、执行真正停下之前为 `off`（0.1 节最后一行）。这段时间通常不到 1 秒；麦克风设备不放开。
+- 停止或退下之后、执行真正停下之前为 `off`（0.1 节最后一行）。这段时间通常不到 1 秒；当前固定状态下有可达列时设备保持，没有则释放。
 - 没有回声消除时（采集程序缺失、启动失败，或这台机器上 VPIO 不可用），正文播报期间为 `off`。这偏离了需求第 1 节，是有意的降级：没有回声消除时，自己的播报会被转写成「用户的话」，违反需求第 11 节。第 15 节记下了这一条。
 
 ### 3.3 验收
@@ -244,9 +270,11 @@ export function holdsDevice(input: MicInput & { readonly questionOpen: boolean }
 | 执行中，语音输入关掉 | `off` |
 | 空闲，收尾在播，`echoCancel: false` | `off` |
 | 执行中，没有播报，`echoCancel: false` | `interject` |
+| 只开唤醒、固定 | `off`，`holdsDevice` 为假 |
+| 只开语音输入、收起 | `off`，`holdsDevice` 为假 |
 | 提问卡在等（不论其他） | `off`，`holdsDevice` 为假 |
 | 「我在」或「好的，再见」在播 | `off` |
-| 执行中，`stopping: true` | `off`，`holdsDevice` 为真 |
+| 执行中，`stopping: true` | `off`，`holdsDevice` 按当前固定状态的可达列 |
 | 麦克风没开 | `off` |
 
 `queue.test.ts` 补上：途中句、未归类句、收尾在播或排队时 `bodyBusy` 为真；本地短句在播时 `localBusy` 为真、`bodyBusy` 为假；提问提示语在播时两者都为假。

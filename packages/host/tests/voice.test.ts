@@ -199,14 +199,20 @@ describe('voice controller with a script child', () => {
 
       settings.commandEnabled = false
       voice.applySettings()
+      mark = listens(trace).length
       voice.setPinned(true)
-      mark = listens(trace).length
-      voice.questionOpened()
       await lastAfter(mark, (item) => item.mode === 'off' && item.device === false)
-      mark = listens(trace).length
-      voice.questionClosed()
-      await lastAfter(mark, (item) => item.mode === 'off' && item.device === true)
       assert.equal(voice.listenMode(), 'off')
+      assert.equal(voice.microphone(), null)
+
+      // Nothing to restore after the card: the command column is off and wake cannot
+      // run while pinned, so the device stays released.
+      voice.questionOpened()
+      assert.equal(voice.listenMode(), 'off')
+      assert.equal(voice.microphone(), null)
+      voice.questionClosed()
+      assert.equal(voice.listenMode(), 'off')
+      assert.equal(listens(trace).at(-1)?.device, false)
 
       asr = false
       settings.commandEnabled = true
@@ -433,6 +439,79 @@ describe('voice lifecycle', () => {
     voice.start()
     child.emit({ type: 'mic', open: true })
     assert.equal(voice.microphone(), null)
+  })
+
+  it('releases the device when voice input alone is enabled and the ball is collapsed', () => {
+    const settings = settingsWith({ wakeEnabled: false })
+    const child = fakeChild()
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send() {},
+      open: () => child.link,
+    })
+    const lastListen = () => child.sent.filter((item) => item.type === 'listen').at(-1) as { mode: string, device: boolean }
+    voice.start()
+    child.emit({ type: 'mic', open: true })
+    assert.equal(voice.listenMode(), 'off', 'voice input only runs while pinned')
+    assert.equal(lastListen().mode, 'off')
+    assert.equal(lastListen().device, false, 'a collapsed command-only ball must release the microphone')
+    assert.equal(voice.microphone(), null, 'an intentionally released device is not a failure')
+
+    voice.setPinned(true)
+    assert.equal(voice.listenMode(), 'command')
+    assert.equal(lastListen().mode, 'command')
+    assert.equal(lastListen().device, true)
+    assert.equal(voice.microphone(), true)
+
+    voice.setPinned(false)
+    assert.equal(voice.listenMode(), 'off')
+    assert.equal(lastListen().mode, 'off')
+    assert.equal(lastListen().device, false)
+    assert.equal(voice.microphone(), null)
+
+    // A turn still needs the device for interjection, even while collapsed.
+    voice.beginTurn()
+    assert.equal(voice.listenMode(), 'interject')
+    assert.equal(lastListen().mode, 'interject')
+    assert.equal(lastListen().device, true)
+    voice.endTurn()
+    assert.equal(voice.listenMode(), 'off')
+    assert.equal(lastListen().device, false)
+    voice.close()
+  })
+
+  it('releases the device when wake alone is enabled and the ball is pinned', () => {
+    const settings = settingsWith({ commandEnabled: false })
+    const child = fakeChild()
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send() {},
+      open: () => child.link,
+    })
+    const lastListen = () => child.sent.filter((item) => item.type === 'listen').at(-1) as { mode: string, device: boolean }
+    voice.start()
+    child.emit({ type: 'mic', open: true })
+    assert.equal(voice.listenMode(), 'wake')
+    assert.equal(lastListen().mode, 'wake')
+    assert.equal(lastListen().device, true)
+    assert.equal(voice.microphone(), true)
+
+    voice.setPinned(true)
+    assert.equal(voice.listenMode(), 'off', 'wake only runs while collapsed')
+    assert.equal(lastListen().mode, 'off')
+    assert.equal(lastListen().device, false, 'a pinned wake-only ball must release the microphone')
+    assert.equal(voice.microphone(), null)
+
+    voice.setPinned(false)
+    assert.equal(voice.listenMode(), 'wake')
+    assert.equal(lastListen().mode, 'wake')
+    assert.equal(lastListen().device, true)
+    assert.equal(voice.microphone(), true)
+    voice.close()
   })
 
   it('treats an empty wake list as no wake word', () => {

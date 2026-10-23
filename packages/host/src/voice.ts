@@ -13,7 +13,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { isDismiss, isInterject, normalizeUtterance } from '@dsh-orb/voice/dismiss'
 import { createIdle, stepIdle, type IdleClock } from '@dsh-orb/voice/idle'
-import { holdsDevice, listenMode, needsMicrophone, transcribing, type ListenMode } from '@dsh-orb/voice/listen'
+import { holdsDevice, listenMode, transcribing, type ListenMode } from '@dsh-orb/voice/listen'
 import {
   bodyBusy,
   createQueue,
@@ -188,25 +188,33 @@ export class VoiceController {
   }
 
   /**
-   * Null until the child reports, or while no listening column needs the device.
-   * False means a column is enabled but the microphone could not be opened.
+   * Null until the child reports, or while the current pin/turn state does not need
+   * an open microphone. False means the device is needed but could not be opened.
    */
   microphone(): boolean | null {
-    if (!this.listeningEnabled()) return null
+    if (!this.deviceWanted()) return null
     if (!this.live || !this.micKnown) return null
     return this.micOpen
   }
 
-  /** Whether wake or voice input can actually run; TTS does not use the microphone. */
-  private listeningEnabled(): boolean {
-    const settings = this.settings()
-    const presence = this.options.presence()
-    return needsMicrophone({
+  /**
+   * Whether the current pin/turn state has a column that can actually listen.
+   * A wake-only ball is released while pinned, and a command-only ball while
+   * collapsed, so the system does not show a microphone no decoder reads.
+   */
+  private deviceWanted(settings = this.settings(), presence = this.options.presence()): boolean {
+    return holdsDevice({
       wakeEnabled: settings.wakeEnabled,
       wakeWords: settings.wakeWords,
       wakeModel: presence.wake,
       commandEnabled: settings.commandEnabled,
       asrModel: presence.asr,
+      pinned: this.pinned,
+      agentBusy: this.agentBusy,
+      questionOpen: this.questionOpen,
+      bodyBusy: bodyBusy(this.queue),
+      interjectEnabled: this.interjectEnabled(),
+      echoCancel: this.echoCancel,
     })
   }
 
@@ -714,14 +722,7 @@ export class VoiceController {
     // the child reports the edge closed. A hard close (question, reply, stop, mic, setting)
     // still switches immediately because canFinish is false.
     if ((this.mode === 'command' || this.mode === 'interject') && !transcribing(mode) && this.speechOpen && this.canFinish(this.mode)) return
-    const device = holdsDevice({
-      wakeEnabled: settings.wakeEnabled,
-      wakeWords: settings.wakeWords,
-      wakeModel: presence.wake,
-      commandEnabled: settings.commandEnabled,
-      asrModel: presence.asr,
-      questionOpen: this.questionOpen,
-    })
+    const device = this.deviceWanted(settings, presence)
     if (!force && mode === this.mode && device === this.device) return
     if (transcribing(this.mode) && !transcribing(mode)) this.speechOpen = false
     const entering = transcribing(mode) && !transcribing(this.mode)

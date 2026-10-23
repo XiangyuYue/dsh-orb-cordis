@@ -25,6 +25,15 @@ const mic = {
   questionOpen: false,
 }
 
+const device = {
+  ...mic,
+  pinned: false,
+  agentBusy: false,
+  bodyBusy: false,
+  interjectEnabled: true,
+  echoCancel: true,
+}
+
 function mode(patch: Partial<ListenInput>): ListenMode {
   return listenMode({ ...ready, ...patch })
 }
@@ -42,10 +51,10 @@ describe('listen mode', () => {
     assert.equal(mode({ bodyBusy: true, echoCancel: false }), 'off')
     assert.equal(mode({ agentBusy: true, echoCancel: false }), 'interject', 'execution without body audio still listens')
     assert.equal(mode({ agentBusy: true, bodyBusy: true, questionOpen: true, localBusy: true }), 'off')
-    assert.equal(holdsDevice({ ...mic, questionOpen: true }), false)
+    assert.equal(holdsDevice({ ...device, questionOpen: true }), false)
     assert.equal(mode({ localBusy: true }), 'off', 'a wake or dismiss reply is playing')
     assert.equal(mode({ agentBusy: true, stopping: true }), 'off')
-    assert.equal(holdsDevice({ ...mic, questionOpen: false }), true, 'stopping does not release the microphone')
+    assert.equal(holdsDevice(device), true, 'stopping does not release the microphone')
     assert.equal(mode({ micOpen: false }), 'off')
     assert.equal(mode({ pinned: true, micOpen: false }), 'off')
   })
@@ -81,8 +90,25 @@ describe('listen mode', () => {
     assert.equal(needsMicrophone({ ...base, commandEnabled: false, wakeWords: [] }), false)
     assert.equal(needsMicrophone({ ...base, commandEnabled: false, wakeModel: false }), false)
     assert.equal(needsMicrophone({ ...base, wakeEnabled: false, asrModel: false }), false)
-    assert.equal(holdsDevice({ ...base, questionOpen: false }), true)
-    assert.equal(holdsDevice({ ...base, questionOpen: true }), false)
-    assert.equal(holdsDevice({ ...base, wakeEnabled: false, commandEnabled: false, questionOpen: false }), false)
+    assert.equal(holdsDevice(device), true, 'both columns on, collapsed')
+    assert.equal(holdsDevice({ ...device, pinned: true }), true, 'both columns on, pinned')
+    assert.equal(holdsDevice({ ...device, questionOpen: true }), false)
+    assert.equal(holdsDevice({ ...device, wakeEnabled: false, commandEnabled: false }), false)
+  })
+
+  it('releases the device when the pin state cannot reach the only enabled column', () => {
+    assert.equal(holdsDevice({ ...device, wakeEnabled: false }), false, 'voice input alone is released while collapsed')
+    assert.equal(holdsDevice({ ...device, wakeEnabled: false, pinned: true }), true, 'voice input alone holds the mic while pinned')
+    assert.equal(holdsDevice({ ...device, commandEnabled: false }), true, 'wake alone holds the mic while collapsed')
+    assert.equal(holdsDevice({ ...device, commandEnabled: false, pinned: true }), false, 'wake alone is released while pinned')
+  })
+
+  it('keeps the device for interjection and drops it when no decoder can run', () => {
+    assert.equal(holdsDevice({ ...device, agentBusy: true }), true, 'a busy turn keeps listening for interjection even collapsed')
+    assert.equal(holdsDevice({ ...device, agentBusy: true, wakeEnabled: false }), true, 'command alone still holds during a turn')
+    assert.equal(holdsDevice({ ...device, bodyBusy: true }), true, 'body audio with echo cancellation keeps listening')
+    assert.equal(holdsDevice({ ...device, bodyBusy: true, echoCancel: false }), false, 'no echo cancellation means no body-audio listening')
+    assert.equal(holdsDevice({ ...device, agentBusy: true, interjectEnabled: false }), false, 'no interject keyword means no listening')
+    assert.equal(holdsDevice({ ...device, agentBusy: true, commandEnabled: false }), false, 'wake cannot interject')
   })
 })

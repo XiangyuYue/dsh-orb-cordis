@@ -352,3 +352,19 @@ Windows 上的实测反馈:在浏览器里点球、输入、回车提交后,**Ag
 - **验证:** `pnpm build`;`node --test packages/bundle/tests/install.test.mjs` 4/4;host+voice 122/122;`pnpm typecheck` 通过。
 - **装机:** 备份 `~/.dsh/profiles/desktop/node_modules/dsh-orb/dist/voice` 后,把新 `packages/bundle/dist/voice/` 同步进 profile(含 `prebuilds`),然后只 `kill` 掉语音子进程(host 会在 1 秒内重新 fork),**不必重启应用**。debug 日志确认新子进程为 `mic open source=native aec=true`,且 `dsh-orb-voice-capture` 作为子进程 PID 存在。此后 `echoCancel` 为真,正文播放期间听法回到 `interject`,插话恢复。
 - **未做:** Windows 采集程序的 `.exe` 仍未入库;本次只修复 macOS 的装配遗漏。若在 Windows 上打包,`prebuilds/win32-x64` 需要先由 `build:native:win` 生成并一起提交。
+
+## 27. 收起后关唤醒、或固定后关语音输入,麦克风仍然亮着(2026-10-23)
+
+现象:只开语音输入、关掉唤醒后,球明明收起了,系统麦克风指示仍亮;只开唤醒、关掉语音输入后,球固定住,麦克风也仍然亮。必须把另一列也关掉才会释放。
+
+- **根因:听法和占麦是两套判断,占麦那套不看固定状态。** `listenMode()` 里唤醒只在 `!pinned` 时可达、语音输入只在 `pinned` 时可达;但 `holdsDevice()` 只判断“哪一列开着且模型齐全”,再加一个提问卡例外,不看 `pinned`,也不看当前 `mode`。于是:
+  - 唤醒关、语音输入开、球收起 → `mode: 'off'`(语音输入不可达),`device: true`(语音输入列还开着);
+  - 语音输入关、唤醒开、球固定 → `mode: 'off'`(唤醒不可达),`device: true`(唤醒列还开着)。
+  子进程只按 `device` 开关采集(`micWanted()` / `syncMic()`),`mode: 'off'` 只是不把音频喂给 KWS/VAD,并不会关掉采集流,所以麦克风指示一直亮。
+- **修法:** `holdsDevice()` 改成 `DeviceInput`,把 `pinned`、`agentBusy`、`bodyBusy`、`interjectEnabled`、`echoCancel` 一起纳入判断:
+  - 提问卡 → 释放;
+  - 执行中/播报中 → 只要插话列能跑就占麦(与固定状态无关);
+  - 其他 → 收起时看唤醒列,固定时看语音输入列。
+  回复/停止这类短暂的 `off` 不单独开洞:当前固定状态下还有可达列就保持,没有就释放,避免反复开关采集设备。Host 的 `pushListen()` 和 `microphone()` 共用新的 `deviceWanted()`,所以主动释放时 `microphone()` 返回 `null`(不误报“麦克风不可用”),只有设备该开却没开时才返回 `false`。
+- **测试:** `listen.test.ts` 新增可达列/插话两组断言;`voice.test.ts` 新增两个完整场景(关唤醒收起、关语音输入固定)并修正提问卡用例里旧的“固定+仅唤醒仍占麦”断言。`pnpm typecheck` / `pnpm test`(511 例,509 过 2 跳过;computer-use 322 过)/ `pnpm build` 全绿。
+- **装机:** 改的是 Host 判断,只重启语音子进程不够,必须重启 DeepSeek Harness 才生效;`dist/host` 与 `dist/voice` 已同步进 desktop profile。
