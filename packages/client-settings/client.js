@@ -46,7 +46,8 @@ window.__ModuleLoader__.load({
       backgroundTitle: '后台 Agent',
       backgroundDescription: '新建后台 code_agent 会话使用的模型与思考强度。',
       emptyCatalog: '暂无可用模型。',
-      defaultEffort: '默认',
+      modelLabel: '模型',
+      reasoningLabel: '思考强度',
       millifractionTitle: '千分比坐标',
       millifractionDescription: '新建对话使用截图的 0–1000 比例。关闭后使用已附加图片的像素。更改此项会新建对话。',
       millifractionToggle: '使用千分比坐标',
@@ -261,7 +262,8 @@ window.__ModuleLoader__.load({
       backgroundTitle: 'Background Agent',
       backgroundDescription: 'Model and reasoning effort for new background code_agent sessions.',
       emptyCatalog: 'No models available.',
-      defaultEffort: 'Default',
+      modelLabel: 'Model',
+      reasoningLabel: 'Reasoning effort',
       millifractionTitle: 'Millifraction coordinates',
       millifractionDescription: 'New chats use 0–1000 fractions of the screenshot. Turn off to use pixels of the attached image. Changing this creates a new conversation.',
       millifractionToggle: 'Use millifraction coordinates',
@@ -526,6 +528,11 @@ window.__ModuleLoader__.load({
       })
     }
 
+    /**
+     * Model and reasoning effort as two labelled fields. The page uses the same field
+     * vocabulary as the voice panels, so a picker reads as one value among settings
+     * rather than as a bare dropdown pinned to the card's edge.
+     */
     function ModelPicker(props) {
       const text = copy()
       const groups = props.catalog && props.catalog.groups ? props.catalog.groups : []
@@ -544,27 +551,35 @@ window.__ModuleLoader__.load({
           }, model.name))))
       }
       const efforts = known && known.reasoning ? known.reasoning.efforts || [] : []
-      return h('div', { className: 'dsh-orb-set-pickers' },
-        h('select', {
-          'aria-label': props.label,
-          disabled: props.disabled || (options.length === 0),
-          value: options.length === 0 ? '' : value,
-          onChange: (event) => {
-            const [provider, model] = String(event.target.value).split('\u001f')
-            if (!provider || !model) return
-            const next = findModel(props.catalog, { provider, model })
-            const effort = next && next.reasoning ? next.reasoning.defaultEffort : undefined
-            props.onSelect(effort ? { provider, model, reasoningEffort: effort } : { provider, model })
-          },
-        }, options.length === 0 ? h('option', { value: '' }, text.emptyCatalog) : options),
-        efforts.length === 0 ? null : h('select', {
-          'aria-label': text.defaultEffort,
-          disabled: props.disabled,
-          value: current.reasoningEffort || known.reasoning.defaultEffort || efforts[0].id,
-          onChange: (event) => {
-            props.onSelect({ provider: current.provider, model: current.model, reasoningEffort: event.target.value })
-          },
-        }, efforts.map((effort) => h('option', { key: effort.id, value: effort.id }, effort.name || effort.id))))
+      return h('div', { className: 'dsh-orb-set-model-fields' },
+        h('label', { className: 'dsh-orb-set-field' },
+          h('span', { className: 'dsh-orb-set-field-label' }, text.modelLabel),
+          h('span', { className: 'dsh-orb-set-select-wrap' },
+            h('select', {
+              className: 'dsh-orb-set-input',
+              'aria-label': props.label,
+              disabled: props.disabled || (options.length === 0),
+              value: options.length === 0 ? '' : value,
+              onChange: (event) => {
+                const [provider, model] = String(event.target.value).split('\u001f')
+                if (!provider || !model) return
+                const next = findModel(props.catalog, { provider, model })
+                const effort = next && next.reasoning ? next.reasoning.defaultEffort : undefined
+                props.onSelect(effort ? { provider, model, reasoningEffort: effort } : { provider, model })
+              },
+            }, options.length === 0 ? h('option', { value: '' }, text.emptyCatalog) : options))),
+        efforts.length === 0 ? null : h('label', { className: 'dsh-orb-set-field' },
+          h('span', { className: 'dsh-orb-set-field-label' }, text.reasoningLabel),
+          h('span', { className: 'dsh-orb-set-select-wrap' },
+            h('select', {
+              className: 'dsh-orb-set-input',
+              'aria-label': text.reasoningLabel,
+              disabled: props.disabled,
+              value: current.reasoningEffort || known.reasoning.defaultEffort || efforts[0].id,
+              onChange: (event) => {
+                props.onSelect({ provider: current.provider, model: current.model, reasoningEffort: event.target.value })
+              },
+            }, efforts.map((effort) => h('option', { key: effort.id, value: effort.id }, effort.name || effort.id))))))
     }
 
     function statusText(text, state) {
@@ -769,8 +784,11 @@ window.__ModuleLoader__.load({
             ? text.unreadable
             : ''
       return h('div', { className: 'dsh-orb-set' },
-        h('h2', { className: 'dsh-orb-set-title' }, text.nav),
-        h('p', { className: 'dsh-orb-set-intro' }, text.intro),
+        h('header', { className: 'dsh-orb-set-hero' },
+          h('span', { className: 'dsh-orb-set-hero-icon', 'aria-hidden': 'true' }, orbIcon('orb')),
+          h('div', { className: 'dsh-orb-set-hero-text' },
+            h('h2', { className: 'dsh-orb-set-title' }, text.nav),
+            h('p', { className: 'dsh-orb-set-intro' }, text.intro))),
         state.status === 'error' && state.error
           ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, `${text.saveError} ${state.error}`)
           : null,
@@ -782,91 +800,137 @@ window.__ModuleLoader__.load({
         // Outside the fieldset: an update is worth offering even where the ball itself is off.
         updateCard(text, snap, mutate),
         h('fieldset', { className: 'dsh-orb-set-fields', disabled },
-          card(text.ball, text.ballDescription, h(Toggle, {
-            checked: snap.ballEnabled === true,
-            label: text.ball,
-            disabled,
-            onChange: (enabled) => { void mutate('/.dsh-orb/ball', { enabled }) },
-          })),
-          h('section', { className: 'dsh-orb-set-card' },
-            h('h3', null, text.avatarTitle),
-            h('p', null, text.avatarDescription.replaceAll('{limit}', AVATAR_MAX_MB)),
-            h('div', { className: 'dsh-orb-set-avatar-row' },
-              h('img', { className: 'dsh-orb-set-avatar', src: snap.avatarUrl, alt: text.avatarAlt }),
-              h('div', { className: 'dsh-orb-set-actions' },
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-orb-set-button',
-                  disabled,
-                  onClick: () => {
-                    const input = document.createElement('input')
-                    input.type = 'file'
-                    input.accept = 'image/gif,image/png,image/webp,.gif,.png,.webp'
-                    input.onchange = () => {
-                      const file = input.files && input.files[0]
-                      if (!file) return
-                      if (file.size > AVATAR_MAX_BYTES) {
-                        setState((prev) => ({ ...prev, avatarError: 'too-large', avatarSize: file.size }))
-                        return
-                      }
-                      // A failed read used to vanish into the void: no request, no message,
-                      // nothing on the ball. Say so instead.
-                      void file.arrayBuffer().then(
-                        (bytes) => mutate('/.dsh-orb/avatar', bytes),
-                        () => { setState((prev) => ({ ...prev, avatarError: 'unreadable', avatarSize: 0 })) },
-                      )
-                    }
-                    input.click()
-                  },
-                }, text.chooseImage),
-                h('button', {
-                  type: 'button',
-                  className: 'dsh-orb-set-button dsh-orb-set-ghost',
-                  disabled,
-                  onClick: () => { void mutate('/.dsh-orb/avatar/restore', {}) },
-                }, text.restoreDefault))),
-            avatarMessage ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, avatarMessage) : null,
-            presetGallery(text, snap, disabled, mutate)),
-          card(text.overlayTitle, text.overlayDescription, h(ModelPicker, {
-            label: text.overlayTitle,
-            catalog: state.catalog,
-            current: snap.overlay,
-            disabled,
-            onSelect: (selection) => { void mutate('/.dsh-orb/overlay-model', selection) },
-          })),
-          card(text.backgroundTitle, text.backgroundDescription, h(ModelPicker, {
-            label: text.backgroundTitle,
-            catalog: state.catalog,
-            current: snap.background,
-            disabled,
-            onSelect: (selection) => { void mutate('/.dsh-orb/background-model', selection) },
-          })),
+          card({
+            icon: 'orb',
+            title: text.ball,
+            description: text.ballDescription,
+            control: toggleHead(text, snap.ballEnabled === true, text.ball, disabled,
+              (enabled) => { void mutate('/.dsh-orb/ball', { enabled }) }),
+          }),
+          avatarCard(text, snap, disabled, mutate, avatarMessage, (next) => setState((prev) => ({ ...prev, ...next }))),
+          card({
+            icon: 'agent',
+            title: text.overlayTitle,
+            description: text.overlayDescription,
+            body: h('div', { className: 'dsh-orb-set-panel' }, h(ModelPicker, {
+              label: text.overlayTitle,
+              catalog: state.catalog,
+              current: snap.overlay,
+              disabled,
+              onSelect: (selection) => { void mutate('/.dsh-orb/overlay-model', selection) },
+            })),
+          }),
+          card({
+            icon: 'background',
+            title: text.backgroundTitle,
+            description: text.backgroundDescription,
+            body: h('div', { className: 'dsh-orb-set-panel' }, h(ModelPicker, {
+              label: text.backgroundTitle,
+              catalog: state.catalog,
+              current: snap.background,
+              disabled,
+              onSelect: (selection) => { void mutate('/.dsh-orb/background-model', selection) },
+            })),
+          }),
           // Voice sits right after the two Agent cards: it is the other per-session choice
           // people come here to make, not a trailing detail of the coordinate and frame rows.
           h(VoiceCard, { text, snap, disabled, mutate }),
-          card(text.millifractionTitle, text.millifractionDescription, h(Toggle, {
-            checked: snap.millifractionEnabled === true,
-            label: text.millifractionToggle,
-            disabled,
-            onChange: (enabled) => {
-              if (enabled === snap.millifractionEnabled) return
-              if (!window.confirm(text.millifractionConfirm)) return
-              void mutate('/.dsh-orb/millifraction', { enabled })
-            },
-          })),
-          card(text.frameTitle, text.frameDescription, h(Toggle, {
-            checked: snap.observationFrameEnabled !== false,
-            label: text.frameToggle,
-            disabled,
-            onChange: (enabled) => {
-              if (enabled === snap.observationFrameEnabled) return
-              void mutate('/.dsh-orb/observation-frame', { enabled })
-            },
-          })),
+          card({
+            icon: 'millifraction',
+            title: text.millifractionTitle,
+            description: text.millifractionDescription,
+            control: toggleHead(text, snap.millifractionEnabled === true, text.millifractionToggle, disabled,
+              (enabled) => {
+                if (enabled === snap.millifractionEnabled) return
+                if (!window.confirm(text.millifractionConfirm)) return
+                void mutate('/.dsh-orb/millifraction', { enabled })
+              }),
+          }),
+          card({
+            icon: 'frame',
+            title: text.frameTitle,
+            description: text.frameDescription,
+            control: toggleHead(text, snap.observationFrameEnabled !== false, text.frameToggle, disabled,
+              (enabled) => {
+                if (enabled === snap.observationFrameEnabled) return
+                void mutate('/.dsh-orb/observation-frame', { enabled })
+              }),
+          }),
           h(IdleCard, { text, snap, mutate }),
           snap.tcc && snap.tcc.applicable ? tccCard(text, snap, disabled, mutate) : null),
         h(WorkspaceCard, { text, snap, refreshSettings }),
         h(HistoryCard, { text, snap, mutate, refreshHistory }))
+    }
+
+    /** The shared card header: a tinted icon, a title with one line of explanation, an optional control. */
+    function cardHead(icon, title, description, control) {
+      return h('header', { className: 'dsh-orb-set-head' },
+        h('span', { className: 'dsh-orb-set-head-icon', 'aria-hidden': 'true' }, orbIcon(icon)),
+        h('div', { className: 'dsh-orb-set-head-text' },
+          h('h3', null, title),
+          description ? h('p', null, description) : null),
+        control || null)
+    }
+
+    /** A top-level switch with its state spelled out, exactly like the voice panels. */
+    function toggleHead(text, checked, label, disabled, onChange) {
+      return h('div', { className: 'dsh-orb-set-head-control' },
+        h('span', { className: 'dsh-orb-set-head-state' }, checked ? text.voiceOn : text.voiceOff),
+        h(Toggle, { checked, label, disabled, onChange }))
+    }
+
+    /**
+     * One settings card: icon head, then either a single control on the head line or a
+     * body below it. Modelled on the voice card so every row of this page reads alike.
+     */
+    function card(options) {
+      return h('section', { className: `dsh-orb-set-card${options.className ? ` ${options.className}` : ''}` },
+        cardHead(options.icon, options.title, options.description, options.control),
+        options.body ? h('div', { className: 'dsh-orb-set-card-body' }, options.body) : null)
+    }
+
+    /** The avatar picker: the current picture and its two actions, then the shipped GIFs. */
+    function avatarCard(text, snap, disabled, mutate, avatarMessage, onAvatarError) {
+      return h('section', { className: 'dsh-orb-set-card' },
+        cardHead('avatar', text.avatarTitle, text.avatarDescription.replaceAll('{limit}', AVATAR_MAX_MB)),
+        h('div', { className: 'dsh-orb-set-card-body' },
+          h('div', { className: 'dsh-orb-set-avatar-row' },
+            h('div', { className: 'dsh-orb-set-avatar-frame' },
+              h('img', { className: 'dsh-orb-set-avatar', src: snap.avatarUrl, alt: text.avatarAlt })),
+            h('div', { className: 'dsh-orb-set-actions' },
+              h('button', {
+                type: 'button',
+                className: 'dsh-orb-set-button dsh-orb-set-primary',
+                disabled,
+                onClick: () => {
+                  const input = document.createElement('input')
+                  input.type = 'file'
+                  input.accept = 'image/gif,image/png,image/webp,.gif,.png,.webp'
+                  input.onchange = () => {
+                    const file = input.files && input.files[0]
+                    if (!file) return
+                    if (file.size > AVATAR_MAX_BYTES) {
+                      onAvatarError({ avatarError: 'too-large', avatarSize: file.size })
+                      return
+                    }
+                    // A failed read used to vanish into the void: no request, no message,
+                    // nothing on the ball. Say so instead.
+                    void file.arrayBuffer().then(
+                      (bytes) => mutate('/.dsh-orb/avatar', bytes),
+                      () => { onAvatarError({ avatarError: 'unreadable', avatarSize: 0 }) },
+                    )
+                  }
+                  input.click()
+                },
+              }, text.chooseImage),
+              h('button', {
+                type: 'button',
+                className: 'dsh-orb-set-button dsh-orb-set-ghost',
+                disabled,
+                onClick: () => { void mutate('/.dsh-orb/avatar/restore', {}) },
+              }, text.restoreDefault))),
+          avatarMessage ? h('p', { className: 'dsh-orb-set-error dsh-orb-set-avatar-error', role: 'alert' }, avatarMessage) : null,
+          presetGallery(text, snap, disabled, mutate)))
     }
 
     /**
@@ -927,7 +991,7 @@ window.__ModuleLoader__.load({
       const control = update.available
         ? h('button', {
           type: 'button',
-          className: 'dsh-orb-set-button',
+          className: 'dsh-orb-set-button dsh-orb-set-primary',
           disabled: update.updating,
           onClick: () => { void mutate('/.dsh-orb/update/install', {}) },
         }, update.updating ? text.updating.replaceAll('{version}', update.latestVersion || installed) : text.updateNow)
@@ -940,26 +1004,32 @@ window.__ModuleLoader__.load({
       const allowBuilds = update.error === 'build-blocked' && Array.isArray(update.pendingBuilds) && update.pendingBuilds.length > 0
         ? h('button', {
           type: 'button',
-          className: 'dsh-orb-set-button',
+          className: 'dsh-orb-set-button dsh-orb-set-primary dsh-orb-set-update-builds',
           onClick: () => { void mutate('/.dsh-orb/update/install', { approvedBuilds: update.pendingBuilds }) },
         }, text.updateAllowBuilds)
         : null
-      return h('section', { className: 'dsh-orb-set-card' },
-        h('h3', null, text.updateTitle),
+      return h('section', { className: 'dsh-orb-set-card dsh-orb-set-update' },
+        cardHead('update',
+          text.updateTitle,
+          text.updateCurrent.replaceAll('{version}', installed),
+          h('div', { className: 'dsh-orb-set-head-control' }, control)),
         updateNotice(text, snap, update),
         allowBuilds,
-        h('div', { className: 'dsh-orb-set-row' },
-          h('div', null, h('p', null, text.updateCurrent.replaceAll('{version}', installed))),
-          control),
-        update.canUpdate ? null : h('p', { className: 'dsh-orb-set-banner', role: 'status' }, text.updateManual),
-        h('div', { className: 'dsh-orb-set-row' },
-          h('div', null, h('p', null, text.updateAutoDescription)),
-          h(Toggle, {
-            checked: update.autoCheck === true,
-            label: text.updateAuto,
-            disabled: false,
-            onChange: (enabled) => { void mutate('/.dsh-orb/update/auto', { enabled }) },
-          })))
+        h('div', { className: 'dsh-orb-set-card-body' },
+          h('div', { className: 'dsh-orb-set-panel' },
+            h('div', { className: 'dsh-orb-set-panel-row' },
+              h('div', { className: 'dsh-orb-set-panel-text' },
+                h('h4', null, text.updateAuto),
+                h('p', null, text.updateAutoDescription)),
+              h('div', { className: 'dsh-orb-set-panel-switch' },
+                h('span', { className: 'dsh-orb-set-panel-state' }, update.autoCheck === true ? text.voiceOn : text.voiceOff),
+                h(Toggle, {
+                  checked: update.autoCheck === true,
+                  label: text.updateAuto,
+                  disabled: false,
+                  onChange: (enabled) => { void mutate('/.dsh-orb/update/auto', { enabled }) },
+                })))),
+          update.canUpdate ? null : h('p', { className: 'dsh-orb-set-banner', role: 'status' }, text.updateManual)))
     }
 
     function updateNotice(text, snap, update) {
@@ -1113,37 +1183,41 @@ window.__ModuleLoader__.load({
               }, busy ? text.workspaceChanging : text.workspaceDialogConfirm))))
       }
 
-      return h('section', { className: 'dsh-orb-set-card' },
-        h('h3', null, text.workspaceTitle),
-        h('p', null, text.workspaceDescription),
-        h('div', { className: 'dsh-orb-set-row' },
-          h('p', { className: 'dsh-orb-set-muted dsh-orb-set-workspace-path' },
-            `${text.workspaceCurrent}${workspace.path}${workspace.custom ? `（${text.workspaceCustom}）` : `（${text.workspaceDefault}）`}`),
-          h('button', {
-            type: 'button',
-            className: 'dsh-orb-set-button dsh-orb-set-ghost',
-            disabled: busy || picking || !workspace.custom,
-            onClick: beginDefault,
-          }, text.workspaceUseDefault)),
-        h('div', { className: 'dsh-orb-set-row' },
-          h('button', {
-            type: 'button',
-            className: 'dsh-orb-set-button dsh-orb-set-ghost dsh-orb-set-pick',
-            title: text.workspacePick,
-            'aria-label': text.workspacePick,
-            disabled: busy || picking || dialog !== null,
-            onClick: () => { void pickDirectory() },
-          }, picking ? text.workspacePicking : text.workspacePick),
-          h('button', {
-            type: 'button',
-            className: 'dsh-orb-set-path',
-            title: text.workspacePick,
-            disabled: busy || picking || dialog !== null,
-            onClick: () => { void pickDirectory() },
-          }, workspace.path)),
-        error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
-        notice ? h('p', { className: 'dsh-orb-set-muted', role: 'status' }, notice) : null,
-        workspaceDialog())
+      return h('section', { className: 'dsh-orb-set-card dsh-orb-set-workspace' },
+        cardHead('folder', text.workspaceTitle, text.workspaceDescription),
+        h('div', { className: 'dsh-orb-set-card-body' },
+          h('div', { className: 'dsh-orb-set-panel dsh-orb-set-workspace-panel' },
+            h('div', { className: 'dsh-orb-set-workspace-top' },
+              h('p', { className: 'dsh-orb-set-muted dsh-orb-set-workspace-path' },
+                `${text.workspaceCurrent}${workspace.path}${workspace.custom ? `（${text.workspaceCustom}）` : `（${text.workspaceDefault}）`}`),
+              h('span', { className: `dsh-orb-set-badge${workspace.custom ? ' is-custom' : ''}` },
+                workspace.custom ? text.workspaceCustom : text.workspaceDefault)),
+            h('div', { className: 'dsh-orb-set-workspace-controls' },
+              h('button', {
+                type: 'button',
+                className: 'dsh-orb-set-path',
+                title: text.workspacePick,
+                disabled: busy || picking || dialog !== null,
+                onClick: () => { void pickDirectory() },
+              }, workspace.path),
+              h('div', { className: 'dsh-orb-set-actions' },
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-orb-set-button dsh-orb-set-ghost',
+                  disabled: busy || picking || !workspace.custom,
+                  onClick: beginDefault,
+                }, text.workspaceUseDefault),
+                h('button', {
+                  type: 'button',
+                  className: 'dsh-orb-set-button dsh-orb-set-primary dsh-orb-set-pick',
+                  title: text.workspacePick,
+                  'aria-label': text.workspacePick,
+                  disabled: busy || picking || dialog !== null,
+                  onClick: () => { void pickDirectory() },
+                }, picking ? text.workspacePicking : text.workspacePick))),
+            error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
+            notice ? h('p', { className: 'dsh-orb-set-muted', role: 'status' }, notice) : null),
+          workspaceDialog()))
     }
 
     /** Retention choices shared with the Host's accepted values. */
@@ -1187,10 +1261,10 @@ window.__ModuleLoader__.load({
       }, [dialog, current])
       if (!history) return null
       if (history.available === false) {
-        return h('section', { className: 'dsh-orb-set-card' },
-          h('h3', null, text.historyTitle),
-          h('p', null, text.historyDescription),
-          h('p', { className: 'dsh-orb-set-banner', role: 'status' }, text.historyUnavailable))
+        return h('section', { className: 'dsh-orb-set-card dsh-orb-set-history' },
+          cardHead('history', text.historyTitle, text.historyDescription),
+          h('div', { className: 'dsh-orb-set-card-body' },
+            h('p', { className: 'dsh-orb-set-banner', role: 'status' }, text.historyUnavailable)))
       }
       const cleaning = history.cleaning === true
       const pending = busy || cleaning || dialog !== null
@@ -1350,31 +1424,34 @@ window.__ModuleLoader__.load({
               dialog.error ? retry : confirm)))
       }
 
-      return h('section', { className: 'dsh-orb-set-card' },
-        h('h3', null, text.historyTitle),
-        h('p', null, text.historyDescription),
-        h('div', { className: 'dsh-orb-set-row' },
-          h('label', { className: 'dsh-orb-set-label' },
-            h('span', null, text.historyRetention),
-            h('select', {
-              className: 'dsh-orb-set-select',
-              'aria-label': text.historyRetention,
-              value: choice,
-              disabled: pending,
-              onChange: (event) => { void choose(Number(event.target.value)) },
-            },
-              HISTORY_RETENTION_DAYS.map((days) => h('option', { key: days, value: String(days) },
-                days === 0 ? text.historyForever : text.historyDaysOption.replaceAll('{days}', String(days))))))),
-        h('p', { className: 'dsh-orb-set-muted' }, text.historyWorkspace.replaceAll('{path}', String(history.workspacePath || ''))),
-        h('p', { className: 'dsh-orb-set-muted' }, text.historyRestoreHint),
-        error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
-        cleaning ? h('p', { className: 'dsh-orb-set-banner', role: 'status' }, history.phase === 'restoring' ? text.historyRestoring : text.historyCleaning) : null,
-        history.error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, `${text.historyFailed}${history.error}`) : null,
-        history.warning === 'images-kept'
-          ? h('p', { className: 'dsh-orb-set-muted' }, text.historyWarning.replaceAll('{count}', String(history.warningSessions || 0)))
-          : null,
-        history.lastCleanupAt ? h('p', { className: 'dsh-orb-set-muted' }, text.historyLast.replaceAll('{sessions}', String(history.lastDeletedSessions))) : null,
-        retentionDialog())
+      return h('section', { className: 'dsh-orb-set-card dsh-orb-set-history' },
+        cardHead('history', text.historyTitle, text.historyDescription),
+        h('div', { className: 'dsh-orb-set-card-body' },
+          h('div', { className: 'dsh-orb-set-panel' },
+            h('div', { className: 'dsh-orb-set-history-row' },
+              h('div', { className: 'dsh-orb-set-panel-text' },
+                h('h4', null, text.historyRetention),
+                h('p', null, text.historyWorkspace.replaceAll('{path}', String(history.workspacePath || '')))),
+              h('label', { className: 'dsh-orb-set-field dsh-orb-set-history-field' },
+                h('span', { className: 'dsh-orb-set-select-wrap' },
+                  h('select', {
+                    className: 'dsh-orb-set-input',
+                    'aria-label': text.historyRetention,
+                    value: choice,
+                    disabled: pending,
+                    onChange: (event) => { void choose(Number(event.target.value)) },
+                  },
+                    HISTORY_RETENTION_DAYS.map((days) => h('option', { key: days, value: String(days) },
+                      days === 0 ? text.historyForever : text.historyDaysOption.replaceAll('{days}', String(days))))))))),
+          h('p', { className: 'dsh-orb-set-history-hint' }, text.historyRestoreHint),
+          error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, error) : null,
+          cleaning ? h('p', { className: 'dsh-orb-set-banner', role: 'status' }, history.phase === 'restoring' ? text.historyRestoring : text.historyCleaning) : null,
+          history.error ? h('p', { className: 'dsh-orb-set-error', role: 'alert' }, `${text.historyFailed}${history.error}`) : null,
+          history.warning === 'images-kept'
+            ? h('p', { className: 'dsh-orb-set-muted' }, text.historyWarning.replaceAll('{count}', String(history.warningSessions || 0)))
+            : null,
+          history.lastCleanupAt ? h('p', { className: 'dsh-orb-set-history-last' }, text.historyLast.replaceAll('{sessions}', String(history.lastDeletedSessions))) : null,
+          retentionDialog()))
     }
 
     // Official sources and sizes. The host snapshot overrides these when it sends them.
@@ -1482,9 +1559,69 @@ window.__ModuleLoader__.load({
       return String(value).split(/\n/).map((line) => line.trim()).filter(Boolean)
     }
 
-    /** Inline line icons for the voice panels: they inherit the surrounding colour and size. */
-    function voiceIcon(name) {
+    /** Inline line icons for the settings page: they inherit the surrounding colour and size. */
+    function orbIcon(name) {
+      if (name === 'orb') {
+        // A ball, not a progress ring: the tinted body plus one highlight reads as an orb
+        // at both 20 px (the card head) and 26 px (the page head).
+        return h('svg', {
+          viewBox: '0 0 24 24',
+          width: 20,
+          height: 20,
+          fill: 'none',
+          'aria-hidden': 'true',
+          focusable: 'false',
+        },
+          h('circle', { cx: 12, cy: 12, r: 8.6, fill: 'currentColor', opacity: 0.12 }),
+          h('circle', { cx: 12, cy: 12, r: 8.6, stroke: 'currentColor', strokeWidth: 1.5 }),
+          h('ellipse', { cx: 9.3, cy: 8.3, rx: 2.5, ry: 1.45, fill: 'currentColor', opacity: 0.5, transform: 'rotate(-32 9.3 8.3)' }))
+      }
       const paths = {
+        update: [
+          'M20 12a8 8 0 1 1-2.34-5.66',
+          'M20 4.5V10h-5.5',
+        ],
+        avatar: [
+          'M4.5 4.5h15A1.5 1.5 0 0 1 21 6v12a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18V6a1.5 1.5 0 0 1 1.5-1.5Z',
+          'M8.6 10.4a1.7 1.7 0 1 0 0-3.4 1.7 1.7 0 0 0 0 3.4Z',
+          'M21 15.6l-4.7-4.5-8.8 8.4',
+        ],
+        agent: [
+          'M3.8 6.4a2 2 0 0 1 2-2h12.4a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5.8a2 2 0 0 1-2-2Z',
+          'M9 20h6',
+          'M12 16.4V20',
+          'M9.5 8.1 15 11.7l-2.6.8-.9 2.6-2-7Z',
+        ],
+        background: [
+          'M12 3.5 21 8l-9 4.5L3 8l9-4.5Z',
+          'M3 11.8 12 16.3l9-4.5',
+          'M3 15.6 12 20.1l9-4.5',
+        ],
+        millifraction: [
+          'M4 9V4h5',
+          'M15 4h5v5',
+          'M20 15v5h-5',
+          'M9 20H4v-5',
+          'M12 8.4v7.2',
+          'M8.4 12h7.2',
+        ],
+        frame: [
+          'M6.5 3.5v14a2 2 0 0 0 2 2h12',
+          'M3.5 6.5h14a2 2 0 0 1 2 2v12',
+        ],
+        shield: [
+          'M12 3.5 5 6.2v5.6c0 4.2 2.9 7.4 7 8.7 4.1-1.3 7-4.5 7-8.7V6.2L12 3.5Z',
+          'M9 12l2.2 2.2L15.4 10',
+        ],
+        folder: [
+          'M3.5 7.5a2 2 0 0 1 2-2h3.2l2 2.2h7.8a2 2 0 0 1 2 2v8.8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z',
+          'M3.5 10.6h17',
+        ],
+        history: [
+          'M4.5 12a7.5 7.5 0 1 0 2.2-5.3',
+          'M4.5 4.5v4h4',
+          'M12 8v4.2l2.8 1.7',
+        ],
         voice: [
           'M12 3.5a2.7 2.7 0 0 1 2.7 2.7v5.3a2.7 2.7 0 0 1-5.4 0V6.2A2.7 2.7 0 0 1 12 3.5Z',
           'M6.5 11.1v.5a5.5 5.5 0 0 0 11 0v-.5',
@@ -1524,7 +1661,7 @@ window.__ModuleLoader__.load({
           'M9.9 19.7h4.2',
         ],
       }
-      const lines = paths[name] || paths.voice
+      const lines = paths[name] || paths.orb
       return h('svg', {
         viewBox: '0 0 24 24',
         width: 20,
@@ -1902,9 +2039,9 @@ window.__ModuleLoader__.load({
       }
 
       function voicePanel(icon, title, description, control, body, footer) {
-        return h('section', { className: 'dsh-orb-set-voice-panel' },
+        return h('section', { key: icon, className: 'dsh-orb-set-voice-panel' },
           h('header', { className: 'dsh-orb-set-voice-panel-head' },
-            h('span', { className: 'dsh-orb-set-voice-panel-icon', 'aria-hidden': 'true' }, voiceIcon(icon)),
+            h('span', { className: 'dsh-orb-set-voice-panel-icon', 'aria-hidden': 'true' }, orbIcon(icon)),
             h('div', { className: 'dsh-orb-set-voice-panel-heading' },
               h('h4', null, title),
               h('p', null, description)),
@@ -2073,13 +2210,9 @@ window.__ModuleLoader__.load({
       const voiceOn = shown('voiceEnabled') === true
 
       return h('section', { className: 'dsh-orb-set-card dsh-orb-set-voice' },
-        h('div', { className: 'dsh-orb-set-voice-head' },
-          h('span', { className: 'dsh-orb-set-voice-head-icon', 'aria-hidden': 'true' }, voiceIcon('voice')),
-          h('div', { className: 'dsh-orb-set-voice-head-text' },
-            h('h3', null, text.voiceTitle),
-            h('p', null, voiceOn ? text.voiceIntro : text.voiceOffIntro)),
-          h('div', { className: 'dsh-orb-set-voice-head-control' },
-            h('span', { className: 'dsh-orb-set-voice-head-state' }, voiceOn ? text.voiceOn : text.voiceOff),
+        cardHead('voice', text.voiceTitle, voiceOn ? text.voiceIntro : text.voiceOffIntro,
+          h('div', { className: 'dsh-orb-set-head-control' },
+            h('span', { className: 'dsh-orb-set-head-state' }, voiceOn ? text.voiceOn : text.voiceOff),
             h(Toggle, {
               checked: voiceOn,
               label: text.voiceMasterToggle,
@@ -2090,8 +2223,8 @@ window.__ModuleLoader__.load({
               },
             }))),
         voiceOn ? [
-          snap.voiceMic === false ? h('div', { className: 'dsh-orb-set-voice-mic' },
-            h('span', { className: 'dsh-orb-set-voice-mic-icon', 'aria-hidden': 'true' }, voiceIcon('micOff')),
+          snap.voiceMic === false ? h('div', { key: 'mic', className: 'dsh-orb-set-voice-mic' },
+            h('span', { className: 'dsh-orb-set-voice-mic-icon', 'aria-hidden': 'true' }, orbIcon('micOff')),
             h('p', { className: 'dsh-orb-set-voice-mic-text' }, text.voiceMicBody),
             h('button', {
               type: 'button',
@@ -2121,35 +2254,29 @@ window.__ModuleLoader__.load({
         })
       }
       return h('section', { className: 'dsh-orb-set-card dsh-orb-set-idle' },
-        h('h3', null, text.idleTitle),
-        h('p', null, text.idleDesc),
-        h('div', { className: 'dsh-orb-set-idle-body' },
-          voiceSliderNode({
-            label: text.idleSeconds,
-            value,
-            spec: {
-              min: 5,
-              max: 600,
-              step: 1,
-              factor: 1000,
-              decimals: 0,
-              fallback: 30000,
-              format: (seconds) => secondsLabel(seconds, text),
-            },
-            hint: text.idleHint,
-            locked: false,
-            wide: true,
-            settled: settledRef.current,
-            stateKey: 'idleMs',
-            onPreview: (stored) => setDraft(stored),
-            onCommit: commit,
-          })))
-    }
-
-    function card(title, description, control) {
-      return h('section', { className: 'dsh-orb-set-card dsh-orb-set-row' },
-        h('div', null, h('h3', null, title), h('p', null, description)),
-        control)
+        cardHead('idle', text.idleTitle, text.idleDesc),
+        h('div', { className: 'dsh-orb-set-card-body' },
+          h('div', { className: 'dsh-orb-set-panel dsh-orb-set-idle-body' },
+            voiceSliderNode({
+              label: text.idleSeconds,
+              value,
+              spec: {
+                min: 5,
+                max: 600,
+                step: 1,
+                factor: 1000,
+                decimals: 0,
+                fallback: 30000,
+                format: (seconds) => secondsLabel(seconds, text),
+              },
+              hint: text.idleHint,
+              locked: false,
+              wide: true,
+              settled: settledRef.current,
+              stateKey: 'idleMs',
+              onPreview: (stored) => setDraft(stored),
+              onCommit: commit,
+            }))))
     }
 
     /**
@@ -2206,139 +2333,310 @@ window.__ModuleLoader__.load({
 
     function tccCard(text, snap, disabled, mutate) {
       const name = snap.tcc.appName || ''
-      return h('section', { className: 'dsh-orb-set-card' },
-        h('h3', null, text.tccTitle),
-        h('p', null, text.tccDescription),
-        h('p', null, text.tccAppHint.replaceAll('{name}', name)),
-        tccRow(text.tccScreenName, text.tccScreenReason, text.tccScreenPath, statusText(text, snap.tcc.screen), text.tccScreenOpen, disabled || snap.tcc.screen === 'granted', () => {
-          void mutate('/.dsh-orb/tcc', { right: 'screen' })
-        }),
-        tccRow(text.tccAccessibilityName, text.tccAccessibilityReason, text.tccAccessibilityPath, statusText(text, snap.tcc.accessibility), text.tccAccessibilityOpen, disabled || snap.tcc.accessibility === 'granted', () => {
-          void mutate('/.dsh-orb/tcc', { right: 'accessibility' })
-        }),
-        h('p', null, text.tccFooter.replaceAll('{name}', name)))
+      const tone = (state) => state === 'granted' ? 'ok' : state === 'needsRelaunch' ? 'wait' : 'off'
+      return h('section', { className: 'dsh-orb-set-card dsh-orb-set-tcc-card' },
+        cardHead('shield', text.tccTitle, text.tccDescription),
+        h('div', { className: 'dsh-orb-set-card-body' },
+          h('p', { className: 'dsh-orb-set-tcc-hint' }, text.tccAppHint.replaceAll('{name}', name)),
+          h('div', { className: 'dsh-orb-set-perms' },
+            tccRow(text.tccScreenName, text.tccScreenReason, text.tccScreenPath,
+              statusText(text, snap.tcc.screen), tone(snap.tcc.screen), text.tccScreenOpen,
+              disabled || snap.tcc.screen === 'granted', () => {
+                void mutate('/.dsh-orb/tcc', { right: 'screen' })
+              }),
+            tccRow(text.tccAccessibilityName, text.tccAccessibilityReason, text.tccAccessibilityPath,
+              statusText(text, snap.tcc.accessibility), tone(snap.tcc.accessibility), text.tccAccessibilityOpen,
+              disabled || snap.tcc.accessibility === 'granted', () => {
+                void mutate('/.dsh-orb/tcc', { right: 'accessibility' })
+              })),
+          h('p', { className: 'dsh-orb-set-tcc-foot' }, text.tccFooter.replaceAll('{name}', name))))
     }
 
-    function tccRow(name, reason, path, status, open, disabled, onClick) {
-      return h('div', { className: 'dsh-orb-set-tcc' },
-        h('div', null,
-          h('h4', null, name),
-          h('p', null, reason),
-          h('p', null, path),
-          h('p', { className: 'dsh-orb-set-status' }, status)),
-        h('button', { type: 'button', className: 'dsh-orb-set-button', disabled, onClick }, open))
+    function tccRow(name, reason, path, status, tone, open, disabled, onClick) {
+      return h('div', { className: `dsh-orb-set-perm is-${tone}` },
+        h('div', { className: 'dsh-orb-set-perm-main' },
+          h('div', { className: 'dsh-orb-set-perm-title' },
+            h('h4', null, name),
+            h('span', { className: `dsh-orb-set-perm-status is-${tone}` }, status)),
+          h('p', { className: 'dsh-orb-set-perm-reason' }, reason),
+          h('p', { className: 'dsh-orb-set-perm-path' }, path)),
+        h('button', {
+          type: 'button',
+          className: `dsh-orb-set-button${tone === 'ok' ? ' dsh-orb-set-ghost' : ' dsh-orb-set-primary'}`,
+          disabled,
+          onClick,
+        }, open))
     }
 
     const style = `
-.dsh-orb-set { display: flex; flex-direction: column; gap: 16px; max-width: 720px; color: inherit; }
-.dsh-orb-set-title { margin: 0; font-size: 20px; }
-.dsh-orb-set-intro, .dsh-orb-set p { margin: 4px 0 0; color: color-mix(in srgb, currentColor 72%, transparent); font-size: 13px; line-height: 1.45; }
-.dsh-orb-set-banner { color: inherit; }
-.dsh-orb-set-error { color: var(--dsw-alias-state-error-primary, #d92d20); }
-/* Every error line on this page is a <p>, and the rule above ("class + type") outranks the bare
-   class, so the failure colour has to be spelled with the paragraph in the selector. */
-.dsh-orb-set p.dsh-orb-set-error { color: var(--dsw-alias-state-error-primary, #d92d20); }
-.dsh-orb-set-notice { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: 12px; border: 1px solid transparent; }
-.dsh-orb-set-notice.is-error { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d92d20) 45%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d92d20) 10%, transparent); }
-.dsh-orb-set-notice.is-wait { border-color: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 40%, transparent); background: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 9%, transparent); }
-.dsh-orb-set-notice-mark { flex: none; width: 22px; height: 22px; margin-top: -1px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; line-height: 1; }
+/* The page borrows the voice card's vocabulary: a tinted icon, a title with one
+   line of explanation, a control on the head line, and nested panels below. */
+.dsh-orb-set {
+  --dsh-orb-accent: var(--dsw-alias-button-info-fill, #2f6fed);
+  --dsh-orb-line: color-mix(in srgb, currentColor 9%, transparent);
+  --dsh-orb-line-soft: color-mix(in srgb, currentColor 7.5%, transparent);
+  --dsh-orb-panel: color-mix(in srgb, currentColor 2.4%, transparent);
+  display: flex; flex-direction: column; gap: 14px; max-width: 720px; color: inherit;
+}
+.dsh-orb-set p { margin: 0; color: color-mix(in srgb, currentColor 68%, transparent); font-size: 13px; line-height: 1.5; }
+.dsh-orb-set h3, .dsh-orb-set h4 { margin: 0; }
+
+/* Page header */
+.dsh-orb-set-hero { display: flex; align-items: center; gap: 14px; padding: 2px 0 6px; }
+.dsh-orb-set-hero-icon {
+  flex: none; width: 48px; height: 48px; border-radius: 15px;
+  display: flex; align-items: center; justify-content: center; color: var(--dsh-orb-accent);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--dsh-orb-accent) 16%, transparent), color-mix(in srgb, var(--dsh-orb-accent) 7%, transparent));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dsh-orb-accent) 14%, transparent);
+}
+.dsh-orb-set-hero-icon svg { width: 26px; height: 26px; }
+.dsh-orb-set-hero-text { min-width: 0; }
+.dsh-orb-set .dsh-orb-set-title { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.25; }
+.dsh-orb-set .dsh-orb-set-intro { margin: 3px 0 0; font-size: 13px; line-height: 1.5; color: color-mix(in srgb, currentColor 62%, transparent); }
+
+/* Cards */
+.dsh-orb-set-fields { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.dsh-orb-set-fields:disabled { opacity: 0.55; }
+.dsh-orb-set-card { border: 1px solid var(--dsh-orb-line); border-radius: 14px; padding: 16px 16px 17px; }
+.dsh-orb-set-head { display: flex; align-items: flex-start; gap: 12px; }
+.dsh-orb-set-head-icon {
+  flex: none; width: 38px; height: 38px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--dsh-orb-accent); background: color-mix(in srgb, var(--dsh-orb-accent) 11%, transparent);
+}
+.dsh-orb-set-head-icon svg { width: 20px; height: 20px; }
+.dsh-orb-set-head-text { flex: 1; min-width: 0; padding-top: 1px; }
+.dsh-orb-set .dsh-orb-set-head-text h3 { font-size: 15px; font-weight: 600; line-height: 1.35; color: inherit; }
+.dsh-orb-set .dsh-orb-set-head-text p { margin-top: 3px; font-size: 12.5px; line-height: 1.5; color: color-mix(in srgb, currentColor 62%, transparent); }
+.dsh-orb-set-head-control { flex: none; display: flex; align-items: center; gap: 9px; margin-left: auto; padding-top: 2px; }
+.dsh-orb-set-head-control .dsh-orb-set-ghost { border-color: color-mix(in srgb, currentColor 18%, transparent); color: color-mix(in srgb, currentColor 78%, transparent); }
+.dsh-orb-set-head-state { font-size: 11px; line-height: 1.6; color: color-mix(in srgb, currentColor 55%, transparent); white-space: nowrap; }
+.dsh-orb-set-card-body { margin-top: 14px; }
+.dsh-orb-set-card > .dsh-orb-set-banner { margin-top: 10px; }
+
+/* Nested panel, the sub-card voice uses for each column */
+.dsh-orb-set-panel { border: 1px solid var(--dsh-orb-line-soft); border-radius: 12px; padding: 13px 14px; background: var(--dsh-orb-panel); }
+.dsh-orb-set-panel + .dsh-orb-set-panel { margin-top: 10px; }
+.dsh-orb-set-panel-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.dsh-orb-set-panel-text { min-width: 0; }
+.dsh-orb-set .dsh-orb-set-panel-text h4 { font-size: 13.5px; font-weight: 600; color: inherit; }
+.dsh-orb-set .dsh-orb-set-panel-text p { margin-top: 3px; font-size: 12px; line-height: 1.5; color: color-mix(in srgb, currentColor 58%, transparent); }
+.dsh-orb-set-panel-switch { flex: none; display: flex; align-items: center; gap: 8px; }
+.dsh-orb-set-panel-state { font-size: 11px; line-height: 1.6; color: color-mix(in srgb, currentColor 55%, transparent); white-space: nowrap; }
+
+/* Fields and inputs */
+.dsh-orb-set-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 12px; }
+.dsh-orb-set-field-label { font-size: 12.5px; font-weight: 500; line-height: 1.4; color: color-mix(in srgb, currentColor 84%, transparent); }
+.dsh-orb-set-input {
+  box-sizing: border-box; width: 100%; min-width: 0;
+  border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 9px;
+  background: color-mix(in srgb, currentColor 2.5%, transparent); color: inherit;
+  font: inherit; font-size: 12.5px; line-height: 1.45; padding: 7px 10px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.dsh-orb-set-input:focus { outline: none; border-color: var(--dsh-orb-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsh-orb-accent) 15%, transparent); }
+.dsh-orb-set-select-wrap { position: relative; display: block; min-width: 0; }
+.dsh-orb-set-select-wrap::after {
+  content: ''; position: absolute; right: 13px; top: 50%; width: 6px; height: 6px;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: translateY(-70%) rotate(45deg); opacity: 0.5; pointer-events: none;
+}
+.dsh-orb-set select.dsh-orb-set-input { appearance: none; -webkit-appearance: none; padding-right: 30px; cursor: pointer; }
+.dsh-orb-set-model-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; align-items: start; }
+
+/* Buttons */
+.dsh-orb-set-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  background: color-mix(in srgb, currentColor 2%, transparent); color: inherit;
+  border-radius: 8px; padding: 7px 12px; font: inherit; font-size: 12.5px; font-weight: 500;
+  line-height: 1.2; white-space: nowrap; cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.dsh-orb-set-button:hover:not(:disabled) { background: color-mix(in srgb, currentColor 6%, transparent); border-color: color-mix(in srgb, currentColor 26%, transparent); }
+.dsh-orb-set-button:active:not(:disabled) { transform: translateY(0.5px); }
+.dsh-orb-set-button:focus-visible { outline: 2px solid var(--dsh-orb-accent); outline-offset: 2px; }
+.dsh-orb-set-button:disabled { opacity: 0.5; cursor: default; }
+.dsh-orb-set-ghost { border-color: transparent; background: transparent; }
+.dsh-orb-set-ghost:hover:not(:disabled) { background: color-mix(in srgb, currentColor 4%, transparent); border-color: color-mix(in srgb, currentColor 14%, transparent); }
+.dsh-orb-set-primary { background: var(--dsh-orb-accent); border-color: transparent; color: var(--dsw-alias-label-primary-inverted, #fff); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.dsh-orb-set-primary:hover:not(:disabled) { background: var(--dsh-orb-accent); filter: brightness(1.06); border-color: transparent; }
+
+/* Switch */
+.dsh-orb-set-switch {
+  width: 40px; height: 24px; border-radius: 999px; border: 0; padding: 0; flex: none;
+  background: color-mix(in srgb, currentColor 18%, transparent); position: relative;
+  cursor: pointer; transition: background 160ms ease;
+}
+.dsh-orb-set-switch:hover:not(:disabled) { background: color-mix(in srgb, currentColor 26%, transparent); }
+.dsh-orb-set-switch::after {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+  border-radius: 50%; background: var(--dsw-static-neutral-bluish-00, #fff);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); transition: transform 140ms ease;
+}
+.dsh-orb-set-switch.is-on { background: var(--dsh-orb-accent); }
+.dsh-orb-set-switch.is-on:hover:not(:disabled) { background: var(--dsh-orb-accent); filter: brightness(1.05); }
+.dsh-orb-set-switch.is-on::after { transform: translateX(16px); }
+.dsh-orb-set-switch:focus-visible { outline: 2px solid var(--dsh-orb-accent); outline-offset: 2px; }
+.dsh-orb-set-switch:disabled { opacity: 0.55; cursor: default; }
+.dsh-orb-set .is-locked { opacity: 0.45; }
+
+/* Avatar */
+.dsh-orb-set-avatar-row { display: flex; align-items: center; gap: 16px; }
+.dsh-orb-set-avatar-frame {
+  flex: none; padding: 3px; border-radius: 50%;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--dsh-orb-accent) 26%, transparent), color-mix(in srgb, var(--dsh-orb-accent) 6%, transparent));
+}
+.dsh-orb-set-avatar { display: block; width: 64px; height: 64px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, currentColor 8%, transparent); }
+.dsh-orb-set-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; justify-content: flex-end; }
+.dsh-orb-set-avatar-error { margin-top: 8px; }
+.dsh-orb-set-presets { margin-top: 12px; padding: 12px 13px 11px; border: 1px solid var(--dsh-orb-line-soft); border-radius: 12px; background: var(--dsh-orb-panel); }
+.dsh-orb-set-presets-title { margin: 0 0 7px; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; color: color-mix(in srgb, currentColor 55%, transparent); }
+.dsh-orb-set-presets-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.dsh-orb-set-preset {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px;
+  width: 68px; padding: 6px 4px 5px; border: 1px solid transparent; border-radius: 11px;
+  background: transparent; color: inherit; font: inherit; cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.dsh-orb-set-preset img { width: 46px; height: 46px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, currentColor 8%, transparent); }
+.dsh-orb-set-preset span { font-size: 11px; line-height: 1.2; color: color-mix(in srgb, currentColor 72%, transparent); }
+.dsh-orb-set-preset:hover:not(:disabled) { border-color: color-mix(in srgb, currentColor 12%, transparent); background: color-mix(in srgb, currentColor 4%, transparent); }
+.dsh-orb-set-preset.is-selected { border-color: color-mix(in srgb, var(--dsh-orb-accent) 40%, transparent); background: color-mix(in srgb, var(--dsh-orb-accent) 8%, transparent); }
+.dsh-orb-set-preset.is-selected span { color: var(--dsh-orb-accent); font-weight: 600; }
+.dsh-orb-set-preset.is-selected::after { content: ''; position: absolute; top: 4px; right: 9px; width: 7px; height: 7px; border-radius: 50%; background: var(--dsh-orb-accent); box-shadow: 0 0 0 2px var(--dsw-alias-bg-layer-3, #fff); }
+.dsh-orb-set-preset:focus-visible { outline: 2px solid var(--dsh-orb-accent); outline-offset: 1px; }
+.dsh-orb-set-more { margin-left: auto; align-self: center; padding: 4px 2px; color: var(--dsh-orb-accent); font-size: 12px; font-weight: 500; line-height: 1.2; text-decoration: none; white-space: nowrap; }
+.dsh-orb-set-more.is-alone { margin-left: 0; }
+.dsh-orb-set-more:hover { text-decoration: underline; }
+.dsh-orb-set-more:focus-visible { outline: 2px solid var(--dsh-orb-accent); outline-offset: 2px; border-radius: 4px; }
+
+/* Width, errors, notices */
+.dsh-orb-set-banner { color: color-mix(in srgb, currentColor 62%, transparent); }
+.dsh-orb-set-card > .dsh-orb-set-banner { display: flex; align-items: center; gap: 7px; font-size: 12px; line-height: 1.5; }
+.dsh-orb-set > .dsh-orb-set-banner { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius: 10px; background: color-mix(in srgb, currentColor 2.5%, transparent); font-size: 12.5px; }
+.dsh-orb-set > .dsh-orb-set-banner::before { content: ''; flex: none; width: 6px; height: 6px; margin-top: 6px; border-radius: 50%; background: color-mix(in srgb, currentColor 38%, transparent); }
+.dsh-orb-set-card > .dsh-orb-set-banner::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--dsh-orb-accent); }
+.dsh-orb-set-error { margin-top: 8px; color: var(--dsw-alias-state-error-primary, #d92d20); }
+.dsh-orb-set > .dsh-orb-set-error { margin-top: 0; }
+.dsh-orb-set p.dsh-orb-set-error { margin-top: 8px; color: var(--dsw-alias-state-error-primary, #d92d20); }
+.dsh-orb-set > .dsh-orb-set-error { margin-top: 0; }
+.dsh-orb-set-muted { color: color-mix(in srgb, currentColor 58%, transparent); }
+.dsh-orb-set-update-builds { margin-top: 10px; }
+.dsh-orb-set-notice { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: 14px; border: 1px solid transparent; }
+.dsh-orb-set-notice.is-error { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d92d20) 40%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d92d20) 8%, transparent); }
+.dsh-orb-set-notice.is-wait { border-color: color-mix(in srgb, var(--dsh-orb-accent) 35%, transparent); background: color-mix(in srgb, var(--dsh-orb-accent) 7%, transparent); }
+.dsh-orb-set-notice-mark { flex: none; width: 23px; height: 23px; margin-top: -1px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; line-height: 1; }
 .dsh-orb-set-notice.is-error .dsh-orb-set-notice-mark { background: var(--dsw-alias-state-error-primary, #d92d20); color: var(--dsw-static-neutral-bluish-00, #fff); }
-.dsh-orb-set-notice.is-wait .dsh-orb-set-notice-mark { border: 2px solid color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 30%, transparent); border-top-color: var(--dsw-alias-button-info-fill, #2f6fed); animation: dsh-orb-set-spin 0.9s linear infinite; }
+.dsh-orb-set-notice.is-wait .dsh-orb-set-notice-mark { border: 2px solid color-mix(in srgb, var(--dsh-orb-accent) 28%, transparent); border-top-color: var(--dsh-orb-accent); animation: dsh-orb-set-spin 0.9s linear infinite; }
 @keyframes dsh-orb-set-spin { to { transform: rotate(360deg); } }
 .dsh-orb-set-notice-main { flex: 1; min-width: 0; }
 .dsh-orb-set .dsh-orb-set-notice-title { margin: 0; font-size: 14px; font-weight: 600; color: inherit; }
 .dsh-orb-set-notice.is-error .dsh-orb-set-notice-title { color: var(--dsw-alias-state-error-primary, #d92d20); }
-.dsh-orb-set p.dsh-orb-set-notice-body { margin: 4px 0 0; font-size: 13px; line-height: 1.45; color: inherit; }
-.dsh-orb-set .dsh-orb-set-notice-action { flex: none; margin-left: auto; align-self: center; border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; background: var(--dsw-alias-button-info-fill, #2f6fed); color: var(--dsw-static-neutral-bluish-00, #fff); }
+.dsh-orb-set p.dsh-orb-set-notice-body { margin: 4px 0 0; font-size: 12.5px; line-height: 1.5; color: color-mix(in srgb, currentColor 72%, transparent); }
+.dsh-orb-set .dsh-orb-set-notice-action { flex: none; margin-left: auto; align-self: center; border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; font-size: 12.5px; font-weight: 600; white-space: nowrap; cursor: pointer; background: var(--dsh-orb-accent); color: var(--dsw-alias-label-primary-inverted, #fff); }
 .dsh-orb-set .dsh-orb-set-notice-action:hover:enabled { filter: brightness(1.08); }
 .dsh-orb-set .dsh-orb-set-notice-action:disabled { opacity: 0.5; cursor: default; }
-.dsh-orb-set-fields { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
-.dsh-orb-set-card { border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 12px; padding: 14px 16px; }
-.dsh-orb-set-row, .dsh-orb-set-avatar-row, .dsh-orb-set-tcc { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
-.dsh-orb-set h3, .dsh-orb-set h4 { margin: 0; font-size: 14px; }
-.dsh-orb-set-avatar { width: 72px; height: 72px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, currentColor 8%, transparent); }
-.dsh-orb-set-presets { margin-top: 10px; }
-.dsh-orb-set-presets-title { margin: 0; font-size: 12px; }
-.dsh-orb-set-presets-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.dsh-orb-set-preset { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 72px; padding: 5px 2px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
-.dsh-orb-set-preset img { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; background: color-mix(in srgb, currentColor 8%, transparent); }
-.dsh-orb-set-preset span { font-size: 11px; line-height: 1.2; }
-.dsh-orb-set-preset:hover { border-color: color-mix(in srgb, currentColor 20%, transparent); }
-.dsh-orb-set-preset.is-selected { border-color: var(--dsw-alias-button-info-fill, #2f6fed); }
-.dsh-orb-set-more { margin-left: auto; align-self: center; color: var(--dsw-alias-button-info-fill, #2f6fed); font-size: 12px; line-height: 1.2; text-decoration: none; white-space: nowrap; }
-.dsh-orb-set-more.is-alone { margin-left: 0; }
-.dsh-orb-set-more:hover { text-decoration: underline; }
-.dsh-orb-set-actions, .dsh-orb-set-pickers { display: flex; gap: 8px; align-items: center; }
-.dsh-orb-set-button, .dsh-orb-set select { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 8px; padding: 6px 10px; font: inherit; }
-.dsh-orb-set-ghost { border-color: transparent; }
-.dsh-orb-set-switch { width: 40px; height: 24px; border-radius: 999px; border: 0; background: color-mix(in srgb, currentColor 18%, transparent); position: relative; flex: none; }
-.dsh-orb-set-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--dsw-static-neutral-bluish-00, white); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); transition: transform 120ms ease; }
-.dsh-orb-set-switch.is-on { background: var(--dsw-alias-button-info-fill, #2f6fed); }
-.dsh-orb-set-switch.is-on::after { transform: translateX(16px); }
-.dsh-orb-set-tcc { margin-top: 12px; }
-.dsh-orb-set-status { font-weight: 600; }
-.dsh-orb-set-fields:disabled { opacity: 0.55; }
-.dsh-orb-set-label { display: flex; align-items: center; gap: 12px; font-weight: 600; }
-.dsh-orb-set-select { min-width: 190px; }
-.dsh-orb-set-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; cursor: pointer; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); background: transparent; color: inherit; border-radius: 8px; padding: 6px 8px; font: inherit; }
-.dsh-orb-set-path:disabled { opacity: 0.55; cursor: default; }
-.dsh-orb-set-pick { flex: none; white-space: nowrap; }
-.dsh-orb-set-workspace-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.dsh-orb-set-dialog-backdrop { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.32)); }
-.dsh-orb-set-dialog { width: min(460px, 100%); max-height: min(70vh, 560px); overflow: auto; padding: 20px; border-radius: 12px; background: var(--dsw-alias-bg-overlay, var(--dsw-alias-bg-layer-3, #fff)); box-shadow: 0 18px 60px var(--dsw-alias-bg-mask-3, rgba(0, 0, 0, 0.28)); }
-.dsh-orb-set-dialog h3 { margin: 0 0 10px; }
-.dsh-orb-set-dialog p { margin: 8px 0; overflow-wrap: anywhere; }
+.dsh-orb-set .dsh-orb-set-notice-action:focus-visible { outline: 2px solid var(--dsh-orb-accent); outline-offset: 2px; }
+
+/* Permissions */
+.dsh-orb-set .dsh-orb-set-tcc-hint { font-size: 12.5px; color: color-mix(in srgb, currentColor 62%, transparent); }
+.dsh-orb-set-perms { margin-top: 10px; display: flex; flex-direction: column; border: 1px solid var(--dsh-orb-line-soft); border-radius: 12px; background: var(--dsh-orb-panel); overflow: hidden; }
+.dsh-orb-set-perm { display: flex; align-items: center; gap: 14px; padding: 12px 14px; }
+.dsh-orb-set-perm + .dsh-orb-set-perm { border-top: 1px dashed color-mix(in srgb, currentColor 10%, transparent); }
+.dsh-orb-set-perm-main { flex: 1; min-width: 0; }
+.dsh-orb-set-perm-title { display: flex; align-items: center; gap: 8px; }
+.dsh-orb-set .dsh-orb-set-perm-title h4 { font-size: 13.5px; font-weight: 600; color: inherit; }
+.dsh-orb-set-perm-status { flex: none; font-size: 10.5px; font-weight: 600; line-height: 1.6; padding: 1px 8px; border-radius: 999px; }
+.dsh-orb-set-perm-status.is-ok { color: var(--dsw-alias-state-success-primary, #12b76a); background: color-mix(in srgb, #12b76a 13%, transparent); }
+.dsh-orb-set-perm-status.is-off { color: var(--dsw-alias-state-warn-primary, #b45309); background: color-mix(in srgb, #d97706 12%, transparent); }
+.dsh-orb-set-perm-status.is-wait { color: var(--dsh-orb-accent); background: color-mix(in srgb, var(--dsh-orb-accent) 11%, transparent); }
+.dsh-orb-set .dsh-orb-set-perm-reason { margin-top: 2px; font-size: 12px; line-height: 1.45; color: color-mix(in srgb, currentColor 60%, transparent); }
+.dsh-orb-set .dsh-orb-set-perm-path { margin-top: 2px; font-size: 11px; line-height: 1.45; color: color-mix(in srgb, currentColor 46%, transparent); }
+.dsh-orb-set-perm .dsh-orb-set-button { flex: none; }
+.dsh-orb-set .dsh-orb-set-tcc-foot { margin-top: 10px; font-size: 11.5px; line-height: 1.55; color: color-mix(in srgb, currentColor 52%, transparent); }
+
+/* Workspace */
+.dsh-orb-set-workspace-top { display: flex; align-items: center; gap: 10px; }
+.dsh-orb-set .dsh-orb-set-workspace-path { flex: 1; min-width: 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; color: color-mix(in srgb, currentColor 60%, transparent); }
+.dsh-orb-set-badge { flex: none; font-size: 10.5px; font-weight: 600; line-height: 1.6; padding: 1px 8px; border-radius: 999px; color: color-mix(in srgb, currentColor 58%, transparent); background: color-mix(in srgb, currentColor 7%, transparent); }
+.dsh-orb-set-badge.is-custom { color: var(--dsh-orb-accent); background: color-mix(in srgb, var(--dsh-orb-accent) 10%, transparent); }
+.dsh-orb-set-workspace-controls { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.dsh-orb-set-workspace-controls .dsh-orb-set-actions { margin-left: 0; }
+.dsh-orb-set-path {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-align: start; cursor: pointer; border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  background: color-mix(in srgb, currentColor 2%, transparent); color: inherit; border-radius: 8px;
+  padding: 7px 10px; font: inherit; font-size: 12px;
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+  transition: border-color 120ms ease;
+}
+.dsh-orb-set-path:hover:not(:disabled) { border-color: color-mix(in srgb, var(--dsh-orb-accent) 45%, transparent); }
+.dsh-orb-set-path:focus-visible { outline: 2px solid var(--dsh-orb-accent); outline-offset: 2px; }
+.dsh-orb-set-path:disabled { opacity: 0.6; cursor: default; }
+.dsh-orb-set-pick { flex: none; }
+
+/* History */
+.dsh-orb-set-history-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.dsh-orb-set-history-field { flex: none; min-width: 132px; }
+.dsh-orb-set .dsh-orb-set-history-hint { margin-top: 10px; font-size: 11.5px; line-height: 1.55; color: color-mix(in srgb, currentColor 52%, transparent); }
+.dsh-orb-set .dsh-orb-set-history-last { margin-top: 6px; display: flex; align-items: center; gap: 6px; font-size: 11.5px; line-height: 1.55; color: color-mix(in srgb, currentColor 52%, transparent); }
+.dsh-orb-set .dsh-orb-set-history-last::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--dsw-alias-state-success-primary, #12b76a); box-shadow: 0 0 0 3px color-mix(in srgb, #12b76a 14%, transparent); }
+.dsh-orb-set-history > .dsh-orb-set-card-body > .dsh-orb-set-banner { display: flex; align-items: center; gap: 7px; margin-top: 10px; font-size: 12px; }
+.dsh-orb-set-history > .dsh-orb-set-card-body > .dsh-orb-set-banner::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--dsh-orb-accent); }
+
+/* Dialogs */
+.dsh-orb-set-dialog-backdrop { position: fixed; inset: 0; z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.32)); backdrop-filter: blur(2px); }
+.dsh-orb-set-dialog {
+  width: min(480px, 100%); max-height: min(72vh, 600px); overflow: auto;
+  border: 1px solid var(--dsh-orb-line-soft); border-radius: 16px; padding: 22px 22px 20px;
+  background: var(--dsw-alias-bg-overlay, var(--dsw-alias-bg-layer-3, #fff));
+  box-shadow: 0 24px 80px var(--dsw-alias-bg-mask-3, rgba(0, 0, 0, 0.28));
+}
+.dsh-orb-set-dialog h3 { margin: 0 0 10px; font-size: 16px; font-weight: 600; }
+.dsh-orb-set-dialog p { margin: 8px 0; font-size: 13px; line-height: 1.55; color: color-mix(in srgb, currentColor 68%, transparent); overflow-wrap: anywhere; }
+.dsh-orb-set-dialog .dsh-orb-set-muted { color: color-mix(in srgb, currentColor 52%, transparent); }
+.dsh-orb-set-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 .dsh-orb-set-dialog-list { margin: 12px 0 0; padding-left: 20px; max-height: 200px; overflow: auto; }
-.dsh-orb-set-dialog-list li { margin: 4px 0; overflow-wrap: anywhere; }
+.dsh-orb-set-dialog-list li { margin: 4px 0; font-size: 12.5px; overflow-wrap: anywhere; }
 .dsh-orb-set-dialog-progress { height: 4px; margin: 16px 0 4px; border-radius: 999px; background: color-mix(in srgb, currentColor 12%, transparent); overflow: hidden; }
-.dsh-orb-set-dialog-progress-fill { width: 34%; height: 100%; border-radius: inherit; background: var(--dsw-alias-button-info-fill, #2f6fed); animation: dsh-orb-set-progress 1.1s ease-in-out infinite; }
+.dsh-orb-set-dialog-progress-fill { width: 34%; height: 100%; border-radius: inherit; background: var(--dsh-orb-accent); animation: dsh-orb-set-progress 1.1s ease-in-out infinite; }
 @keyframes dsh-orb-set-progress { from { transform: translateX(-110%); } to { transform: translateX(320%); } }
-.dsh-orb-set-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-.dsh-orb-set-primary { background: var(--dsw-alias-button-info-fill, #2f6fed); color: var(--dsw-static-neutral-bluish-00, white); border-color: transparent; }
-.dsh-orb-set-muted { color: color-mix(in srgb, currentColor 58%, transparent); }
-/* Voice: three switchable panels, sliders for every bounded value. */
-.dsh-orb-set-voice { padding: 16px 16px 18px; }
-.dsh-orb-set-voice-head { display: flex; align-items: center; gap: 12px; }
-.dsh-orb-set-voice-head-icon { flex: none; width: 38px; height: 38px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: var(--dsw-alias-button-info-fill, #2f6fed); background: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 12%, transparent); }
-.dsh-orb-set-voice-head-text { flex: 1; min-width: 0; }
-.dsh-orb-set .dsh-orb-set-voice-head-text h3 { font-size: 15px; }
-.dsh-orb-set .dsh-orb-set-voice-head-text p { margin-top: 3px; font-size: 12.5px; line-height: 1.45; color: color-mix(in srgb, currentColor 62%, transparent); }
-.dsh-orb-set-voice-head-control { flex: none; display: flex; align-items: center; gap: 9px; margin-left: auto; }
-.dsh-orb-set-voice-head-state { font-size: 11px; color: color-mix(in srgb, currentColor 55%, transparent); }
-.dsh-orb-set-idle-body { margin-top: 12px; max-width: 520px; }
-.dsh-orb-set-voice-panel { margin-top: 12px; padding: 14px 15px 15px; border: 1px solid color-mix(in srgb, currentColor 8%, transparent); border-radius: 13px; background: color-mix(in srgb, currentColor 2.6%, transparent); }
+
+/* Voice: the reference card, unchanged in structure, now sharing the page head */
+.dsh-orb-set-idle-body { margin: 0; }
+.dsh-orb-set-voice-panel { margin-top: 12px; padding: 14px 15px 15px; border: 1px solid var(--dsh-orb-line-soft); border-radius: 13px; background: var(--dsh-orb-panel); }
 .dsh-orb-set-voice-panel-head { display: flex; align-items: center; gap: 11px; }
-.dsh-orb-set-voice-panel-icon { flex: none; width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--dsw-alias-button-info-fill, #2f6fed); background: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 11%, transparent); }
+.dsh-orb-set-voice-panel-icon { flex: none; width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: var(--dsh-orb-accent); background: color-mix(in srgb, var(--dsh-orb-accent) 11%, transparent); }
 .dsh-orb-set-voice-panel-icon svg { width: 19px; height: 19px; }
 .dsh-orb-set-voice-panel-heading { flex: 1; min-width: 0; }
-.dsh-orb-set .dsh-orb-set-voice-panel-heading h4 { font-size: 13.5px; font-weight: 600; }
+.dsh-orb-set .dsh-orb-set-voice-panel-heading h4 { font-size: 13.5px; font-weight: 600; color: inherit; }
 .dsh-orb-set .dsh-orb-set-voice-panel-heading p { margin-top: 2px; font-size: 12px; line-height: 1.45; color: color-mix(in srgb, currentColor 58%, transparent); }
 .dsh-orb-set-voice-panel-switch { flex: none; display: flex; align-items: center; gap: 8px; }
-.dsh-orb-set-voice-panel-state { font-size: 11px; color: color-mix(in srgb, currentColor 55%, transparent); }
+.dsh-orb-set-voice-panel-state { font-size: 11px; line-height: 1.6; color: color-mix(in srgb, currentColor 55%, transparent); white-space: nowrap; }
 .dsh-orb-set-voice-panel-body { margin-top: 13px; }
 .dsh-orb-set-voice-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px 20px; align-items: start; }
 .dsh-orb-set-voice-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 12px; }
 .dsh-orb-set-voice-field.is-wide { grid-column: 1 / -1; }
 .dsh-orb-set-voice-field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .dsh-orb-set-voice-field-label { font-size: 12.5px; font-weight: 500; color: color-mix(in srgb, currentColor 84%, transparent); }
-.dsh-orb-set-voice-field-value { flex: none; font-size: 11.5px; font-weight: 600; line-height: 1.4; padding: 1px 8px; border-radius: 999px; color: var(--dsw-alias-button-info-fill, #2f6fed); background: color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 10%, transparent); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dsh-orb-set-voice-field-value { flex: none; font-size: 11.5px; font-weight: 600; line-height: 1.4; padding: 1px 8px; border-radius: 999px; color: var(--dsh-orb-accent); background: color-mix(in srgb, var(--dsh-orb-accent) 10%, transparent); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dsh-orb-set-voice-field-scale { display: flex; justify-content: space-between; gap: 8px; font-size: 10.5px; line-height: 1.2; color: color-mix(in srgb, currentColor 52%, transparent); font-variant-numeric: tabular-nums; }
 .dsh-orb-set-voice-field-hint { font-size: 11px; line-height: 1.5; color: color-mix(in srgb, currentColor 56%, transparent); }
-.dsh-orb-set-voice-link { color: var(--dsw-alias-button-info-fill, #2f6fed); text-decoration: none; font-weight: 500; }
+.dsh-orb-set-voice-link { color: var(--dsh-orb-accent); text-decoration: none; font-weight: 500; }
 .dsh-orb-set-voice-link:hover { text-decoration: underline; }
-.dsh-orb-set-voice-link:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill, #2f6fed); outline-offset: 2px; border-radius: 4px; }
+.dsh-orb-set-voice-link:focus-visible { outline: 2px solid var(--dsh-orb-accent); outline-offset: 2px; border-radius: 4px; }
 .dsh-orb-set-voice-field-range { -webkit-appearance: none; appearance: none; width: 100%; height: 20px; margin: 0; padding: 0; background: transparent; cursor: pointer; }
-.dsh-orb-set-voice-field-range::-webkit-slider-runnable-track { height: 5px; border-radius: 999px; background: linear-gradient(90deg, var(--dsw-alias-button-info-fill, #2f6fed) 0 var(--dsh-orb-voice-fill, 0%), color-mix(in srgb, currentColor 13%, transparent) var(--dsh-orb-voice-fill, 0%) 100%); }
-.dsh-orb-set-voice-field-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; margin-top: -5.5px; border-radius: 50%; border: 2px solid var(--dsw-alias-button-info-fill, #2f6fed); background: var(--dsw-alias-bg-overlay, #fff); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22); transition: transform 120ms ease, box-shadow 120ms ease; }
+.dsh-orb-set-voice-field-range::-webkit-slider-runnable-track { height: 5px; border-radius: 999px; background: linear-gradient(90deg, var(--dsh-orb-accent) 0 var(--dsh-orb-voice-fill, 0%), color-mix(in srgb, currentColor 13%, transparent) var(--dsh-orb-voice-fill, 0%) 100%); }
+.dsh-orb-set-voice-field-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; margin-top: -5.5px; border-radius: 50%; border: 2px solid var(--dsh-orb-accent); background: var(--dsw-alias-bg-overlay, #fff); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22); transition: transform 120ms ease, box-shadow 120ms ease; }
 .dsh-orb-set-voice-field-range:hover::-webkit-slider-thumb { transform: scale(1.08); }
 .dsh-orb-set-voice-field-range:focus { outline: none; }
-.dsh-orb-set-voice-field-range:focus-visible { outline: none; }
-.dsh-orb-set-voice-field-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 20%, transparent); }
+.dsh-orb-set-voice-field-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px color-mix(in srgb, var(--dsh-orb-accent) 20%, transparent); }
 .dsh-orb-set-voice-field-range::-moz-range-track { height: 5px; border-radius: 999px; background: color-mix(in srgb, currentColor 13%, transparent); }
-.dsh-orb-set-voice-field-range::-moz-range-progress { height: 5px; border-radius: 999px; background: var(--dsw-alias-button-info-fill, #2f6fed); }
-.dsh-orb-set-voice-field-range::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--dsw-alias-button-info-fill, #2f6fed); background: var(--dsw-alias-bg-overlay, #fff); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22); }
+.dsh-orb-set-voice-field-range::-moz-range-progress { height: 5px; border-radius: 999px; background: var(--dsh-orb-accent); }
+.dsh-orb-set-voice-field-range::-moz-range-thumb { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--dsh-orb-accent); background: var(--dsw-alias-bg-overlay, #fff); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22); }
 .dsh-orb-set-voice-input { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid color-mix(in srgb, currentColor 16%, transparent); border-radius: 9px; background: color-mix(in srgb, currentColor 2.5%, transparent); color: inherit; font: inherit; font-size: 12.5px; line-height: 1.45; padding: 7px 10px; transition: border-color 120ms ease, box-shadow 120ms ease; }
-.dsh-orb-set-voice-input:focus { outline: none; border-color: var(--dsw-alias-button-info-fill, #2f6fed); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 15%, transparent); }
+.dsh-orb-set-voice-input:focus { outline: none; border-color: var(--dsh-orb-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsh-orb-accent) 15%, transparent); }
 .dsh-orb-set textarea.dsh-orb-set-voice-input { min-height: 56px; resize: vertical; }
 .dsh-orb-set-voice-select { position: relative; display: block; }
 .dsh-orb-set-voice-select::after { content: ''; position: absolute; right: 13px; top: 50%; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-70%) rotate(45deg); opacity: 0.5; pointer-events: none; }
@@ -2346,14 +2644,15 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-voice-seg { display: flex; gap: 2px; padding: 3px; border-radius: 10px; background: color-mix(in srgb, currentColor 6%, transparent); }
 .dsh-orb-set-voice-seg-item { flex: 1; min-width: 0; border: 0; border-radius: 7px; background: transparent; color: color-mix(in srgb, currentColor 68%, transparent); font: inherit; font-size: 12px; font-weight: 500; padding: 6px 8px; cursor: pointer; white-space: nowrap; transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease; }
 .dsh-orb-set-voice-seg-item:hover:not(.is-active) { background: color-mix(in srgb, currentColor 5%, transparent); color: inherit; }
-.dsh-orb-set-voice-seg-item.is-active { background: var(--dsw-alias-button-info-fill, #2f6fed); color: var(--dsw-static-neutral-bluish-00, #fff); box-shadow: 0 1px 4px color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 35%, transparent); }
+.dsh-orb-set-voice-seg-item.is-active { background: var(--dsh-orb-accent); color: var(--dsw-alias-label-primary-inverted, #fff); box-shadow: 0 1px 4px color-mix(in srgb, var(--dsh-orb-accent) 35%, transparent); }
+.dsh-orb-set-voice-seg-item:focus-visible { outline: 2px solid var(--dsh-orb-accent); outline-offset: 1px; }
 .dsh-orb-set-voice-model-block { margin-top: 14px; padding-top: 12px; border-top: 1px dashed color-mix(in srgb, currentColor 13%, transparent); }
 .dsh-orb-set-voice-model { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .dsh-orb-set-voice-model-info { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .dsh-orb-set-voice-model-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: color-mix(in srgb, currentColor 28%, transparent); }
 .dsh-orb-set-voice-model-dot.is-ready { background: #12b76a; box-shadow: 0 0 0 3px color-mix(in srgb, #12b76a 16%, transparent); }
-.dsh-orb-set-voice-model-dot.is-active { background: var(--dsw-alias-button-info-fill, #2f6fed); animation: dsh-orb-set-voice-pulse 1.4s ease-in-out infinite; }
-@keyframes dsh-orb-set-voice-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 32%, transparent); } 50% { box-shadow: 0 0 0 5px transparent; } }
+.dsh-orb-set-voice-model-dot.is-active { background: var(--dsh-orb-accent); animation: dsh-orb-set-voice-pulse 1.4s ease-in-out infinite; }
+@keyframes dsh-orb-set-voice-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--dsh-orb-accent) 32%, transparent); } 50% { box-shadow: 0 0 0 5px transparent; } }
 .dsh-orb-set-voice-model-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
 .dsh-orb-set-voice-model-name { font-size: 12.5px; font-weight: 600; }
 .dsh-orb-set-voice-model-state { font-size: 11.5px; color: color-mix(in srgb, currentColor 58%, transparent); }
@@ -2361,16 +2660,27 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-voice-model .dsh-orb-set-ghost { border-color: color-mix(in srgb, currentColor 18%, transparent); color: color-mix(in srgb, currentColor 78%, transparent); }
 .dsh-orb-set-voice-progress { margin-top: 10px; }
 .dsh-orb-set-voice-progress-track { height: 5px; border-radius: 999px; background: color-mix(in srgb, currentColor 12%, transparent); overflow: hidden; }
-.dsh-orb-set-voice-progress-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, color-mix(in srgb, var(--dsw-alias-button-info-fill, #2f6fed) 65%, #fff), var(--dsw-alias-button-info-fill, #2f6fed)); transition: width 240ms ease; }
+.dsh-orb-set-voice-progress-track > span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, color-mix(in srgb, var(--dsh-orb-accent) 65%, #fff), var(--dsh-orb-accent)); transition: width 240ms ease; }
 .dsh-orb-set .dsh-orb-set-voice-progress-text { margin: 5px 0 0; font-size: 11px; color: color-mix(in srgb, currentColor 55%, transparent); }
 .dsh-orb-set-voice-mic { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; border-radius: 11px; border: 1px solid color-mix(in srgb, #d97706 22%, transparent); background: color-mix(in srgb, #d97706 8%, transparent); }
 .dsh-orb-set-voice-mic-icon { flex: none; display: flex; color: var(--dsw-alias-state-warning-primary, #b45309); }
 .dsh-orb-set .dsh-orb-set-voice-mic-text { flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 1.45; color: inherit; }
-.dsh-orb-set .is-locked { opacity: 0.45; }
-@media (max-width: 560px) {
+
+@media (max-width: 620px) {
+  .dsh-orb-set-head { flex-wrap: wrap; }
+  .dsh-orb-set-head-control { margin-left: 0; padding-left: 50px; }
+  .dsh-orb-set-head-state { display: none; }
   .dsh-orb-set-voice-panel-switch .dsh-orb-set-voice-panel-state { display: none; }
-  .dsh-orb-set-voice-head-state { display: none; }
+  .dsh-orb-set-avatar-row { align-items: flex-start; }
+  .dsh-orb-set-actions { margin-left: 0; }
+  .dsh-orb-set-workspace-controls { flex-wrap: wrap; }
+  .dsh-orb-set-path { flex-basis: 100%; }
+  .dsh-orb-set-history-row { align-items: flex-start; flex-direction: column; }
+  .dsh-orb-set-history-field { width: 100%; }
+  .dsh-orb-set-workspace-controls .dsh-orb-set-actions { width: 100%; justify-content: flex-end; }
   .dsh-orb-set-voice-model { flex-wrap: wrap; }
+  .dsh-orb-set-model-fields { grid-template-columns: 1fr; }
+  .dsh-orb-set-more { flex-basis: 100%; margin-left: 0; }
 }
 `
 
