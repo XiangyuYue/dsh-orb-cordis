@@ -189,7 +189,7 @@ describe('agent work keeps the panel on screen', () => {
     const css = source('../assets/floating.css')
     const preload = source('../preload.cjs')
     const main = source('../src/main.ts')
-    assert.match(html, /<div id="voice-meter" aria-hidden="true"><span id="voice-meter-bar"><\/span><\/div>\n\s+<div id="prompt"/)
+    assert.match(html, /<div id="voice-meter" aria-hidden="true"><span id="voice-meter-bar"><\/span><span id="voice-meter-dot"><\/span><\/div>\n\s+<div id="prompt"/)
     assert.match(css, /#voice-meter \{\n\s+position: absolute;\n\s+z-index: 3;\n\s+top: 1px;/)
     assert.match(css, /#voice-meter\.active \{\n\s+opacity: 1;/)
     assert.match(css, /#voice-meter-bar \{\n\s+display: block;\n\s+width: 100%;/)
@@ -208,5 +208,24 @@ describe('agent work keeps the panel on screen', () => {
     assert.match(main, /orb:voice-mode/)
     assert.match(main, /mode === 'interject'/)
     assert.match(main, /orb:voice-level/)
+  })
+
+  it('lights the ASR dot only while a speech segment is going to the recognizer', () => {
+    const html = source('../assets/floating.html')
+    const css = source('../assets/floating.css')
+    const preload = source('../preload.cjs')
+    const main = source('../src/main.ts')
+    assert.match(html, /<div id="voice-meter" aria-hidden="true"><span id="voice-meter-bar"><\/span><span id="voice-meter-dot"><\/span><\/div>/)
+    // Dim while the input is merely armed; lit only under `.speech`, which the renderer toggles.
+    assert.match(css, /#voice-meter\.speech #voice-meter-dot \{\n\s+background: #8ec5ff;/)
+    // The dot sits at the track's far end, opposite the ball on either side.
+    assert.match(css, /body\.expand-left #voice-meter-dot \{\n\s+left: -7px;/)
+    assert.match(css, /body\.expand-right #voice-meter-dot \{\n\s+right: -7px;/)
+    assert.match(code, /voiceMeter\.classList\.toggle\('speech', active && voiceSpeech\)/)
+    assert.match(code, /api\.onVoiceSpeech\?\.\(\(open\) => \{/)
+    assert.match(code, /if \(next === 'off'\) voiceSpeech = false/)
+    assert.match(preload, /onVoiceSpeech\(callback\)/)
+    assert.match(preload, /orb:voice-speech/)
+    assert.match(main, /orb:voice-speech/)
   })
 })

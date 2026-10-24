@@ -84,6 +84,7 @@ Host 和页面之间仍走现有的 NDJSON。这一次新增加的消息：
 | Host → 页面 | `{ type: 'voice-hold', hold }` | 停止按钮和展开要不要为播报多留 |
 | Host → 页面 | `{ type: 'voice-mode', mode }` | 听的状态变化，页面据此显示或隐藏输入框上沿的语音指示条 |
 | Host → 页面 | `{ type: 'voice-level', value }` | 0–1 的平滑麦克风电平，驱动指示条的浅蓝色长条 |
+| Host → 页面 | `{ type: 'voice-speech', open }` | VAD 开口/闭口，驱动指示条末端那颗 ASR 圆点 |
 | Host → 页面 | `{ type: 'voice-prompt', text }` | 一句要发送的语音指令 |
 | Host → 子进程 | `configure` / `listen` / `speak` / `stop-speak` | 设置、听的模式、播一段、停掉当前声音 |
 | 子进程 → Host | `wake` / `speech` / `utterance` / `playback` / `mic` / `level` | 唤醒、开口、整段文本、播放开始或结束、麦克风是否可用、语音电平 |

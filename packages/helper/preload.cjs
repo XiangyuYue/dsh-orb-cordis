@@ -137,6 +137,9 @@ contextBridge.exposeInMainWorld('dshOrb', {
   onVoiceLevel(callback) {
     ipcRenderer.on('orb:voice-level', (_event, level) => callback(level))
   },
+  onVoiceSpeech(callback) {
+    ipcRenderer.on('orb:voice-speech', (_event, open) => callback(open === true))
+  },
   onVoicePrompt(callback) {
     ipcRenderer.on('orb:voice-prompt', (_event, text) => callback(text))
   },

@@ -354,6 +354,45 @@ describe('voice lifecycle', () => {
     assert.equal(page.some((message) => message.type === 'voice-level' && message.value === 0.3), true)
   })
 
+  it('forwards the speech edge only while transcription is open', () => {
+    const settings = settingsWith()
+    const child = fakeChild()
+    const page: VoicePageMessage[] = []
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send: (message) => { page.push(message) },
+      open: () => child.link,
+    })
+    voice.start()
+    child.emit({ type: 'mic', open: true })
+    // Collapsed: the wake-word model runs, not ASR. A speech edge there must not light the dot.
+    child.emit({ type: 'speech', open: true })
+    assert.equal(page.some((message) => message.type === 'voice-speech' && message.open === true), false)
+    assert.equal(voice.speaking(), false)
+
+    voice.setPinned(true)
+    assert.equal(voice.listenMode(), 'command')
+    child.emit({ type: 'speech', open: true })
+    assert.equal(voice.speaking(), true)
+    assert.equal(page.some((message) => message.type === 'voice-speech' && message.open === true), true)
+    child.emit({ type: 'speech', open: false })
+    assert.equal(voice.speaking(), false)
+    assert.equal(page.some((message) => message.type === 'voice-speech' && message.open === false), true)
+
+    // A segment still open when the panel unpins keeps the old mode alive until it ends;
+    // transcription really is still running, so the lamp stays lit with it.
+    child.emit({ type: 'speech', open: true })
+    assert.equal(voice.speaking(), true)
+    voice.setPinned(false)
+    assert.equal(voice.listenMode(), 'command')
+    assert.equal(voice.speaking(), true)
+    child.emit({ type: 'speech', open: false })
+    assert.equal(voice.speaking(), false)
+    assert.equal(voice.listenMode(), 'wake')
+  })
+
   it('resumes the old turn when the hard interjection could not be started', () => {
     const settings = settingsWith()
     const child = fakeChild()

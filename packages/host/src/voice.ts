@@ -34,11 +34,13 @@ export interface VoicePresence {
 }
 
 export interface VoicePageMessage {
-  readonly type: 'pin' | 'unpin' | 'voice-hold' | 'voice-prompt' | 'voice-mode' | 'voice-level'
+  readonly type: 'pin' | 'unpin' | 'voice-hold' | 'voice-prompt' | 'voice-mode' | 'voice-level' | 'voice-speech'
   readonly hold?: boolean
   readonly text?: string
   readonly mode?: ListenMode
   readonly value?: number
+  /** `voice-speech`: a VAD speech segment is open and this audio is going to ASR. */
+  readonly open?: boolean
 }
 
 export interface VoiceLink {
@@ -182,6 +184,7 @@ export class VoiceController {
     this.device = false
     this.mode = 'off'
     this.hold = false
+    this.setSpeech(false)
     this.options.send({ type: 'voice-hold', hold: false })
     this.options.send({ type: 'voice-mode', mode: 'off' })
     this.options.send({ type: 'voice-level', value: 0 })
@@ -414,6 +417,11 @@ export class VoiceController {
     return this.mode
   }
 
+  /** Whether the child has an open VAD speech segment. A reloaded page seeds its ASR lamp from this. */
+  speaking(): boolean {
+    return this.speechOpen
+  }
+
   snapshot(): { hold: boolean, pinned: boolean, mode: ListenMode, queued: readonly string[] } {
     const view = queueView(this.queue)
     return {
@@ -447,7 +455,7 @@ export class VoiceController {
       // pause the idle clock forever. A falling edge is what releases a listen change
       // that waited out the rest of the sentence.
       const open = record?.open === true
-      this.speechOpen = open && transcribing(this.mode)
+      this.setSpeech(open && transcribing(this.mode))
       if (!open) this.pushListen(false)
       this.poll()
       return
@@ -472,6 +480,17 @@ export class VoiceController {
     }
   }
 
+  /**
+   * Forward the VAD speech edge to the page's ASR lamp. The lamp means "this audio is being
+   * fed to the recognizer", so a segment that opened before transcription ended must go dark
+   * with the mode, and a repeated close must not send another message.
+   */
+  private setSpeech(open: boolean): void {
+    if (this.speechOpen === open) return
+    this.speechOpen = open
+    this.options.send({ type: 'voice-speech', open })
+  }
+
   private onWake(): void {
     if (this.mode !== 'wake') return
     this.pinned = true
@@ -486,7 +505,7 @@ export class VoiceController {
 
   private onUtterance(text: string, tagged: unknown): void {
     const mode: ListenMode = tagged === 'command' || tagged === 'interject' ? tagged : this.mode
-    this.speechOpen = false
+    this.setSpeech(false)
     if (mode !== 'command' && mode !== 'interject') return this.poll()
     if (!this.canFinish(mode)) return this.poll()
     const settings = this.settings()
@@ -573,7 +592,7 @@ export class VoiceController {
     this.micKnown = false
     this.echoCancel = false
     this.device = false
-    this.speechOpen = false
+    this.setSpeech(false)
     if (this.timer) clearInterval(this.timer)
     this.timer = undefined
     if (this.closing) return
@@ -594,7 +613,7 @@ export class VoiceController {
     this.pinned = false
     this.agentBusy = initial.agentBusy === true
     this.questionOpen = initial.questionOpen === true
-    this.speechOpen = false
+    this.setSpeech(false)
     this.micOpen = false
     this.micKnown = false
     this.echoCancel = false
@@ -724,7 +743,7 @@ export class VoiceController {
     if ((this.mode === 'command' || this.mode === 'interject') && !transcribing(mode) && this.speechOpen && this.canFinish(this.mode)) return
     const device = this.deviceWanted(settings, presence)
     if (!force && mode === this.mode && device === this.device) return
-    if (transcribing(this.mode) && !transcribing(mode)) this.speechOpen = false
+    if (transcribing(this.mode) && !transcribing(mode)) this.setSpeech(false)
     const entering = transcribing(mode) && !transcribing(this.mode)
     let seedMs = entering ? this.commandSeed : 0
     // Only the switch right after a spoken reply uses zero. Later entries get the normal

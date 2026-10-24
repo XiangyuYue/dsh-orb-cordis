@@ -469,6 +469,10 @@ function deliver(message: unknown): void {
     win.webContents.send('orb:voice-level', (record as { value: number }).value)
     return
   }
+  if (record.type === 'voice-speech') {
+    win.webContents.send('orb:voice-speech', (record as { open?: unknown }).open === true)
+    return
+  }
   if (record.type === 'voice-prompt' && typeof (record as { text?: unknown }).text === 'string') {
     win.webContents.send('orb:voice-prompt', (record as { text: string }).text)
     return

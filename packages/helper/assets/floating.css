@@ -634,6 +634,34 @@ body.expand-down #composer {
   will-change: transform, height;
 }
 
+/* The ASR lamp at the far end of the track: dim while the input is only armed, lit while
+ * the VAD has an open speech segment, i.e. audio that is actually going to the recognizer.
+ * A sibling of the bar, so the bar's level never carries the dot with it. */
+#voice-meter-dot {
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 999px;
+  background: rgba(126, 190, 255, 0.35);
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+/* Away from the ball, whichever side the panel grew from. */
+body.expand-left #voice-meter-dot {
+  left: -7px;
+}
+
+body.expand-right #voice-meter-dot {
+  right: -7px;
+}
+
+#voice-meter.speech #voice-meter-dot {
+  background: #8ec5ff;
+  box-shadow: 0 0 6px rgba(126, 190, 255, 0.85);
+}
+
 body.running #composer,
 body.asking #composer,
 body.tcc-gating #composer,

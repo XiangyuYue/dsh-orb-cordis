@@ -829,6 +829,7 @@ export class OrbRuntime {
     // A reloaded page starts with the meter hidden. Tell it what the microphone is doing.
     this.send(socket, { type: 'voice-mode', mode: this.voice.listenMode() })
     this.send(socket, { type: 'voice-level', value: 0 })
+    this.send(socket, { type: 'voice-speech', open: this.voice.speaking() })
     if (Object.keys(this.appearance).length > 0) this.send(socket, { type: 'appearance', ...this.appearance })
     if (this.pending) this.send(socket, this.questionPayload(this.pending.id))
     void this.publishChrome()

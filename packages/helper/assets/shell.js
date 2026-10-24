@@ -282,6 +282,8 @@ function main() {
   let voiceMode = 'off'
   /** Smoothed 0..1 microphone level, already throttled by the child. */
   let voiceLevel = 0
+  /** The VAD has an open speech segment: this audio is going to ASR, not just the meter. */
+  let voiceSpeech = false
   let pointerInside = false
   let running = false
   let workLocked = false
@@ -729,13 +731,16 @@ function main() {
 
   /**
    * The voice-input meter sits on the composer's top edge. It stays up whenever
-   * transcription is open, including while the agent is still working.
+   * transcription is open, including while the agent is still working. Its dot is
+   * the ASR lamp: dim while the input is armed, lit while a speech segment is going
+   * to the recognizer.
    */
   function renderVoiceMeter() {
     if (voiceMeter === null) return
     const listening = voiceMode === 'command' || voiceMode === 'interject'
     const active = listening && expanded && !asking()
     voiceMeter.classList.toggle('active', active)
+    voiceMeter.classList.toggle('speech', active && voiceSpeech)
     const level = active ? Math.max(0, Math.min(1, voiceLevel)) : 0
     voiceMeter.style.setProperty('--voice-level', level.toFixed(3))
   }
@@ -2538,6 +2543,7 @@ function main() {
   api.onVoiceMode?.((mode) => {
     const next = mode === 'command' || mode === 'interject' ? mode : 'off'
     if (voiceMode === 'off' && next !== 'off') voiceLevel = 0
+    if (next === 'off') voiceSpeech = false
     voiceMode = next
     renderVoiceMeter()
   })
@@ -2546,6 +2552,10 @@ function main() {
     voiceLevel = Math.max(0, Math.min(1, level))
     const listening = voiceMode === 'command' || voiceMode === 'interject'
     if (listening) renderVoiceMeter()
+  })
+  api.onVoiceSpeech?.((open) => {
+    voiceSpeech = open === true
+    renderVoiceMeter()
   })
   api.onVoicePrompt?.((text) => { void acceptVoicePrompt(text) })
   api.onAttach((text) => {
