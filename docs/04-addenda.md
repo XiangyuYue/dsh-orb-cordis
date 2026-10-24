@@ -368,3 +368,18 @@ Windows 上的实测反馈:在浏览器里点球、输入、回车提交后,**Ag
   回复/停止这类短暂的 `off` 不单独开洞:当前固定状态下还有可达列就保持,没有就释放,避免反复开关采集设备。Host 的 `pushListen()` 和 `microphone()` 共用新的 `deviceWanted()`,所以主动释放时 `microphone()` 返回 `null`(不误报“麦克风不可用”),只有设备该开却没开时才返回 `false`。
 - **测试:** `listen.test.ts` 新增可达列/插话两组断言;`voice.test.ts` 新增两个完整场景(关唤醒收起、关语音输入固定)并修正提问卡用例里旧的“固定+仅唤醒仍占麦”断言。`pnpm typecheck` / `pnpm test`(511 例,509 过 2 跳过;computer-use 322 过)/ `pnpm build` 全绿。
 - **装机:** 改的是 Host 判断,只重启语音子进程不够,必须重启 DeepSeek Harness 才生效;`dist/host` 与 `dist/voice` 已同步进 desktop profile。
+
+## 28. 收起时系统音量仍被 VPIO 压低:只在展开且转写时启用(2026-10-24)
+
+现象:语音总开关和唤醒开着时,球收起、没有执行任务,整个系统的扬声器声音仍然明显变小;关掉语音才恢复。VPIO 的 other-audio ducking 是 unit 在跑就生效,macOS 26.4 上 `.min` 也压约 16 dB,和球有没有在干活无关。
+
+- **修法:** 子进程按当前 `mode` 选采集源,不再一直用原生采集:
+  - `wake`(收起、只听唤醒)→ `node-cpal` 普通采集,不启 VPIO;
+  - `command`(固定面板等指令)/ `interject`(执行中或收尾播报听插话)→ 原生 VPIO;
+  - `off` → 关麦。
+  `command` 只在面板固定时可达,`interject` 只在执行中/收尾把面板留住时可达,所以这两种模式就是“球展开且 ASR 在工作”;收起时不会再有 VPIO。
+- **切换:** `syncMic()` 发现模式要求另一种采集源时,先关旧源再开新源,但**不清 ring**——`wake→command` 的 300ms 预卷仍用来 seed VAD。原生启动失败仍回退 `node-cpal` 并上报 `aec:false`;原生曾经 ready 过的话沿用原有的 1 秒重试/三次降级。
+- **边界:** 展开后 `interject` 期间(TTS 播报、Agent 执行)仍会压系统音量,这是这次选定的退一步行为;收起、只唤醒、看视频/打游戏、主窗口用语音时不再受影响。球固定 command 但用户没说话时也会压,因为 command 本身就是 ASR 开着。
+- **未做:** 没有实现“只有用户开口时才压”。VPIO 没有按句开关的公开 API,启停 unit 会有延迟和首字风险;真要实现得走系统回采 AEC,见后续讨论。
+- **测试:** `listen.test.ts` 新增 `wantsNativeCapture()` 的四种模式/回退断言;`child-capture.test.ts` 原有 native 用例保持通过(缺省 listen 仍按 command/interject 开原生);`pnpm typecheck`、voice 101 例串行、host+helper 45 例通过。
+- **装机:** 只改语音子进程,不需要重启 DSH;替换 `dist/voice/lib/child.js` 后 kill 语音子进程,host 会在 1 秒内重新 fork(见第 26 节)。

@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { contextFromFiles, keywordLines } from './keywords.ts'
 import { LevelMeter } from './level.ts'
-import { needsMicrophone, transcribing, type ListenMode } from './listen.ts'
+import { needsMicrophone, transcribing, wantsNativeCapture, type ListenMode } from './listen.ts'
 import { isEcho, type SpokenLine } from './echo.ts'
 import { speakQwen as startQwenSpeech, type QwenSpeech } from './qwen-tts.ts'
 import { DEFAULT_QWEN_SPEED, DEFAULT_QWEN_VOICE } from './qwen.ts'
@@ -246,9 +246,12 @@ class Engine {
   private capture: CaptureSource | undefined
   /** False until the host's first listen, so a restart during a question card does not flash the mic. */
   private hostDevice = false
+  /** Which source backs the current capture. A mode change can swap it. */
+  private captureKind: 'native' | 'cpal' | undefined
   /** Once native capture cannot be used, this process stays on node-cpal. */
   private useCpal = false
-  private sawReady = false
+  /** Native capture has been ready at least once; a failure after that is retried. */
+  private nativeReady = false
   private captureFailures: number[] = []
   private relaunchTimer: ReturnType<typeof setTimeout> | undefined
   private spoken: SpokenLine[] = []
@@ -484,8 +487,37 @@ class Engine {
   }
 
   private syncMic(): void {
-    if (this.micWanted()) this.startMic()
-    else this.stopMic()
+    if (!this.micWanted()) {
+      this.stopMic()
+      return
+    }
+    const kind = this.wantsNative() ? 'native' : 'cpal'
+    if (this.capture !== undefined && this.captureKind === kind) return
+    this.switchMic(kind)
+  }
+
+  /**
+   * Native VPIO only while transcription is on. `command` is only reachable while the panel
+   * is pinned, and `interject` only while a running turn or a held closing line keeps it
+   * open; `wake` is the collapsed state. VPIO ducks the whole system output, so keeping it
+   * off in `wake` is what leaves the user's music and games alone.
+   */
+  private wantsNative(): boolean {
+    return wantsNativeCapture(this.mode, this.useCpal, captureBinary() !== undefined)
+  }
+
+  /**
+   * Swap the capture source without clearing the ring: the 300 ms before a wake→command
+   * switch seeds the first phrase after the native unit starts.
+   */
+  private switchMic(kind: 'native' | 'cpal'): void {
+    if (this.relaunchTimer) clearTimeout(this.relaunchTimer)
+    this.relaunchTimer = undefined
+    const capture = this.capture
+    this.capture = undefined
+    this.captureKind = undefined
+    try { capture?.close() } catch (error) { fail(error) }
+    if (this.micWanted()) this.startMic(kind)
   }
 
   private stopMic(): void {
@@ -493,30 +525,33 @@ class Engine {
     this.relaunchTimer = undefined
     const capture = this.capture
     this.capture = undefined
-    this.sawReady = false
+    this.captureKind = undefined
     this.ring.clear()
     try { capture?.close() } catch (error) { fail(error) }
   }
 
-  startMic(): void {
+  startMic(kind: 'native' | 'cpal' = 'cpal'): void {
     if (this.capture) return
-    const binary = this.useCpal ? undefined : captureBinary()
-    if (!binary) {
+    if (kind === 'native' && !this.useCpal) {
+      const binary = captureBinary()
+      if (binary !== undefined) {
+        this.openNative(binary)
+        return
+      }
       this.useCpal = true
       debug('capture helper missing; node-cpal has no echo cancellation')
-      this.openCpal()
-      return
     }
-    this.openNative(binary)
+    this.openCpal()
   }
 
   private openNative(binary: string): void {
     const source = new NativeCapture(binary)
     this.capture = source
+    this.captureKind = 'native'
     source.start({
       onPcm: (samples) => this.onAudio(samples),
       onReady: ({ aec }) => {
-        this.sawReady = true
+        this.nativeReady = true
         debug(`mic open source=native aec=${aec}`)
         emit({ type: 'mic', open: true, aec })
       },
@@ -527,10 +562,10 @@ class Engine {
   private openCpal(): void {
     const source = new CpalCapture(this.native)
     this.capture = source
+    this.captureKind = 'cpal'
     source.start({
       onPcm: (samples) => this.onAudio(samples),
       onReady: ({ aec }) => {
-        this.sawReady = true
         debug(`mic open source=cpal aec=${aec}`)
         emit({ type: 'mic', open: true, aec })
       },
@@ -540,29 +575,27 @@ class Engine {
 
   private onCaptureFailure(reason: 'mic-denied' | 'no-device' | 'unavailable' | 'failed' | 'crashed', detail: string): void {
     const capture = this.capture
+    const kind = this.captureKind
     this.capture = undefined
+    this.captureKind = undefined
     try { capture?.close() } catch { /* already closing */ }
-    if (reason === 'mic-denied') {
-      emit({ type: 'mic', open: false })
-      return
-    }
-    if (this.useCpal) {
+    if (reason === 'mic-denied' || kind !== 'native') {
       emit({ type: 'mic', open: false })
       return
     }
     const now = Date.now()
     this.captureFailures = this.captureFailures.filter((at) => now - at < 60_000)
     this.captureFailures.push(now)
-    if (!this.sawReady || this.captureFailures.length >= 3) {
+    if (!this.nativeReady || this.captureFailures.length >= 3) {
       this.useCpal = true
-      this.sawReady = false
+      this.nativeReady = false
       fail(new Error(`capture fallback: ${reason} ${detail}`))
-      if (this.micWanted()) this.startMic()
+      if (this.micWanted()) this.startMic('cpal')
       return
     }
     this.relaunchTimer = setTimeout(() => {
       this.relaunchTimer = undefined
-      if (this.micWanted()) this.startMic()
+      if (this.micWanted()) this.startMic(this.wantsNative() ? 'native' : 'cpal')
     }, 1000)
   }
 
@@ -1033,7 +1066,7 @@ function main(): void {
 
   const lines = createInterface({ input: process.stdin })
   lines.on('line', (line) => {
-    let message: { type?: string, mode?: ListenMode, seedMs?: number, id?: string, settings?: VoiceSettings, paths?: ConfigureMessage['paths'] }
+    let message: { type?: string, mode?: ListenMode, seedMs?: number, device?: boolean, id?: string, settings?: VoiceSettings, paths?: ConfigureMessage['paths'] }
     try {
       message = JSON.parse(line) as typeof message
     } catch {
@@ -1045,8 +1078,7 @@ function main(): void {
         return
       }
       if (message.type === 'listen' && (message.mode === 'off' || message.mode === 'wake' || message.mode === 'command' || message.mode === 'interject')) {
-        const device = (message as { device?: unknown }).device
-        engine?.listen(message.mode, message.seedMs ?? 0, device === false ? false : true)
+        engine?.listen(message.mode, message.seedMs ?? 0, message.device !== false)
         return
       }
       if (message.type === 'speak' && typeof message.id === 'string') {
