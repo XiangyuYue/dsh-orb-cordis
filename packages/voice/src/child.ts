@@ -144,6 +144,20 @@ class VadEar {
     this.onSpeech(now)
   }
 
+  /**
+   * The mode left transcription while the user may still be talking. Keep the phrase
+   * that is already open — it was captured while listening was on — then clear state.
+   */
+  flush(): void {
+    if (!this.detected) {
+      this.reset()
+      return
+    }
+    this.detector.flush()
+    this.drain()
+    this.reset()
+  }
+
   /** The listening mode changed away from commands. Drop state that must not leak into the next phrase. */
   reset(): void {
     const wasSpeaking = this.detected
@@ -288,8 +302,11 @@ class Engine {
     this.mode = mode
     const wasTranscribing = transcribing(previous)
     const nowTranscribing = transcribing(mode)
+    if (previous !== mode) debug(`listen ${previous}->${mode} device=${device}`)
     if (wasTranscribing && !nowTranscribing) {
-      this.vad?.reset()
+      // Playback just ended under a collapsed ball, or listen turned off mid-sentence.
+      // Keep the phrase the user already spoke instead of dropping it with the mode.
+      this.vad?.flush()
       emit({ type: 'level', value: 0 })
     }
     if (mode === 'wake' && previous !== 'wake' && this.kws && this.kwsStream) this.kws.reset(this.kwsStream)
@@ -765,6 +782,7 @@ class Engine {
         }, 31.5)
         this.vad = new VadEar(detector, 0.3, 0.5, (open) => {
           if (open) this.segmentMode = this.mode
+          debug(`vad open=${open} mode=${this.mode} segment=${this.segmentMode}`)
           emit({ type: 'speech', open })
         }, (samples) => this.enqueue(samples))
       } catch (error) {
@@ -795,8 +813,13 @@ class Engine {
           this.settings?.interjectKeyword ?? '',
           ...(this.settings?.dismissPhrases ?? []),
         ])
-        if (echo) process.stderr.write('echo dropped\n')
-        else emit({ type: 'utterance', text: message.text, ...(meta ? { mode: meta.mode } : {}) })
+        if (echo) {
+          debug(`asr echo-dropped mode=${meta?.mode} text=${message.text.slice(0, 60)}`)
+          process.stderr.write('echo dropped\n')
+        } else {
+          debug(`asr text mode=${meta?.mode} text=${message.text.slice(0, 80)}`)
+          emit({ type: 'utterance', text: message.text, ...(meta ? { mode: meta.mode } : {}) })
+        }
       }
       emit({ type: 'speech', open: false })
       this.pump()
@@ -822,6 +845,7 @@ class Engine {
   private enqueue(samples: Float32Array): void {
     const copy = new Float32Array(samples)
     const mode = transcribing(this.segmentMode) ? this.segmentMode : this.mode
+    debug(`segment mode=${mode} samples=${copy.length}`)
     this.jobs.push({
       samples: copy,
       mode,
