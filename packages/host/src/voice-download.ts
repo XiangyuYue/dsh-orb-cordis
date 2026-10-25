@@ -579,10 +579,15 @@ function onceDrain(file: NodeJS.WritableStream): Promise<void> {
 }
 
 function extractArchive(archive: string, dest: string, format: WakeArchiveFormat): Promise<void> {
+  // Relative names and a cwd, never `C:\...` arguments: GNU tar (what Git for Windows
+  // installs) reads a drive-letter path as a remote host and dies with "Cannot execute
+  // remote shell". The archive and its staging folder are siblings, so both are relative
+  // to the folder they already share.
+  const cwd = dirname(archive)
   return new Promise((resolve, reject) => {
     // The registry serves gzip, the GitHub release bzip2. Everything else about the unpack
     // is shared: `tar` on Windows is bsdtar, which reads either.
-    const child = spawn('tar', [format === 'tgz' ? '-xzf' : '-xjf', archive, '-C', dest])
+    const child = spawn('tar', [format === 'tgz' ? '-xzf' : '-xjf', basename(archive), '-C', basename(dest)], { cwd })
     let stderr = ''
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
     child.on('error', reject)
