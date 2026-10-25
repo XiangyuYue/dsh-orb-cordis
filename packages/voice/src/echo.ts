@@ -4,7 +4,7 @@
  */
 
 import { pinyin } from 'pinyin-pro'
-import { containsAny, normalizeUtterance } from './dismiss.ts'
+import { mentions, normalizeUtterance } from './dismiss.ts'
 
 export interface SpokenLine {
   readonly text: string
@@ -31,8 +31,8 @@ export function isEcho(
   const overlapping = spoken.filter((line) => overlaps(line, window))
   if (overlapping.length === 0) return false
   for (const command of commands) {
-    if (!containsAny(utterance, [command])) continue
-    if (!overlapping.some((line) => containsAny(line.text, [command]))) return false
+    if (!mentions(utterance, command)) continue
+    if (!overlapping.some((line) => mentions(line.text, command))) return false
   }
   const played = syllables(overlapping.map((line) => line.text).join(''))
   if (played.length === 0) return false

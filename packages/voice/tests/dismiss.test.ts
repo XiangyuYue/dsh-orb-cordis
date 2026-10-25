@@ -50,6 +50,16 @@ describe('dismiss phrases', () => {
     assert.equal(isInterject('肥鱼', '大飞鱼'), false)
   })
 
+  it('accepts one wrong leading syllable when the tail of the name is intact', () => {
+    assert.equal(isInterject('贾飞鱼你个明天北京天气。', '大肥鱼'), true)
+    assert.equal(isInterject('大灰鱼，停一下', '大肥鱼'), true)
+    // The last syllable is the anchor: a different word keeps its own meaning.
+    assert.equal(isInterject('大飞机，停一下', '大肥鱼'), false)
+    // Dismissal stays strict, so an ordinary sentence never ends the turn by accident.
+    assert.equal(isDismiss('坐下吧', ['退下吧']), false)
+    assert.equal(isDismiss('退着吧', ['退下吧']), false)
+  })
+
   it('accepts a toneless homophone of a two-syllable-or-longer dismiss phrase', () => {
     assert.equal(isDismiss('推下吧', ['退下吧']), true)
     assert.equal(isDismiss('腿下吧', ['退下吧']), true)

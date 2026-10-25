@@ -29,21 +29,49 @@ export function containsAny(text: string, phrases: readonly string[]): boolean {
  * A one-syllable phrase is left to exact matching; every homophone would match it.
  */
 export function containsPhonetic(text: string, phrase: string): boolean {
+  return phoneticHit(text, phrase, 0, false)
+}
+
+/**
+ * The interject keyword is the weak spot: SenseVoice turns 「大肥鱼」 into
+ * 「贾飞鱼」/「大飞鱼」 often enough that an exact homophone loses half the
+ * interjections. A three-syllable-or-longer keyword therefore allows one wrong
+ * syllable, as long as the **last** syllable is still right — that anchor keeps
+ * 「大飞机」 or 「坐下吧」 from matching 「大肥鱼」/「退下吧」.
+ */
+export function containsKeywordPhonetic(text: string, phrase: string): boolean {
+  const wanted = syllables(phrase)
+  return phoneticHit(text, phrase, wanted.length >= 3 ? 1 : 0, true)
+}
+
+function phoneticHit(text: string, phrase: string, slack: number, anchorLast: boolean): boolean {
   const wanted = syllables(phrase)
   if (wanted.length < 2) return false
   const heard = syllables(text)
   if (heard.length < wanted.length) return false
   for (let start = 0; start <= heard.length - wanted.length; start += 1) {
+    let missed = 0
     let hit = true
     for (let offset = 0; offset < wanted.length; offset += 1) {
-      if (heard[start + offset] !== wanted[offset]) {
+      if (heard[start + offset] === wanted[offset]) continue
+      if (anchorLast && offset === wanted.length - 1) {
+        hit = false
+        break
+      }
+      missed += 1
+      if (missed > slack) {
         hit = false
         break
       }
     }
-    if (hit) return true
+    if (hit && missed <= slack) return true
   }
   return false
+}
+
+/** The phrase is present exactly, or close enough by pinyin to be the same spoken word. */
+export function mentions(text: string, phrase: string): boolean {
+  return containsAny(text, [phrase]) || containsPhonetic(text, phrase) || containsKeywordPhonetic(text, phrase)
 }
 
 /**
@@ -56,18 +84,19 @@ export function containsPhonetic(text: string, phrase: string): boolean {
  * would match them, which is too broad for a command that ends the turn.
  */
 export function isDismiss(text: string, phrases: readonly string[]): boolean {
-  if (containsAny(text, phrases)) return true
-  return phrases.some((phrase) => syllables(phrase).length >= 2 && containsPhonetic(text, phrase))
+  return containsAny(text, phrases)
+    || phrases.some((phrase) => syllables(phrase).length >= 2 && containsPhonetic(text, phrase))
 }
 
 /**
  * True when the utterance contains any interject keyword, including a toneless
- * pinyin homophone of it. Aliases are extra spellings for the same keyword, so a
- * near-miss such as 「大灰鱼」 can be added without changing the spoken name.
+ * pinyin homophone and (for three syllables or more) one wrong non-final syllable.
+ * Aliases are extra spellings for the same keyword, so a near-miss such as
+ * 「大灰鱼」 can be added without changing the spoken name.
  */
 export function isInterject(text: string, keywords: string | readonly string[]): boolean {
   const list = typeof keywords === 'string' ? [keywords] : keywords
-  return list.some((keyword) => containsAny(text, [keyword]) || containsPhonetic(text, keyword))
+  return list.some((keyword) => containsAny(text, [keyword]) || containsKeywordPhonetic(text, keyword))
 }
 
 function syllables(text: string): string[] {

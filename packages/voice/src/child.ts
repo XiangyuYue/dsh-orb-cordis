@@ -12,7 +12,7 @@ import { appendFileSync, existsSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { contextFromFiles, keywordLines } from './keywords.ts'
+import { contextFromFiles, keywordLines, tokenizeKeyword } from './keywords.ts'
 import { LevelMeter } from './level.ts'
 import { needsMicrophone, transcribing, wantsNativeCapture, type ListenMode } from './listen.ts'
 import { isEcho, type SpokenLine } from './echo.ts'
@@ -26,6 +26,9 @@ import { type VoiceSettings } from './settings.ts'
 const require = createRequire(import.meta.url)
 const TARGET_RATE = 16000
 const RING_SAMPLES = TARGET_RATE / 2
+
+/** Label of the interject keyword inside the spotter's keyword list. */
+const INTERJECT_LABEL = 'interject'
 
 const VOICE_DEBUG_MARKER = join(tmpdir(), 'dsh-orb-voice-debug.on')
 const VOICE_DEBUG_LOG = join(tmpdir(), 'dsh-orb-voice-debug.log')
@@ -103,6 +106,10 @@ class VadEar {
   private lastEnd = -Infinity
   private detected = false
   private preroll: Float32Array | undefined
+  /** True while the VAD has an open phrase; the keyword spotter only arms inside one. */
+  get speaking(): boolean {
+    return this.detected
+  }
   private readonly onSpeech: (open: boolean) => void
   private readonly onSegment: (samples: Float32Array) => void
 
@@ -248,13 +255,15 @@ class Engine {
   private kwsStream: any
   private kwsKey = ''
   private lastWake = 0
+  /** The acoustic keyword spotter fired inside the open phrase; the ASR text need not repeat it. */
+  private armedKeyword = false
   private vad: VadEar | undefined
   private worker: Worker | undefined
   private workerReady = false
-  private jobs: { samples: Float32Array, mode: ListenMode, from: number, to: number }[] = []
+  private jobs: { samples: Float32Array, mode: ListenMode, from: number, to: number, keyword: boolean }[] = []
   private decoding = false
   private jobId = 0
-  private readonly pending = new Map<number, { mode: ListenMode, from: number, to: number }>()
+  private readonly pending = new Map<number, { mode: ListenMode, from: number, to: number, keyword: boolean }>()
   /** The mode at the moment this utterance opened. command and interject share one segment. */
   private segmentMode: ListenMode = 'off'
   private capture: CaptureSource | undefined
@@ -310,6 +319,9 @@ class Engine {
       emit({ type: 'level', value: 0 })
     }
     if (mode === 'wake' && previous !== 'wake' && this.kws && this.kwsStream) this.kws.reset(this.kwsStream)
+    // Leaving wake stops the wake phrase from being spotted again until the next raise.
+    if (previous === 'wake' && mode !== 'wake' && this.kws && this.kwsStream) this.kws.reset(this.kwsStream)
+    if (mode !== 'interject') this.armedKeyword = false
     if (!wasTranscribing && nowTranscribing) {
       this.meter.reset()
       if (seedMs > 0) this.vad?.seed(this.ring.last(seedMs))
@@ -662,16 +674,19 @@ class Engine {
   private onAudio(samples: Float32Array): void {
     this.ring.push(samples)
     if (this.mode === 'wake') {
-      this.feedWake(samples)
+      this.feedKeywords(samples)
       return
     }
     if (!transcribing(this.mode)) return
     const level = this.meter.push(samples, Date.now())
     if (level !== undefined) emit({ type: 'level', value: level })
     this.vad?.push(samples)
+    // The ASR text of a short name is unreliable («下培鱼» for «大肥鱼»), so an
+    // acoustic hit inside the open phrase is what makes an interjection stick.
+    this.feedKeywords(samples)
   }
 
-  private feedWake(samples: Float32Array): void {
+  private feedKeywords(samples: Float32Array): void {
     const spotter = this.kws
     const stream = this.kwsStream
     if (!spotter || !stream) return
@@ -681,18 +696,30 @@ class Engine {
       const result = spotter.getResult(stream)
       if (!result?.keyword) continue
       spotter.reset(stream)
+      const label = String(result.keyword)
       const now = Date.now()
-      const cooldown = this.settings?.wakeCooldownMs ?? 1500
-      if (now - this.lastWake < cooldown) continue
-      this.lastWake = now
-      emit({ type: 'wake' })
+      if (this.mode === 'wake') {
+        if (label === INTERJECT_LABEL) continue
+        const cooldown = this.settings?.wakeCooldownMs ?? 1500
+        if (now - this.lastWake < cooldown) continue
+        this.lastWake = now
+        emit({ type: 'wake' })
+        continue
+      }
+      if (label !== INTERJECT_LABEL) continue
+      if (this.vad?.speaking !== true) continue
+      if (!this.armedKeyword) debug(`kws armed label=${label} mode=${this.mode}`)
+      this.armedKeyword = true
     }
   }
 
   private ensureKws(): void {
     const settings = this.settings
     const dir = this.paths?.kws
-    if (!settings?.wakeEnabled || !dir) {
+    const keyword = settings?.interjectKeyword?.trim() ?? ''
+    const wantsWake = settings?.wakeEnabled === true
+    const wantsInterject = settings?.commandEnabled === true && keyword !== ''
+    if ((!wantsWake && !wantsInterject) || !dir) {
       this.clearKws()
       return
     }
@@ -703,7 +730,17 @@ class Engine {
     }
     let lines: string[] = []
     try {
-      lines = keywordLines(settings.wakeWords, contextFromFiles(dir))
+      const ctx = contextFromFiles(dir)
+      lines = wantsWake ? keywordLines(settings.wakeWords, ctx) : []
+      // The interject keyword rides the same spotter as a separate label: the ASR
+      // text of a short name is the weak link, the acoustic hit is not.
+      if (wantsInterject) {
+        try {
+          lines.push(tokenizeKeyword(keyword, ctx, INTERJECT_LABEL))
+        } catch {
+          // A keyword the model cannot tokenize still works through the transcript.
+        }
+      }
     } catch (error) {
       fail(error)
       // The configured phrase cannot be built. Keeping the previous list would make the
@@ -817,8 +854,13 @@ class Engine {
           debug(`asr echo-dropped mode=${meta?.mode} text=${message.text.slice(0, 60)}`)
           process.stderr.write('echo dropped\n')
         } else {
-          debug(`asr text mode=${meta?.mode} text=${message.text.slice(0, 80)}`)
-          emit({ type: 'utterance', text: message.text, ...(meta ? { mode: meta.mode } : {}) })
+          debug(`asr text mode=${meta?.mode} keyword=${meta?.keyword === true} text=${message.text.slice(0, 80)}`)
+          emit({
+            type: 'utterance',
+            text: message.text,
+            ...(meta ? { mode: meta.mode } : {}),
+            ...(meta?.keyword === true ? { keyword: true } : {}),
+          })
         }
       }
       emit({ type: 'speech', open: false })
@@ -845,12 +887,15 @@ class Engine {
   private enqueue(samples: Float32Array): void {
     const copy = new Float32Array(samples)
     const mode = transcribing(this.segmentMode) ? this.segmentMode : this.mode
-    debug(`segment mode=${mode} samples=${copy.length}`)
+    const keyword = this.armedKeyword
+    this.armedKeyword = false
+    debug(`segment mode=${mode} samples=${copy.length} keyword=${keyword}`)
     this.jobs.push({
       samples: copy,
       mode,
       from: Date.now() - samples.length / 16 - 500,
       to: Date.now(),
+      keyword,
     })
     this.pump()
   }
@@ -861,7 +906,7 @@ class Engine {
     if (!job) return
     this.decoding = true
     const id = ++this.jobId
-    this.pending.set(id, { mode: job.mode, from: job.from, to: job.to })
+    this.pending.set(id, { mode: job.mode, from: job.from, to: job.to, keyword: job.keyword })
     const bytes = new ArrayBuffer(job.samples.byteLength)
     new Uint8Array(bytes).set(new Uint8Array(job.samples.buffer, job.samples.byteOffset, job.samples.byteLength))
     this.worker.postMessage({ id, samples: bytes }, [bytes])

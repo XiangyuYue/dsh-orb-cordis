@@ -489,7 +489,7 @@ export class VoiceController {
       return
     }
     if (type === 'utterance' && typeof record?.text === 'string') {
-      this.onUtterance(record.text, record.mode)
+      this.onUtterance(record.text, record.mode, record.keyword === true)
       return
     }
     if (type === 'playback' && typeof record?.id === 'string' && record.phase === 'end') {
@@ -522,11 +522,13 @@ export class VoiceController {
     this.poll()
   }
 
-  private onUtterance(text: string, tagged: unknown): void {
+  private onUtterance(text: string, tagged: unknown, keyword = false): void {
     const mode: ListenMode = tagged === 'command' || tagged === 'interject' ? tagged : this.mode
     this.setSpeech(false)
     if (mode !== 'command' && mode !== 'interject') return this.poll()
-    if (!this.canFinish(mode)) return this.poll()
+    const finishable = this.canFinish(mode)
+    debug(`utterance mode=${mode} finishable=${finishable} keyword=${keyword} mic=${this.micOpen} stopping=${this.stopping} text=${text.slice(0, 60)}`)
+    if (!finishable) return this.poll()
     const settings = this.settings()
     if (mode === 'command') {
       const spoken = stripWakePrefix(text, settings.wakeWords)
@@ -539,7 +541,9 @@ export class VoiceController {
     // interject：用原话判，不去唤醒词前缀。否则「你好大肥鱼，……」会被剥掉关键词。
     const spoken = text.trim()
     if (isDismiss(spoken, settings.dismissPhrases)) return this.dismiss()
-    if (isInterject(spoken, settings.interjectKeyword)) return this.interject(spoken)
+    // `keyword` is the acoustic spotter's evidence that the name was actually spoken;
+    // the transcript mangles it («下培鱼» for «大肥鱼») often enough to need both.
+    if (keyword || isInterject(spoken, settings.interjectKeyword)) return this.interject(spoken)
     this.poll()
   }
 
