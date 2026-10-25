@@ -846,7 +846,9 @@ class Engine {
       if (typeof message.id === 'number') this.pending.delete(message.id)
       if (message.error) fail(message.error)
       else if (message.text) {
-        const echo = meta !== undefined && isEcho(message.text, this.spoken, { from: meta.from, to: meta.to }, [
+        // An acoustic keyword hit inside this segment is the user, not the speaker:
+        // the echo canceller already removed the playback before the spotter saw it.
+        const echo = meta !== undefined && meta.keyword !== true && isEcho(message.text, this.spoken, { from: meta.from, to: meta.to }, [
           this.settings?.interjectKeyword ?? '',
           ...(this.settings?.dismissPhrases ?? []),
         ])

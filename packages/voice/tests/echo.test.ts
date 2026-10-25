@@ -49,4 +49,12 @@ describe('text echo filter', () => {
     const spoken = [line('好的，再见', 0)]
     assert.equal(isEcho('好', spoken, { from: 100, to: 400 }, commands), false)
   })
+
+  it('keeps a short interjection while a long paragraph is playing', () => {
+    // The assistant's long answer is one playback line; the user's phrase is a
+    // second of it. Comparing against the whole paragraph would call it echo.
+    const paragraph = `${'好的，我帮你把明天的天气查一下，'.repeat(40)}大肥鱼会帮你查`
+    const spoken = [line(paragraph, 0)]
+    assert.equal(isEcho('大肥鱼别说了', spoken, { from: 100, to: 800 }, commands), false)
+  })
 })

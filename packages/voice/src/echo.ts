@@ -36,6 +36,13 @@ export function isEcho(
   }
   const played = syllables(overlapping.map((line) => line.text).join(''))
   if (played.length === 0) return false
+  // A paragraph is one playback line here: the assistant's 1.3k-character answer is
+  // sent as a single `speak`, so the text we compare against covers minutes while the
+  // user's phrase covers a second or two. Any short sentence then looks like 60% of
+  // that text and a genuine interjection ("大肥鱼别说了。") gets dropped. Only judge
+  // echo when the playing text is comparable to what was heard; for a long paragraph
+  // the acoustic echo canceller and the keyword requirement already do the filtering.
+  if (played.length >= heard.length * 4) return false
   return longestCommon(heard, played) / heard.length >= 0.6
 }
 
