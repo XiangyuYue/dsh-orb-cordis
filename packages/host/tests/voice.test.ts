@@ -277,6 +277,30 @@ describe('voice lifecycle', () => {
     assert.equal(voice.listenMode(), 'wake')
   })
 
+  it('reopens a dead child when the settings are saved again', () => {
+    const settings = settingsWith()
+    const children = [fakeChild(), fakeChild(), fakeChild(), fakeChild(), fakeChild()]
+    let opened = 0
+    const voice = new VoiceController({
+      settings: () => settings,
+      presence: () => ({ wake: true, asr: true, tts: true }),
+      now: () => 0,
+      send() {},
+      open: () => children[opened++]?.link,
+    })
+    voice.start()
+    // Three crash restarts spend the fast budget; the fourth exit gives up.
+    for (let crash = 0; crash < 4; crash += 1) children[opened - 1]?.die()
+    assert.equal(opened, 4)
+    // Saving the settings (what a finished model download does) opens a fresh
+    // lifecycle instead of leaving voice dead until the app restarts.
+    voice.applySettings()
+    assert.equal(opened, 5)
+    children[4]?.emit({ type: 'mic', open: true })
+    assert.equal(voice.listenMode(), 'wake')
+    voice.close()
+  })
+
   it('ignores the replaced link exiting after a fresh start', () => {
     const settings = settingsWith()
     const children = [fakeChild(), fakeChild()]

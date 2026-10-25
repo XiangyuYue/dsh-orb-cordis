@@ -67,6 +67,14 @@ export interface VoiceControllerOptions {
 }
 
 const RESTART_LIMIT = 3
+/**
+ * A child that cannot start is usually waiting on something outside the plugin
+ * (a model still downloading, a dependency being installed, a transient crash).
+ * The fast budget above stops a crash loop from spinning; this slow retry is what
+ * lets the feature come up by itself later instead of staying dead until the app
+ * is restarted.
+ */
+const SLOW_RETRY_MS = 30_000
 
 const VOICE_DEBUG_MARKER = join(tmpdir(), 'dsh-orb-voice-debug.on')
 const VOICE_DEBUG_LOG = join(tmpdir(), 'dsh-orb-voice-debug.log')
@@ -103,6 +111,8 @@ export class VoiceController {
   private closing = false
   private restarts = 0
   private failed = false
+  /** Slow retry for a child that could not start at all; cleared on every new lifecycle. */
+  private slowRetry: ReturnType<typeof setTimeout> | undefined
   private pinned = false
   private agentBusy = false
   private questionOpen = false
@@ -175,6 +185,8 @@ export class VoiceController {
     this.live = false
     if (this.timer) clearInterval(this.timer)
     this.timer = undefined
+    if (this.slowRetry) clearTimeout(this.slowRetry)
+    this.slowRetry = undefined
     this.link?.close()
     this.link = undefined
     this.resetPlayback()
@@ -229,7 +241,14 @@ export class VoiceController {
   /** The settings file changed. Switches take effect without reloading a model. */
   applySettings(): void {
     debug(`apply-settings live=${this.live} tts=${this.ttsOn()} enabled=${this.queue.enabled}`)
-    if (!this.live) return
+    if (this.closing) return
+    if (!this.live) {
+      // The child died or never started. A settings save — including the one that
+      // follows a finished model download — is the user telling us the cause may be
+      // gone, so open a fresh lifecycle instead of staying silent until a restart.
+      this.start()
+      return
+    }
     const enabled = this.ttsOn()
     if (enabled !== this.queue.enabled) this.apply({ type: 'enabled', enabled })
     this.pushConfigure()
@@ -610,6 +629,8 @@ export class VoiceController {
     this.closing = false
     this.restarts = 0
     this.failed = false
+    if (this.slowRetry) clearTimeout(this.slowRetry)
+    this.slowRetry = undefined
     this.pinned = false
     this.agentBusy = initial.agentBusy === true
     this.questionOpen = initial.questionOpen === true
@@ -644,6 +665,7 @@ export class VoiceController {
       debug('launch failed: no link')
       this.failed = true
       this.mode = 'off'
+      this.scheduleSlowRetry()
       return
     }
     this.live = true
@@ -668,9 +690,27 @@ export class VoiceController {
     if (this.restarts > RESTART_LIMIT) {
       this.failed = true
       this.mode = 'off'
+      this.scheduleSlowRetry()
       return
     }
     this.launchChild()
+  }
+
+  /**
+   * Keep a low-rate retry alive after the fast budget is spent. A missing model
+   * download, an environment fix, or a one-off crash all heal on their own at the
+   * next tick; a permanently broken install costs one fork every 30 seconds.
+   */
+  private scheduleSlowRetry(): void {
+    if (this.closing || this.slowRetry !== undefined) return
+    this.slowRetry = setTimeout(() => {
+      this.slowRetry = undefined
+      if (this.closing || this.live) return
+      this.restarts = 0
+      this.failed = false
+      this.launchChild()
+    }, SLOW_RETRY_MS)
+    this.slowRetry.unref?.()
   }
 
   private resetPlayback(): void {

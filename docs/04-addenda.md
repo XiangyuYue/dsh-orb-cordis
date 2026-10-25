@@ -383,3 +383,30 @@ Windows 上的实测反馈:在浏览器里点球、输入、回车提交后,**Ag
 - **未做:** 没有实现“只有用户开口时才压”。VPIO 没有按句开关的公开 API,启停 unit 会有延迟和首字风险;真要实现得走系统回采 AEC,见后续讨论。
 - **测试:** `listen.test.ts` 新增 `wantsNativeCapture()` 的四种模式/回退断言;`child-capture.test.ts` 原有 native 用例保持通过(缺省 listen 仍按 command/interject 开原生);`pnpm typecheck`、voice 101 例串行、host+helper 45 例通过。
 - **装机:** 只改语音子进程,不需要重启 DSH;替换 `dist/voice/lib/child.js` 后 kill 语音子进程,host 会在 1 秒内重新 fork(见第 26 节)。
+
+## 29. TTS 下载完成却报「model-steps-3.onnx 校验失败」(2026-10-24)
+
+现象:设置页下载播报模型,进度走完、压缩包也解开了,最后报 `model-steps-3.onnx 校验失败`,模型一直显示「未下载」,`~/.dsh/dsh-orb/voice/tts.staging` 里留着解压好的中文模型。
+
+- **根因:** 上游在 2026-10-24 15:59 重新打包了 `matcha-icefall-zh-baker`,权重变了但文件名和大小都没变(75,624,188 字节),tar 里只有模型相关文件是当天时间、`dict/` 还是 2025-02-18。实际下载到的哈希是 `47e82b11…`,而 [manifest.ts](../packages/voice/src/manifest.ts) 钉的是旧包的 `ff1cc7f7…`。HF 的 LFS 元数据也仍写着旧哈希,但 resolve 出来的字节已经是新包——两边对不上,校验必然失败。
+- **修复:**
+  - TTS 不再下载 GitHub release 的 tar.bz2,改为**从 Hugging Face 逐文件下载**:`hf-mirror.com` 优先(本机实测 4–5 MB/s),`huggingface.co` 兜底。仓库树不可变,钉住的哈希不会因为上游重打包而失效。
+  - 哈希接受新旧两版(`TTS_ZH_MODEL_SHA256` 收 `47e8…` 与 `ff1c…`,`TTS_EN_MODEL_SHA256` 收 `f8e8…` 与 `4d77…`),老安装继续有效,新下载也能过校验。
+  - 英文包里的 `espeak-ng-data` 有 355 个文件,Matcha-EN 只需要英文核心 6 个 + `lang/gmw` 12 个,清单裁到 20 个文件;整套 TTS 请求数从 363 降到 27。
+  - 每个文件最多 3 次重试;429/503 按 `Retry-After` 或 2s×n 退避;某个源连续失败 10 次就熔断并切到另一个源;失败时清空 `*.staging`,不留半成品。
+  - 进度改用真实总字节(206,100,276 ≈ 197 MB),删掉原来“第一个文件大小 ×3”的估算。
+- **验证:** 本机从零安装 33 秒(改前 154–327 秒且偶发失败),中英文都能合成;`host` 263 例里 260 通过(3 个失败是既有的安装/EPIPE 问题,与本次无关);`pnpm typecheck` 通过。
+- **未做:** 唤醒模型仍只有 GitHub release(AtomGit 镜像只有 2024 年旧版,HF/ModelScope 没有对应 ONNX),国内仍需加速或自建镜像。
+
+## 30. 语音开关全开却毫无反应:子进程缺依赖 + 宿主不再重试 (2026-10-25)
+
+现象:设置里语音总开关、唤醒、语音输入、播报全开,`orb-voice.json` 内容正确,但悬浮球没有任何反应,麦克风指示灯不亮,任务管理器里没有语音子进程。
+
+- **根因一:安装包缺运行时依赖。** `dist/voice/child.js` 在启动时 `require('sherpa-onnx-node')` / `require('node-cpal')`,并用 ESM 引入 `pinyin-pro`;安装目录的 `node_modules` 里只有 `koffi`/`zod`,子进程第一行就 `ERR_MODULE_NOT_FOUND` 退出。`pack.mjs` 本来会把这几个包和 `sherpa-onnx-win-x64` 平台库塞进 tarball 的 `node_modules`,但这次是用“手工把 `dist` 同步进 profile”的方式装的 0.1.9(发布版根本没有 voice 目录),这条路径不会带依赖。
+- **根因二:宿主三次失败后永久放弃。** `restartChild()` 在 `RESTART_LIMIT = 3` 之后把 `failed` 置真并不再拉起;`applySettings()` 开头 `if (!this.live) return`,所以后来补好依赖、或者模型下完,都不会让语音恢复——只能重启应用。用户看到的“开关全开但什么都没发生”就是这个状态。
+- **修复:**
+  - `launchChild()` 拿不到子进程、以及 `restartChild()` 用尽快速预算时,都改为安排一次 30 秒的**慢速重试**;重试会清零预算再拉起。环境问题(依赖装好、模型下完、一次性崩溃)因此会自己恢复,坏安装的代价只是每 30 秒 fork 一次。
+  - `applySettings()` 在 `!live` 且未关闭时改为 `start()` 开一个新生命周期。设置页保存、以及模型下载完成后的 `onReady` 都会走这里,所以“下完模型直接生效”不再需要重启。
+  - `close()` / `fresh()` 清理慢速重试定时器,避免球关掉后还在后台 fork。
+- **测试:** `voice.test.ts` 新增“设置再次保存会重开死掉的子进程”(连续 4 次崩溃后 `applySettings()` 应打开第 5 个);`host` 全量 264 例、`pnpm typecheck` 通过。
+- **部署提醒:** 手工同步 `dist` 只适用于**已经装过语音版本**的 profile;从没有 voice 的发布版升级时,必须用 `node packages/bundle/scripts/pack.mjs` 打出的 tarball 安装(它自带 `node_modules`),或者把 `sherpa-onnx-node`、`sherpa-onnx-<platform>`、`node-cpal`、`pinyin-pro` 一并复制进包目录。
