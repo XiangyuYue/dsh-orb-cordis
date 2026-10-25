@@ -349,10 +349,13 @@ rtc::scoped_refptr<webrtc::AudioProcessing> makeProcessor() {
   config.gain_controller1.enabled = false;
   config.gain_controller2.enabled = false;
   config.high_pass_filter.enabled = true;
+  // webrtc-audio-processing 1.3 creates the instance first and applies the
+  // runtime config afterwards. Newer libwebrtc moved the config into the
+  // builder as SetConfig(); the MSYS2 package still ships the 1.3 API.
   webrtc::AudioProcessingBuilder builder;
-  builder.SetConfig(config);
-  auto processor = builder.Create();
+  rtc::scoped_refptr<webrtc::AudioProcessing> processor(builder.Create());
   if (!processor) fail(Failure::Unavailable, "echo cancellation could not be created");
+  processor->ApplyConfig(config);
   return processor;
 }
 
@@ -444,7 +447,12 @@ int wmain() {
   if (!stop || !changed) fail(Failure::Failed, "an event could not be created");
   DeviceNotify* notify = new DeviceNotify(changed);
   enumerator->RegisterEndpointNotificationCallback(notify);
-  notify->Release();
+  // Do not Release here. MMDevAPI keeps calling this object on its own thread
+  // pool, and on the MSYS2 1.3 build it does not hold a reference of its own:
+  // the immediate Release deleted the object and the first notification then
+  // jumped through freed memory (access violation on an MMDevAPI thread).
+  // The helper exits right after Unregister, so one object for the process
+  // lifetime is the safe trade.
 
   std::thread([stop] {
     HANDLE input = GetStdHandle(STD_INPUT_HANDLE);

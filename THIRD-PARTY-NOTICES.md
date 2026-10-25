@@ -72,6 +72,59 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## WebRTC Audio Processing (webrtc-audio-processing)
+
+- Website: https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing
+- License: BSD-3-Clause (Google's WebRTC audio processing, packaged by the PulseAudio project)
+
+`packages/voice/prebuilds/win32-x64/libwebrtc-audio-processing-1-3.dll` is the unmodified MSYS2 UCRT64 build of that library, redistributed with the Windows capture helper.
+
+```
+BSD 3-Clause License
+
+Copyright (c) 2011, Google Inc.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software without
+   specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+## Abseil (abseil-cpp)
+
+- Website: https://abseil.io
+- License: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+
+Abseil is linked into `libwebrtc-audio-processing-1-3.dll`; no Abseil source or headers are redistributed here.
+
+## MSYS2 mingw-w64 runtime
+
+`packages/voice/prebuilds/win32-x64/` also ships the MinGW-w64 runtime the helper links against:
+
+- `libstdc++-6.dll`, `libgcc_s_seh-1.dll` — GPL-3.0-or-later WITH the GCC Runtime Library Exception 3.1 (https://www.gnu.org/licenses/gcc-exception-3.1.html). They are redistributed as runtime libraries next to the executable, which the exception permits.
+- `libwinpthread-1.dll` — MIT / BSD-style terms from the mingw-w64 project (https://mingw-w64.org).
+
 ## Other dependencies
 
 Runtime and development dependencies declared in the workspace packages (for example `koffi`, `zod`, `tsdown`, `typescript`, `vitest`) keep their own licenses as published on npm; this repository does not vendor or redistribute their source.
