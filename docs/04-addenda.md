@@ -410,3 +410,37 @@ Windows 上的实测反馈:在浏览器里点球、输入、回车提交后,**Ag
   - `close()` / `fresh()` 清理慢速重试定时器,避免球关掉后还在后台 fork。
 - **测试:** `voice.test.ts` 新增“设置再次保存会重开死掉的子进程”(连续 4 次崩溃后 `applySettings()` 应打开第 5 个);`host` 全量 264 例、`pnpm typecheck` 通过。
 - **部署提醒:** 手工同步 `dist` 只适用于**已经装过语音版本**的 profile;从没有 voice 的发布版升级时,必须用 `node packages/bundle/scripts/pack.mjs` 打出的 tarball 安装(它自带 `node_modules`),或者把 `sherpa-onnx-node`、`sherpa-onnx-<platform>`、`node-cpal`、`pinyin-pro` 一并复制进包目录。
+
+## 31. 插话不灵敏:关键词被 ASR 认错 + 回声过滤误杀 (2026-10-25)
+
+现象:播报中插话,ASR 圆点亮、也说了关键词,但既不上屏也没反应;偶尔播报被打断后同样没下文。打开 `dsh-orb-voice-debug.log` 复现一次,三条记录说明是两个独立问题:
+
+```
+asr text          mode=interject  text=下培鱼看一下北京天气。       ← 关键词认成「下培鱼」
+asr echo-dropped  mode=interject  text=贾飞鱼你个明天北京天气。     ←「贾飞鱼」对上了，却被当回声
+asr text          mode=command    text=啊，大飞就退着吧。           ←「退着吧」没匹配「退下吧」，当成新任务
+```
+
+- **根因一:关键词的文本匹配太严。** `isInterject` 只认完全同音(「大飞鱼」),而 SenseVoice 会把「大肥鱼」认成「贾飞鱼」「下培鱼」。
+- **根因二:回声过滤的豁免也只看精确包含。** 「贾飞鱼…」里关键词不同音,豁免不生效;这句话又和 TTS 共享「明天北京天气」,LCS 比例超过 0.6,于是被当成回声丢掉。
+- **修复:**
+  - 三音节及以上的插话词允许一个字错,**但末字必须对上**:「贾飞鱼」「大灰鱼」命中,「大飞机」「坐下吧」不命中。退下口令保持严格,避免一句话被误判成退下。
+  - 回声豁免改用同一套容错匹配,带关键词的句子不再因为和播报共享话题词而被丢弃。
+  - 插话词同时进 KWS 关键词表(label `interject`),`command`/`interject` 模式也喂关键词探测器;VAD 开口期间命中就打 `keyword` 标记随 utterance 上报,宿主据此判插话,不再只依赖 ASR 文本。这是「下培鱼」这种首字次字都错(1/3 音节)的唯一兜底。
+  - 宿主 `onUtterance` 增加 debug 行(finishable/keyword/mic/stopping),下次定位不用再猜。
+- **测试:** `dismiss.test.ts` 新增末字锚点与退下严格性的用例;voice 102 例里 101 通过(`child-capture` 的 `spawnSync say ENOENT` 是 macOS 用例,与本次无关);`pnpm typecheck` 通过。
+
+## 32. 播报中插话转写严重走样:AEC 参考信号节奏错乱 (2026-10-25)
+
+现象:不播报时 ASR 很准,一旦 TTS 在播报,同样的话转写出来和说的差距很大。
+
+- **根因(`windows-voice-capture.cpp`):**
+  - 参考信号是「把队列里所有 `qpc <= 当前麦克风帧` 的 loopback 帧一次喂进去」。loopback 突发到达时一次两三帧,而 AEC3 的自适应滤波器假设每 10ms 麦克风帧配一帧参考,多喂的帧让滤波器时间基准错位:TTS 尾音没消掉,近端正被反过来当回声压掉。参考欠载时又补最多 12 帧静音,等于告诉 AEC「这段时间没有回声」。
+  - `set_stream_delay_ms` 用了「输入流延迟 + 渲染流延迟」,但 loopback 的 QPC 本身就是渲染时刻,声学路径只有几毫秒,这个常数把时延估计推偏。
+  - `noise_suppression = moderate` 是为通话调的音,双讲时会磨掉语音细节,SenseVoice 更吃力。
+- **修复:**
+  - 参考严格一对一:参考时钟每 10ms 前进一帧,只取落在 ±5ms 内的一帧;落后 100ms 以上的旧帧丢弃;真正缺失才补一帧静音。
+  - `stream_delay` 设为 0,残余时延交给 AEC3 自己估计。
+  - 关闭 WebRTC 降噪,保留 AEC3 + 高通;AGC 保持关闭。
+  - 重新编译 `prebuilds/win32-x64/dsh-orb-voice-capture.exe`。
+- **验证:** 新 exe 冒烟测试 `ready aec=true`,3.3 秒输出 213 KB(16 kHz mono 正确);`pnpm typecheck`、匹配相关 27 例测试通过。采集程序按需启动,替换 exe 后下一次进入固定/插话采集即生效,不用重启应用。

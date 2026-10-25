@@ -1,4 +1,4 @@
-// Windows microphone capture with WASAPI loopback and WebRTC AEC3.
+﻿// Windows microphone capture with WASAPI loopback and WebRTC AEC3.
 // stdout is 16 kHz mono Float32. stderr is one JSON event per line.
 // stdin EOF stops the streams and exits 0.
 //
@@ -203,7 +203,6 @@ struct Streams {
   HANDLE loopbackEvent = nullptr;
   HANDLE silenceEvent = nullptr;
   WORD silenceBlock = 0;
-  int delayMs = 0;
   std::string inputName;
   std::string outputName;
 
@@ -227,7 +226,6 @@ struct Streams {
     silenceEvent = other.silenceEvent;
     other.microphoneEvent = other.loopbackEvent = other.silenceEvent = nullptr;
     silenceBlock = other.silenceBlock;
-    delayMs = other.delayMs;
     inputName = std::move(other.inputName);
     outputName = std::move(other.outputName);
     return *this;
@@ -252,20 +250,6 @@ struct Streams {
     microphoneEvent = loopbackEvent = silenceEvent = nullptr;
   }
 };
-
-int latencyMs(IAudioClient* client) {
-  REFERENCE_TIME latency = 0;
-  REFERENCE_TIME period = 0;
-  REFERENCE_TIME minimum = 0;
-  if (!client) return 0;
-  client->GetStreamLatency(&latency);
-  client->GetDevicePeriod(&period, &minimum);
-  const long long ticks = static_cast<long long>(latency) + static_cast<long long>(period);
-  int ms = static_cast<int>(ticks / 10000);
-  if (ms < 0) ms = 0;
-  if (ms > 500) ms = 500;
-  return ms;
-}
 
 void checkActivate(HRESULT hr, const char* what) {
   if (SUCCEEDED(hr)) return;
@@ -344,8 +328,10 @@ rtc::scoped_refptr<webrtc::AudioProcessing> makeProcessor() {
   webrtc::AudioProcessing::Config config;
   config.echo_canceller.enabled = true;
   config.echo_canceller.mobile_mode = false;
-  config.noise_suppression.enabled = true;
-  config.noise_suppression.level = webrtc::AudioProcessing::Config::NoiseSuppression::kModerate;
+  // Speech recognition, not a phone call: WebRTC's noise suppressor rounds off
+  // exactly the detail SenseVoice needs, and during double talk it adds its own
+  // distortion on top of the echo canceller. The canceller alone keeps the voice.
+  config.noise_suppression.enabled = false;
   config.gain_controller1.enabled = false;
   config.gain_controller2.enabled = false;
   config.high_pass_filter.enabled = true;
@@ -367,26 +353,37 @@ void reverseFrame(webrtc::AudioProcessing* processor, const float* samples) {
   processor->ProcessReverseStream(input, webrtc::StreamConfig(kCaptureRate, 1), webrtc::StreamConfig(kCaptureRate, 1), output);
 }
 
-void alignAndProcess(webrtc::AudioProcessing* processor, const Frame& microphone, std::deque<Frame>& loop, int64_t frequency, int delayMs, int64_t& lastReverse) {
-  const int64_t behind = frequency / 10;
-  const int64_t ahead = frequency / 5;
-  while (!loop.empty() && loop.front().qpc > microphone.qpc + ahead) loop.pop_front();
-  while (!loop.empty() && loop.front().qpc <= microphone.qpc) {
+/**
+ * Feed exactly one 10 ms reference frame per 10 ms microphone frame.
+ *
+ * AEC3 adapts a linear filter around a fixed reference cadence: handing it two or
+ * three loopback frames before one microphone frame (what a burst from the render
+ * endpoint produces) shifts the filter by that many frames, and padding with
+ * silence afterwards hides the TTS from the canceller instead of cancelling it.
+ * The reference clock therefore advances by one frame per microphone frame and a
+ * frame is taken only when it falls within half a frame of that clock; a missing
+ * one is a true underrun and gets silence.
+ *
+ * The QPC of a WASAPI loopback packet is the time the device rendered that audio,
+ * which is also when the microphone starts hearing it, so the stream delay is
+ * effectively zero. AEC3 estimates the residual itself.
+ */
+void alignAndProcess(webrtc::AudioProcessing* processor, const Frame& microphone, std::deque<Frame>& loop, int64_t step, int64_t& reference) {
+  if (reference == 0) reference = microphone.qpc;
+  // Drop references that fell far behind; the device restarted or the stream stalled.
+  while (!loop.empty() && loop.front().qpc < reference - step * 10) loop.pop_front();
+  float silence[kFrame] = {};
+  if (!loop.empty() && loop.front().qpc <= reference + step / 2) {
     reverseFrame(processor, loop.front().samples);
-    lastReverse = loop.front().qpc;
     loop.pop_front();
-  }
-  int padded = 0;
-  while (lastReverse != 0 && microphone.qpc - lastReverse > behind && padded < 12) {
-    float silence[kFrame] = {};
+  } else {
     reverseFrame(processor, silence);
-    lastReverse += frequency / 100;
-    ++padded;
   }
+  reference += step;
   float cleaned[kOutputFrame] = {};
   const float* input[1] = {microphone.samples};
   float* output[1] = {cleaned};
-  processor->set_stream_delay_ms(delayMs);
+  processor->set_stream_delay_ms(0);
   if (processor->ProcessStream(input, webrtc::StreamConfig(kCaptureRate, 1), webrtc::StreamConfig(kOutputRate, 1), output) != 0) {
     memset(cleaned, 0, sizeof cleaned);
   }
@@ -425,7 +422,6 @@ Streams openStreams(IMMDeviceEnumerator* enumerator) {
   checkActivate(streams.loopback->Start(), "the loopback stream did not start");
   checkActivate(streams.microphone->Start(), "the microphone stream did not start");
   pumpSilence(streams.silence.pointer, streams.silenceRender.pointer, streams.silenceBlock);
-  streams.delayMs = latencyMs(streams.microphone.pointer) + latencyMs(streams.silence.pointer);
   return streams;
 }
 
@@ -479,7 +475,7 @@ int wmain() {
   int64_t loopOrigin = 0;
   bool microphoneOriginValid = false;
   bool loopOriginValid = false;
-  int64_t lastReverse = 0;
+  int64_t reference = 0;
 
   HANDLE waits[5] = {stop, changed, streams.microphoneEvent, streams.loopbackEvent, streams.silenceEvent};
   while (true) {
@@ -492,7 +488,7 @@ int wmain() {
       loopPending.clear();
       microphoneOriginValid = false;
       loopOriginValid = false;
-      lastReverse = 0;
+      reference = 0;
       streams.close();
       processor = makeProcessor();
       streams = openStreams(enumerator.pointer);
@@ -509,7 +505,7 @@ int wmain() {
     while (!microphoneFrames.empty()) {
       Frame frame = microphoneFrames.front();
       microphoneFrames.pop_front();
-      alignAndProcess(processor.get(), frame, loopFrames, qpcHz, streams.delayMs, lastReverse);
+      alignAndProcess(processor.get(), frame, loopFrames, frameStep, reference);
     }
   }
 
