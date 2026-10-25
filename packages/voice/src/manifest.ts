@@ -31,8 +31,23 @@ export interface VoiceModels {
 
 export const WAKE_MODEL_URL = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2'
 
-/** Unpacked size the download dialog shows: about 38 MB. */
-export const WAKE_MODEL_BYTES = 38 * 1024 * 1024
+/**
+ * The wake files also ship as their own npm package (`models/kws` at the repository root),
+ * so a download is an 8.6 MB registry fetch instead of a 31 MB GitHub release.
+ *
+ * The version and the digest are pinned: the registry is immutable, so one tarball stays
+ * valid forever, and the same bytes answer from the mirror and from npmjs.
+ */
+export const WAKE_MODEL_PACKAGE = 'dsh-orb-kws'
+export const WAKE_MODEL_PACKAGE_VERSION = '2026.10.0'
+export const WAKE_MODEL_SHA256 = '23d4055c0c20b9d440ab47aa05965780aba01e6852a2182987cca479ea91e9d3'
+
+/** hf-mirror's counterpart for npm: the only registry origin that is fast from mainland China. */
+export const WAKE_MODEL_NPM_MIRROR = `https://registry.npmmirror.com/${WAKE_MODEL_PACKAGE}/-/${WAKE_MODEL_PACKAGE}-${WAKE_MODEL_PACKAGE_VERSION}.tgz`
+export const WAKE_MODEL_NPM_OFFICIAL = `https://registry.npmjs.org/${WAKE_MODEL_PACKAGE}/-/${WAKE_MODEL_PACKAGE}-${WAKE_MODEL_PACKAGE_VERSION}.tgz`
+
+/** What the mirror serves, and what the progress bar divides by: 8.6 MB. */
+export const WAKE_MODEL_BYTES = 9_024_132
 
 /**
  * The Matcha engines and their vocoder are fetched file by file from the
@@ -77,7 +92,9 @@ export const ASR_SOURCES = ['https://huggingface.co', 'https://hf-mirror.com'] a
 /** What the settings page shows before any model file is on disk. */
 export function absentVoiceModels(): VoiceModels {
   return {
-    wake: view([WAKE_MODEL_URL], WAKE_MODEL_BYTES),
+    // The dialog names what the button actually reaches for. GitHub stays the last resort
+    // but is not offered to the user as a source.
+    wake: view([WAKE_MODEL_NPM_MIRROR, WAKE_MODEL_NPM_OFFICIAL], WAKE_MODEL_BYTES),
     tts: view([
       `${TTS_ORIGINS[0]}/${TTS_ZH_REPO}`,
       `${TTS_ORIGINS[0]}/${TTS_EN_REPO}`,

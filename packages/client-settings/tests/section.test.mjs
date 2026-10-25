@@ -1302,8 +1302,9 @@ describe('settings section', () => {
     find(view, (node) => node.type === 'button' && node.children?.includes('下载语音唤醒模型'))[0].props.onClick()
     view = page.render()
     const dialog = find(view, (node) => node.props?.role === 'dialog')[0]
-    assert.equal(find(dialog, (node) => node.children?.includes('https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2')).length, 1)
-    assert.equal(find(dialog, (node) => node.children?.includes('约 38 MB')).length, 1)
+    assert.equal(find(dialog, (node) => node.children?.includes('https://registry.npmmirror.com/dsh-orb-kws/-/dsh-orb-kws-2026.10.0.tgz')).length, 1)
+    assert.equal(find(dialog, (node) => node.children?.includes('https://registry.npmjs.org/dsh-orb-kws/-/dsh-orb-kws-2026.10.0.tgz')).length, 1)
+    assert.equal(find(dialog, (node) => node.children?.includes('约 9 MB')).length, 1)
     const before = page.calls.length
     find(dialog, (node) => node.type === 'button' && node.children?.includes('取消'))[0].props.onClick()
     assert.equal(page.calls.length, before)

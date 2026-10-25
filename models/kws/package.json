@@ -1,0 +1,38 @@
+{
+  "name": "dsh-orb-kws",
+  "version": "2026.10.0",
+  "description": "Wake-word model for the dsh-orb floating ball: the eight sherpa-onnx KWS zipformer zh-en 3M (2025-12-20) files its spotter loads.",
+  "keywords": [
+    "dsh",
+    "dsh-orb",
+    "wake-word",
+    "keyword-spotting",
+    "kws",
+    "sherpa-onnx",
+    "model"
+  ],
+  "homepage": "https://github.com/mini-yifan/dsh-orb-cordis#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mini-yifan/dsh-orb-cordis.git",
+    "directory": "models/kws"
+  },
+  "bugs": {
+    "url": "https://github.com/mini-yifan/dsh-orb-cordis/issues"
+  },
+  "license": "Apache-2.0",
+  "files": [
+    "kws",
+    "LICENSE",
+    "NOTICE.md",
+    "README.md"
+  ],
+  "scripts": {
+    "pack": "node ./scripts/pack.mjs"
+  },
+  "dshOrb": {
+    "kind": "wake",
+    "upstream": "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20",
+    "archive": "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2"
+  }
+}

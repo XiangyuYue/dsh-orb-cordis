@@ -10,7 +10,7 @@ import { createWriteStream } from 'node:fs'
 import { mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { finished } from 'node:stream/promises'
-import { absentVoiceModels, ASR_MODEL_BYTES, TTS_EN_MODEL_SHA256, TTS_EN_REPO, TTS_MODEL_BYTES, TTS_ORIGINS, TTS_VOCODER_SHA256, TTS_ZH_MODEL_SHA256, TTS_ZH_REPO, WAKE_MODEL_URL, type VoiceModelKind, type VoiceModels } from '@dsh-orb/voice/manifest'
+import { absentVoiceModels, ASR_MODEL_BYTES, TTS_EN_MODEL_SHA256, TTS_EN_REPO, TTS_MODEL_BYTES, TTS_ORIGINS, TTS_VOCODER_SHA256, TTS_ZH_MODEL_SHA256, TTS_ZH_REPO, WAKE_MODEL_NPM_MIRROR, WAKE_MODEL_NPM_OFFICIAL, WAKE_MODEL_SHA256, WAKE_MODEL_URL, type VoiceModelKind, type VoiceModels } from '@dsh-orb/voice/manifest'
 import { TTS_EN_FILES, TTS_VOCODER, TTS_ZH_FILES } from './tts-files.ts'
 import { asrPresent, kwsPresent, ttsPresent } from './voice-models.ts'
 
@@ -74,21 +74,29 @@ export function officialAsrFrom(service: unknown): OfficialAsr | undefined {
   }
 }
 
-const KWS_ARCHIVE = 'sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2'
+/** How a source ships the archive: the npm package is gzip, the GitHub release is bzip2. */
+export type WakeArchiveFormat = 'tgz' | 'tbz2'
+
+export interface WakeModelSource {
+  readonly url: string
+  readonly format: WakeArchiveFormat
+  /**
+   * Digest of the archive bytes. The npm package pins one, so a mirror cannot hand over a
+   * different payload; the release is the authoritative copy and is checked by extracting it.
+   */
+  readonly sha256?: string
+}
 
 /**
- * Where the wake archive comes from. The GitHub release is still the only
- * place the official KWS export exists; the proxy and the Hub mirror cover
- * networks that cannot reach GitHub.
+ * Where the wake archive comes from, in order. The npm package is the copy mainland China
+ * can actually reach (npmmirror first, then npmjs); the GitHub release stays as the last
+ * resort, which is also the only source that still needs the bzip2 path.
  */
-export function wakeModelUrls(): readonly string[] {
-  const official = WAKE_MODEL_URL
-  const hf = `https://huggingface.co/csukuangfj/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/resolve/main/${KWS_ARCHIVE}`
+export function wakeModelSources(): readonly WakeModelSource[] {
   return [
-    official,
-    `https://ghproxy.net/${official}`,
-    hf.replace('https://huggingface.co', 'https://hf-mirror.com'),
-    hf,
+    { url: WAKE_MODEL_NPM_MIRROR, format: 'tgz', sha256: WAKE_MODEL_SHA256 },
+    { url: WAKE_MODEL_NPM_OFFICIAL, format: 'tgz', sha256: WAKE_MODEL_SHA256 },
+    { url: WAKE_MODEL_URL, format: 'tbz2' },
   ]
 }
 
@@ -248,7 +256,7 @@ async function installVoiceModel(
   progress: (received: number, total: number) => void,
 ): Promise<void> {
   if (kind === 'wake') {
-    await installArchive(wakeModelUrls(), paths.kws, progress)
+    await installArchive(wakeModelSources(), paths.kws, progress)
     if (!kwsPresent(paths.kws)) throw new Error('语音唤醒模型不完整')
     return
   }
@@ -419,45 +427,81 @@ async function verifyTts(root: string): Promise<void> {
   }
 }
 
-async function installArchive(urls: readonly string[], dest: string, progress: (received: number, total: number) => void): Promise<void> {
+async function installArchive(sources: readonly WakeModelSource[], dest: string, progress: (received: number, total: number) => void): Promise<void> {
   const staging = `${dest}.staging`
   const archive = `${dest}.download`
   await rm(staging, { recursive: true, force: true })
   await rm(archive, { force: true })
   await mkdir(staging, { recursive: true })
-  await downloadFirst(urls, archive, progress)
-  await extractArchive(archive, staging)
-  const found = await findModelDir(staging)
-  await rm(dest, { recursive: true, force: true })
-  await mkdir(dirname(dest), { recursive: true })
-  await rename(found, dest)
-  await rm(archive, { force: true })
-  await rm(staging, { recursive: true, force: true })
+  try {
+    const source = await downloadFirst(sources, archive, progress)
+    await extractArchive(archive, staging, source.format)
+    const found = await findModelDir(staging)
+    await rm(dest, { recursive: true, force: true })
+    await mkdir(dirname(dest), { recursive: true })
+    await rename(found, dest)
+  } finally {
+    // A failed unpack must not leave half a model tree behind: the next click starts clean.
+    await rm(archive, { force: true })
+    await rm(staging, { recursive: true, force: true })
+  }
 }
 
+/**
+ * Where the model root ended up. The GitHub release unpacks to `sherpa-onnx-kws-…/`, and the
+ * npm tarball to `package/kws/`, so the search has to look two levels down, not one.
+ */
 async function findModelDir(root: string): Promise<string> {
   const { readdir } = await import('node:fs/promises')
-  if (kwsPresent(root)) return root
-  for (const name of await readdir(root)) {
-    const dir = join(root, name)
-    if (kwsPresent(dir)) return dir
+  const level = [root]
+  for (let depth = 0; depth <= 2 && level.length > 0; depth += 1) {
+    for (const dir of level.splice(0)) {
+      if (kwsPresent(dir)) return dir
+      for (const name of await readdir(dir).catch(() => [] as string[])) level.push(join(dir, name))
+    }
   }
   throw new Error('解压后没有找到唤醒模型')
 }
 
+/** No bytes for this long means the origin is gone, not that it is slow. */
+const STALL_MS = 20_000
+/** Past this mark, a source that is barely moving is worth abandoning for the next one. */
+const SLOW_MS = 20_000
+const SLOW_BPS = 24 * 1024
+
+/** A 4xx that retrying cannot fix: the next source is the only way forward. */
+class SourceGone extends Error {}
+
+/**
+ * Try each source in turn, three times each; the first one that lands a complete, digest-clean
+ * archive wins. The last source is exempt from the speed floor: at that point a slow copy is
+ * better than no copy at all.
+ */
 async function downloadFirst(
-  urls: readonly string[],
+  sources: readonly WakeModelSource[],
   dest: string,
   progress: (received: number, total: number) => void,
-): Promise<void> {
+): Promise<WakeModelSource> {
   let last = '下载失败'
-  for (const url of urls) {
+  for (const [index, source] of sources.entries()) {
+    const floor = index < sources.length - 1
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        await downloadOne(url, dest, progress)
-        return
+        await downloadOne(source.url, dest, progress, floor)
+        // A mirror that answers with the wrong bytes is a failed source, not a failed install.
+        if (source.sha256 !== undefined) {
+          const digest = await sha256(dest).catch(() => '')
+          if (digest !== source.sha256) {
+            await rm(dest, { force: true })
+            throw new Error(`校验失败 ${source.url}`)
+          }
+        }
+        return source
       } catch (error) {
         last = error instanceof Error ? error.message : String(error)
+        // A version the mirror has not synced yet answers 404 every time; three attempts
+        // with backoff would only make the user wait before the same fallback.
+        if (error instanceof SourceGone) break
         if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 1000 * attempt))
       }
     }
@@ -466,7 +510,7 @@ async function downloadFirst(
   throw new Error(last)
 }
 
-async function downloadOne(url: string, dest: string, progress: (received: number, total: number) => void): Promise<void> {
+async function downloadOne(url: string, dest: string, progress: (received: number, total: number) => void, floor: boolean): Promise<void> {
   await mkdir(dirname(dest), { recursive: true })
   let already = 0
   try {
@@ -475,44 +519,70 @@ async function downloadOne(url: string, dest: string, progress: (received: numbe
     already = 0
   }
   const headers: Record<string, string> = already > 0 ? { range: `bytes=${already}-` } : {}
-  const response = await fetch(url, { redirect: 'follow', headers })
-  const body = response.body
-  if (response.status === 416 && already > 0) {
-    progress(already, already)
-    return
+  // One controller serves both limits: a dead socket and a source that is barely moving end
+  // the same way, with an abort the caller can turn into "try the next origin".
+  const controller = new AbortController()
+  let stall: ReturnType<typeof setTimeout> | undefined
+  const restart = (): void => {
+    if (stall !== undefined) clearTimeout(stall)
+    stall = setTimeout(() => { controller.abort(new Error(`stalled: ${url}`)) }, STALL_MS)
   }
-  if (!response.ok || body === null) throw new Error(`${response.status} ${url}`)
-  const resume = response.status === 206 && already > 0
-  const length = Number(response.headers.get('content-length') ?? 0)
-  const total = resume ? already + length : length
-  const file = createWriteStream(dest, { flags: resume ? 'a' : 'w' })
-  const reader = body.getReader()
-  let received = resume ? already : 0
+  restart()
   try {
-    for (;;) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      const bytes = Buffer.from(chunk.value)
-      if (!file.write(bytes)) await onceDrain(file)
-      received += bytes.length
-      progress(received, total > 0 ? total : received)
+    const response = await fetch(url, { redirect: 'follow', headers, signal: controller.signal })
+    const body = response.body
+    if (response.status === 416 && already > 0) {
+      progress(already, already)
+      return
     }
-  } catch (error) {
-    file.destroy()
-    throw error
+    if (!response.ok || body === null) {
+      const message = `${response.status} ${url}`
+      throw response.status === 404 || response.status === 410 ? new SourceGone(message) : new Error(message)
+    }
+    const resume = response.status === 206 && already > 0
+    const length = Number(response.headers.get('content-length') ?? 0)
+    const total = resume ? already + length : length
+    const file = createWriteStream(dest, { flags: resume ? 'a' : 'w' })
+    const reader = body.getReader()
+    let received = resume ? already : 0
+    const started = Date.now()
+    let moved = 0
+    try {
+      for (;;) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        restart()
+        const bytes = Buffer.from(chunk.value)
+        if (!file.write(bytes)) await onceDrain(file)
+        received += bytes.length
+        moved += bytes.length
+        progress(received, total > 0 ? total : received)
+        if (floor && Date.now() - started > SLOW_MS && moved / ((Date.now() - started) / 1000) < SLOW_BPS) {
+          controller.abort(new Error(`too slow: ${url}`))
+        }
+      }
+      if (controller.signal.aborted) throw new Error(`下载超时或太慢 ${url}`)
+    } catch (error) {
+      file.destroy()
+      throw error
+    } finally {
+      if (!file.destroyed) file.end()
+    }
+    await finished(file)
   } finally {
-    if (!file.destroyed) file.end()
+    if (stall !== undefined) clearTimeout(stall)
   }
-  await finished(file)
 }
 
 function onceDrain(file: NodeJS.WritableStream): Promise<void> {
   return new Promise((resolve) => file.once('drain', () => resolve()))
 }
 
-function extractArchive(archive: string, dest: string): Promise<void> {
+function extractArchive(archive: string, dest: string, format: WakeArchiveFormat): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn('tar', ['-xjf', archive, '-C', dest])
+    // The registry serves gzip, the GitHub release bzip2. Everything else about the unpack
+    // is shared: `tar` on Windows is bsdtar, which reads either.
+    const child = spawn('tar', [format === 'tgz' ? '-xzf' : '-xjf', archive, '-C', dest])
     let stderr = ''
     child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8') })
     child.on('error', reject)

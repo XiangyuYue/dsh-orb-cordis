@@ -1458,8 +1458,11 @@ window.__ModuleLoader__.load({
     // Keep the URLs aligned with packages/voice/src/manifest.ts.
     const VOICE_OFFERS = {
       wake: {
-        sources: ['https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2'],
-        bytes: 38 * 1024 * 1024,
+        sources: [
+          'https://registry.npmmirror.com/dsh-orb-kws/-/dsh-orb-kws-2026.10.0.tgz',
+          'https://registry.npmjs.org/dsh-orb-kws/-/dsh-orb-kws-2026.10.0.tgz',
+        ],
+        bytes: 9_024_132,
       },
       tts: {
         sources: [

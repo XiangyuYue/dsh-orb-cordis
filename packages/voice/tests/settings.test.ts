@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { DEFAULT_VOICE_SETTINGS, hasWakeWord, parseVoiceSettings } from '../src/settings.ts'
-import { ASR_MODEL_BYTES, absentVoiceModels } from '../src/manifest.ts'
+import { ASR_MODEL_BYTES, WAKE_MODEL_NPM_MIRROR, absentVoiceModels } from '../src/manifest.ts'
 
 describe('voice settings', () => {
   it('uses the factory values when the file is missing or unreadable', () => {
@@ -90,11 +90,13 @@ describe('voice settings', () => {
   it('describes the three official downloads while the files are absent', () => {
     const models = absentVoiceModels()
     assert.equal(models.wake.present, false)
-    assert.match(models.wake.sources[0] ?? '', /sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/)
+    assert.match(models.wake.sources[0] ?? '', /registry\.npmmirror\.com\/dsh-orb-kws\//)
+    assert.equal(models.wake.sources[0], WAKE_MODEL_NPM_MIRROR)
     assert.equal(models.tts.sources.length, 3)
     assert.equal(models.asr.bytes, ASR_MODEL_BYTES)
     assert.equal(Math.round(models.asr.bytes / (1024 * 1024)), 230)
-    assert.equal(Math.round(models.wake.bytes / (1024 * 1024)), 38)
+    // The registry serves the wake model as an 8.6 MB tarball, not the 31 MB GitHub release.
+    assert.equal(Math.round(models.wake.bytes / (1024 * 1024)), 9)
     assert.equal(Math.round(models.tts.bytes / (1024 * 1024)), 197)
   })
 })

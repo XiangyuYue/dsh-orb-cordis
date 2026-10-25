@@ -125,6 +125,14 @@ Abseil is linked into `libwebrtc-audio-processing-1-3.dll`; no Abseil source or 
 - `libstdc++-6.dll`, `libgcc_s_seh-1.dll` — GPL-3.0-or-later WITH the GCC Runtime Library Exception 3.1 (https://www.gnu.org/licenses/gcc-exception-3.1.html). They are redistributed as runtime libraries next to the executable, which the exception permits.
 - `libwinpthread-1.dll` — MIT / BSD-style terms from the mingw-w64 project (https://mingw-w64.org).
 
+## sherpa-onnx KWS zipformer zh-en 3M (wake-word model)
+
+- Upstream: https://github.com/k2-fsa/sherpa-onnx
+- Release: `kws-models` — `sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2`
+- License: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+
+`models/kws` redistributes eight files from that release — `tokens.txt`, `en.phone`, and the chunk-8 / chunk-16 int8 encoder, fp32 decoder and int8 joiner the spotter opens — byte-for-byte and unmodified, as the npm package `dsh-orb-kws`. The fp32 encoders, the fp32 joiners and `test_wavs/` are not redistributed because the plugin never loads them. Attribution and a copy of the license ship inside that package (`models/kws/NOTICE.md`, `models/kws/LICENSE`).
+
 ## Other dependencies
 
 Runtime and development dependencies declared in the workspace packages (for example `koffi`, `zod`, `tsdown`, `typescript`, `vitest`) keep their own licenses as published on npm; this repository does not vendor or redistribute their source.

@@ -453,3 +453,16 @@ asr text          mode=command    text=啊，大飞就退着吧。           ←
 - 退下口令:`你退下吧`、`退下吧` → 增加 `退一下吧`。
 - 只改 `DEFAULT_VOICE_SETTINGS`(`packages/voice/src/settings.ts`);已经保存过语音设置的用户以 `orb-voice.json` 为准,不受影响。
 - `voice.test.ts` 三处唤醒回复断言同步改成 `我在呢`。
+
+## 34. 唤醒模型改由 npm 数据包分发 (2026-10-25)
+
+第 29 节末尾记的是「唤醒模型仍只有 GitHub release,国内仍需加速或自建镜像」。这次把模型单独做成一个 npm 数据包,下载器先走国内镜像。
+
+- **新包:** `models/kws` 打出 `dsh-orb-kws@2026.10.0`,内容是从上游 release 里挑出的 8 个文件(`tokens.txt`、`en.phone`、chunk-8/16 的 int8 encoder、fp32 decoder、int8 joiner):解压 13.6 MB,tarball 8.6 MB。fp32 encoder(每个约 12 MB)、fp32 joiner 和 `test_wavs/` 从来不被加载,不打进去。
+- **下载顺序(`wakeModelSources()`):** `registry.npmmirror.com` → `registry.npmjs.org` → GitHub release。ghproxy.net 和两条 HF 兜底都删掉:前两个 registry 服务同一份字节,一个 sha256 同时校验它们;HF 那两条本来就是 404(仓库属主写错,上游没有对应的 ONNX 包)。
+- **校验:** `WAKE_MODEL_SHA256` 钉在 manifest 里,下载完先校验再解包;镜像给出别的字节就换下一个源,坏包不会进模型目录。
+- **超时:** 每个源 20 秒没有新数据就 abort;20 秒后均速低于 24 KB/s 也切源(最后一个源不设速度门槛,免得慢但能成的源被放弃)。第 29 节留下的「GitHub 黑洞时进度条永久卡住」就是这个洞。
+- **404 不重试:** 镜像还没同步这个版本时,404 原本也会走满 3 次重试(1s + 2s 退避),白等约 3.5 秒。现在 404/410 直接切下一个源。
+- **体积:** 弹窗写 8.6 MB(`WAKE_MODEL_BYTES`),不再是解压后的 38 MB。
+- **发布顺序:** 先发模型包,再发指向它的插件版本。镜像同步前两个 registry 都 404,那时才掉到 GitHub。
+- **打包脚本:** `node models/kws/scripts/pack.mjs`。mtime 固定、gzip 在 Node 侧做,同一批文件重复打包 sha256 一致(系统 gzip 会把当前时间写进 header,哈希每次都变)。

@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { WAKE_MODEL_URL } from '@dsh-orb/voice/manifest'
-import { VoiceDownloads, wakeModelUrls } from '../src/voice-download.ts'
+import { WAKE_MODEL_NPM_MIRROR, WAKE_MODEL_NPM_OFFICIAL, WAKE_MODEL_SHA256, WAKE_MODEL_URL } from '@dsh-orb/voice/manifest'
+import { VoiceDownloads, wakeModelSources } from '../src/voice-download.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'orb-voice-download-'))
 after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -21,11 +21,20 @@ function kwsFiles(dir: string): void {
 }
 
 describe('voice model download', () => {
-  it('tries the official GitHub release before the mirrors', () => {
-    const urls = wakeModelUrls()
-    assert.equal(urls[0], WAKE_MODEL_URL)
-    assert.ok(urls.some((url) => url.includes('hf-mirror.com')))
-    assert.ok(urls.some((url) => url.startsWith('https://ghproxy.net/')))
+  it('reaches the npm mirror first, then npm, and keeps the GitHub release last', () => {
+    const sources = wakeModelSources()
+    assert.deepEqual(sources.map((source) => source.format), ['tgz', 'tgz', 'tbz2'])
+    assert.equal(sources[0].url, WAKE_MODEL_NPM_MIRROR)
+    assert.equal(sources[1].url, WAKE_MODEL_NPM_OFFICIAL)
+    assert.equal(sources[2].url, WAKE_MODEL_URL)
+    // Both registry URLs serve the same bytes, so one digest checks either of them.
+    assert.ok(sources.slice(0, 2).every((source) => source.sha256 === WAKE_MODEL_SHA256))
+    assert.equal(sources[2].sha256, undefined)
+  })
+
+  it('tells the settings dialog the wake model comes from the registry', () => {
+    const downloads = new VoiceDownloads(() => ({ kws: join(root, 'none-kws'), asr: join(root, 'none-asr'), tts: join(root, 'none-tts') }))
+    assert.deepEqual(downloads.view().wake.sources, [WAKE_MODEL_NPM_MIRROR, WAKE_MODEL_NPM_OFFICIAL])
   })
 
   it('advertises the Hub mirror for the TTS models', () => {
