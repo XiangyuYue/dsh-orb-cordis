@@ -444,3 +444,12 @@ asr text          mode=command    text=啊，大飞就退着吧。           ←
   - 关闭 WebRTC 降噪,保留 AEC3 + 高通;AGC 保持关闭。
   - 重新编译 `prebuilds/win32-x64/dsh-orb-voice-capture.exe`。
 - **验证:** 新 exe 冒烟测试 `ready aec=true`,3.3 秒输出 213 KB(16 kHz mono 正确);`pnpm typecheck`、匹配相关 27 例测试通过。采集程序按需启动,替换 exe 后下一次进入固定/插话采集即生效,不用重启应用。
+
+## 33. 出厂默认唤醒回复与退下口令调整 (2026-10-25)
+
+把默认值改成作者本机在用的那套,新装的用户开箱即用:
+
+- 唤醒回复:`我在` → `我在呢`。
+- 退下口令:`你退下吧`、`退下吧` → 增加 `退一下吧`。
+- 只改 `DEFAULT_VOICE_SETTINGS`(`packages/voice/src/settings.ts`);已经保存过语音设置的用户以 `orb-voice.json` 为准,不受影响。
+- `voice.test.ts` 三处唤醒回复断言同步改成 `我在呢`。

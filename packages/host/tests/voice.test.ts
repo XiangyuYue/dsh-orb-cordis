@@ -82,8 +82,8 @@ describe('voice controller with a script child', () => {
     await until(() => listenModes(trace).includes('wake'), () => readFileSync(trace, 'utf8'))
 
     emit({ type: 'wake' })
-    const greeting = await speakText('我在')
-    assert.equal(greeting.text, '我在')
+    const greeting = await speakText('我在呢')
+    assert.equal(greeting.text, '我在呢')
     assert.equal(page.some((message) => message.type === 'pin'), true)
     emit({ type: 'utterance', text: '这句话不该发送' })
     emit({ type: 'playback', id: greeting.id, phase: 'end' })
@@ -696,7 +696,7 @@ describe('utterance judging', () => {
     try {
       await until(() => listenModes(trace).includes('wake'), () => readFileSync(trace, 'utf8'))
       emit({ type: 'wake' })
-      const greeting = await speakText('我在')
+      const greeting = await speakText('我在呢')
       emit({ type: 'playback', id: greeting.id, phase: 'end' })
       await until(() => {
         const last = listens(trace).at(-1)
@@ -1077,7 +1077,7 @@ describe('qwen speech readiness', () => {
     const { child, voice } = controller(settings, { wake: true, asr: true, tts: false })
     child.emit({ type: 'mic', open: true })
     child.emit({ type: 'wake' })
-    const reply = ttsSpeaks(child).find((item) => item.text === '我在')
+    const reply = ttsSpeaks(child).find((item) => item.text === '我在呢')
     assert.ok(reply)
     child.emit({ type: 'playback', id: reply.id, phase: 'end' })
     voice.questionOpened()
