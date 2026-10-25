@@ -23,6 +23,16 @@ On startup the plugin spawns its own helper (a pinned, verified Electron runtime
 - Appearance follows the main window: dark / light theme and interface language (Chinese / English) mirror the official appearance and language settings, including live switching.
 - The ball avatar can be set to one of six built-in animated GIFs, or replaced with a custom GIF / PNG / WebP (4 MB cap), in main-window **Settings → Floating Ball**. The built-ins stay animated: the ball plays them whenever it is active, exactly like the shipped default. **More animations** at the end of that row opens the [dshgif.hicp.fun](https://dshgif.hicp.fun/) gallery — download a GIF there and load it with **Choose image**; a file over the cap now reports its own size.
 
+## Voice
+
+Speech is off until you turn it on: main-window **Settings → Floating Ball → Voice** (the master switch ships off). Everything runs locally except the optional Qwen voice.
+
+- **Wake word.** Say **你好大肥鱼** while the ball is collapsed. It pins the panel and answers **我在呢**. The phrase, the reply, sensitivity, judging granularity and the 1.5 s cooldown are editable.
+- **Voice input.** While the ball is pinned and idle, speak a command; it is transcribed when you stop and sent like a typed message. The microphone stays closed while the agent works, while a question card is waiting, and while the ball itself is talking — say **大肥鱼** to cut in, or **退下吧** to stop and unpin.
+- **Spoken replies.** Agent text, the wake reply and the dismiss reply are read aloud. The local Matcha voices (Chinese and English) are the default; **Qwen** (Alibaba Cloud Bailian, your own API key) is the alternative backend.
+- **Models.** The wake model (about 9 MB) is the npm package `dsh-orb-kws`: npmmirror first, then registry.npmjs.org, then the GitHub release. The local TTS weights (about 197 MB) come from the Hugging Face mirror. Speech recognition uses the SenseVoice model DeepSeek Harness already manages.
+- **Privacy.** Microphone audio is decoded in a local subprocess and never leaves the machine. The only network path is the optional Qwen TTS, which sends the sentence it is about to speak.
+
 ## Dual-track agent architecture
 
 The Computer Use agent inside the floating ball decides how every message is handled; there is no separate task classifier at runtime:
