@@ -95,6 +95,6 @@ describe('voice settings', () => {
     assert.equal(models.asr.bytes, ASR_MODEL_BYTES)
     assert.equal(Math.round(models.asr.bytes / (1024 * 1024)), 230)
     assert.equal(Math.round(models.wake.bytes / (1024 * 1024)), 38)
-    assert.equal(Math.round(models.tts.bytes / (1024 * 1024)), 214)
+    assert.equal(Math.round(models.tts.bytes / (1024 * 1024)), 197)
   })
 })

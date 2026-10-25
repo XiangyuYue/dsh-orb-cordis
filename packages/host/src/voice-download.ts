@@ -7,10 +7,11 @@
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
-import { copyFile, mkdir, readFile, rename, rm, stat, symlink } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { finished } from 'node:stream/promises'
-import { absentVoiceModels, ASR_MODEL_BYTES, TTS_EN_MODEL_SHA256, TTS_EN_URL, TTS_VOCODER_SHA256, TTS_VOCODER_URL, TTS_ZH_MODEL_SHA256, TTS_ZH_URL, WAKE_MODEL_URL, type VoiceModelKind, type VoiceModels } from '@dsh-orb/voice/manifest'
+import { absentVoiceModels, ASR_MODEL_BYTES, TTS_EN_MODEL_SHA256, TTS_EN_REPO, TTS_MODEL_BYTES, TTS_ORIGINS, TTS_VOCODER_SHA256, TTS_ZH_MODEL_SHA256, TTS_ZH_REPO, WAKE_MODEL_URL, type VoiceModelKind, type VoiceModels } from '@dsh-orb/voice/manifest'
+import { TTS_EN_FILES, TTS_VOCODER, TTS_ZH_FILES } from './tts-files.ts'
 import { asrPresent, kwsPresent, ttsPresent } from './voice-models.ts'
 
 export interface VoiceModelPaths {
@@ -75,18 +76,20 @@ export function officialAsrFrom(service: unknown): OfficialAsr | undefined {
 
 const KWS_ARCHIVE = 'sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20.tar.bz2'
 
-/** Official URL first, then the mirrors the landing notes already use. */
-export function modelUrls(kind: 'wake' | 'tts-zh' | 'tts-en' | 'tts-vocoder'): readonly string[] {
-  const official = kind === 'wake' ? WAKE_MODEL_URL : kind === 'tts-zh' ? TTS_ZH_URL : kind === 'tts-en' ? TTS_EN_URL : TTS_VOCODER_URL
-  const file = official.slice(official.lastIndexOf('/') + 1)
-  const hf = kind === 'wake'
-    ? `https://huggingface.co/csukuangfj/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/resolve/main/${KWS_ARCHIVE}`
-    : ''
+/**
+ * Where the wake archive comes from. The GitHub release is still the only
+ * place the official KWS export exists; the proxy and the Hub mirror cover
+ * networks that cannot reach GitHub.
+ */
+export function wakeModelUrls(): readonly string[] {
+  const official = WAKE_MODEL_URL
+  const hf = `https://huggingface.co/csukuangfj/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20/resolve/main/${KWS_ARCHIVE}`
   return [
     official,
     `https://ghproxy.net/${official}`,
-    ...(hf ? [hf.replace('https://huggingface.co', 'https://hf-mirror.com'), hf] : []),
-  ].filter((url, index, all) => url !== '' && all.indexOf(url) === index)
+    hf.replace('https://huggingface.co', 'https://hf-mirror.com'),
+    hf,
+  ]
 }
 
 export class VoiceDownloads {
@@ -234,36 +237,8 @@ export class VoiceDownloads {
     const zh = await sha256(join(paths.tts, 'matcha-icefall-zh-baker', 'model-steps-3.onnx'))
     const en = await sha256(join(paths.tts, 'matcha-icefall-en_US-ljspeech', 'model-steps-3.onnx'))
     const vocoder = await sha256(join(paths.tts, 'vocos-22khz-univ.onnx'))
-    return zh === TTS_ZH_MODEL_SHA256 && en === TTS_EN_MODEL_SHA256 && vocoder === TTS_VOCODER_SHA256
-  }
-}
-
-/** Three TTS files share one bar. Unknown files are guessed from the largest known size, so the bar does not jump backward when the next file starts. */
-function createProgress(files: number, progress: (received: number, total: number) => void): {
-  report(index: number, received: number, total: number): void
-  skip(index: number, bytes: number): void
-} {
-  const known = Array<number>(files).fill(0)
-  const got = Array<number>(files).fill(0)
-  const publish = (): void => {
-    const received = got.reduce((sum, value) => sum + value, 0)
-    const knownSum = known.reduce((sum, value) => sum + value, 0)
-    const pending = known.filter((value) => value <= 0).length
-    const standIn = known.reduce((max, value) => Math.max(max, value), 0)
-    progress(received, Math.max(knownSum + pending * standIn, received, 1))
-  }
-  return {
-    report(index, received, total) {
-      got[index] = received
-      if (total > 0) known[index] = total
-      publish()
-    },
-    skip(index, bytes) {
-      const size = Math.max(bytes, 1)
-      got[index] = size
-      known[index] = size
-      publish()
-    },
+    const known = (accepted: readonly string[], digest: string): boolean => (accepted as readonly string[]).includes(digest)
+    return known(TTS_ZH_MODEL_SHA256, zh) && known(TTS_EN_MODEL_SHA256, en) && known(TTS_VOCODER_SHA256, vocoder)
   }
 }
 
@@ -273,55 +248,175 @@ async function installVoiceModel(
   progress: (received: number, total: number) => void,
 ): Promise<void> {
   if (kind === 'wake') {
-    await installArchive(modelUrls('wake'), paths.kws, progress)
+    await installArchive(wakeModelUrls(), paths.kws, progress)
     if (!kwsPresent(paths.kws)) throw new Error('语音唤醒模型不完整')
     return
   }
-  const staging = `${paths.tts}.staging`
+  await installTts(paths.tts, progress)
+}
+
+/** One repository's files, with the folder they land in. */
+interface TtsPart {
+  readonly repo: string
+  readonly dir: string
+  readonly files: readonly { readonly path: string; readonly bytes: number; readonly local?: string }[]
+}
+
+const TTS_PARTS: readonly TtsPart[] = [
+  { repo: TTS_ZH_REPO, dir: 'matcha-icefall-zh-baker', files: TTS_ZH_FILES },
+  { repo: TTS_EN_REPO, dir: 'matcha-icefall-en_US-ljspeech', files: TTS_EN_FILES },
+  {
+    repo: TTS_VOCODER.repo,
+    dir: '',
+    files: [{ path: TTS_VOCODER.path, bytes: TTS_VOCODER.bytes, local: TTS_VOCODER.local }],
+  },
+]
+
+/** One Hub origin, with a breaker so a dead origin cannot stall hundreds of files. */
+interface Origin {
+  readonly base: string
+  failures: number
+  down: boolean
+}
+
+/** An HTTP answer worth retrying: the Hub replies 429 while it throttles a burst. */
+class HubError extends Error {
+  constructor(readonly status: number, url: string, readonly retryAfter?: number) {
+    super(`${status} ${url}`)
+  }
+}
+
+/**
+ * File by file from the Hub. `hf-mirror.com` goes first because it is the only
+ * origin fast from mainland China; huggingface.co covers everywhere else. A
+ * throttled file is retried with backoff and then moved to the other origin,
+ * so one 429 cannot sink a 360-file install.
+ */
+async function installTts(root: string, progress: (received: number, total: number) => void): Promise<void> {
+  const staging = `${root}.staging`
+  await rm(staging, { recursive: true, force: true })
   await mkdir(staging, { recursive: true })
-  const parts = [
-    ['tts-zh', TTS_ZH_MODEL_SHA256, 'matcha-icefall-zh-baker', 'model-steps-3.onnx'],
-    ['tts-en', TTS_EN_MODEL_SHA256, 'matcha-icefall-en_US-ljspeech', 'model-steps-3.onnx'],
-  ] as const
-  const piece = createProgress(3, progress)
-  let index = 0
-  for (const [id, hash, dir, file] of parts) {
-    const model = join(staging, dir, file)
-    if (await sha256(model).catch(() => '') === hash) {
-      piece.skip(index, (await stat(model)).size)
-      index += 1
-      continue
-    }
-    await rm(join(staging, dir), { recursive: true, force: true })
-    const archive = join(staging, `${dir}.tar.bz2`)
-    await downloadFirst(modelUrls(id), archive, (got, total) => piece.report(index, got, total))
-    await extractArchive(archive, staging)
-    const hashed = await sha256(model)
-    if (hashed !== hash) throw new Error(`${file} 校验失败`)
-    piece.skip(index, (await stat(archive)).size)
-    await rm(archive, { force: true })
-    index += 1
+  try {
+    const origins = TTS_ORIGINS.map((base): Origin => ({ base, failures: 0, down: false }))
+    await downloadTts(origins, staging, progress)
+    await verifyTts(staging)
+    await rm(root, { recursive: true, force: true })
+    await mkdir(dirname(root), { recursive: true })
+    await rename(staging, root)
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true })
+    throw error
   }
-  const vocoder = join(staging, 'vocos-22khz-univ.onnx')
-  if (await sha256(vocoder).catch(() => '') !== TTS_VOCODER_SHA256) {
-    await downloadFirst(modelUrls('tts-vocoder'), vocoder, (got, total) => piece.report(2, got, total))
-    if (await sha256(vocoder) !== TTS_VOCODER_SHA256) throw new Error('vocoder 校验失败')
-  }
-  piece.skip(2, (await stat(vocoder)).size)
-  for (const dir of ['matcha-icefall-zh-baker', 'matcha-icefall-en_US-ljspeech']) {
-    // Not needed by the engines; leaving it in would put a second jieba dictionary on disk.
-    await rm(join(staging, dir, 'dict'), { recursive: true, force: true })
-    await rm(join(staging, dir, 'vocoder.onnx'), { force: true })
-    // One vocoder on disk. Windows refuses a symlink without Developer Mode, so copy there.
-    try {
-      await symlink('../vocos-22khz-univ.onnx', join(staging, dir, 'vocoder.onnx'))
-    } catch {
-      await copyFile(vocoder, join(staging, dir, 'vocoder.onnx'))
+}
+
+async function downloadTts(origins: readonly Origin[], root: string, progress: (received: number, total: number) => void): Promise<void> {
+  const jobs = TTS_PARTS.flatMap((part) => part.files.map((file) => ({ part, file })))
+  let received = 0
+  progress(0, TTS_MODEL_BYTES)
+  let failure: unknown
+  const queue = [...jobs]
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const job = queue.shift()
+      if (job === undefined || failure !== undefined) return
+      try {
+        const local = job.file.local ?? job.file.path
+        await downloadHubFile(origins, job.part.repo, job.file, join(root, job.part.dir, local))
+        received += job.file.bytes
+        progress(received, TTS_MODEL_BYTES)
+      } catch (error) {
+        failure = error
+        return
+      }
     }
   }
-  await rm(paths.tts, { recursive: true, force: true })
-  await mkdir(dirname(paths.tts), { recursive: true })
-  await rename(staging, paths.tts)
+  // Two at a time: a burst is what makes the mirror answer 429 on a 360-file set.
+  await Promise.all(Array.from({ length: Math.min(2, jobs.length) }, worker))
+  if (failure !== undefined) throw failure
+}
+
+async function downloadHubFile(
+  origins: readonly Origin[],
+  repo: string,
+  file: { readonly path: string; readonly bytes: number },
+  dest: string,
+): Promise<void> {
+  const encoded = file.path.split('/').map(encodeURIComponent).join('/')
+  await mkdir(dirname(dest), { recursive: true })
+  let last: unknown
+  for (const origin of origins) {
+    if (origin.down) continue
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        await fetchToFile(`${origin.base}/${repo}/resolve/main/${encoded}`, dest, file.bytes)
+        origin.failures = 0
+        return
+      } catch (error) {
+        last = error
+        await rm(dest, { force: true })
+        origin.failures += 1
+        if (origin.failures >= 10) {
+          origin.down = true
+          break
+        }
+        if (attempt < 3) await sleep(retryDelay(error, attempt))
+        else break
+      }
+    }
+  }
+  throw last instanceof Error ? last : new Error(`下载失败: ${file.path}`)
+}
+
+function retryDelay(error: unknown, attempt: number): number {
+  if (error instanceof HubError && error.retryAfter !== undefined) return Math.min(error.retryAfter * 1000, 30_000)
+  if (error instanceof HubError && error.status === 429) return 2_000 * attempt
+  return 500 * attempt
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function fetchToFile(url: string, dest: string, expected: number): Promise<void> {
+  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(300_000) })
+  if (response.status === 429 || response.status === 503) {
+    const header = Number(response.headers.get('retry-after') ?? 0)
+    throw new HubError(response.status, url, Number.isFinite(header) && header > 0 ? header : undefined)
+  }
+  if (!response.ok || response.body === null) throw new HubError(response.status, url)
+  const file = createWriteStream(dest)
+  let bytes = 0
+  let broken = false
+  try {
+    const reader = response.body.getReader()
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      const buffer = Buffer.from(chunk.value)
+      bytes += buffer.length
+      if (!file.write(buffer)) await onceDrain(file)
+    }
+  } catch (error) {
+    broken = true
+    file.destroy()
+    throw error
+  } finally {
+    if (!broken && !file.destroyed) file.end()
+  }
+  await finished(file)
+  if (bytes !== expected) throw new Error(`size ${bytes} != ${expected}: ${url}`)
+}
+
+async function verifyTts(root: string): Promise<void> {
+  const checks: readonly (readonly [string, readonly string[]])[] = [
+    [join(root, 'matcha-icefall-zh-baker', 'model-steps-3.onnx'), TTS_ZH_MODEL_SHA256],
+    [join(root, 'matcha-icefall-en_US-ljspeech', 'model-steps-3.onnx'), TTS_EN_MODEL_SHA256],
+    [join(root, 'vocos-22khz-univ.onnx'), TTS_VOCODER_SHA256],
+  ]
+  for (const [file, accepted] of checks) {
+    const digest = await sha256(file).catch(() => '')
+    if (!(accepted as readonly string[]).includes(digest)) throw new Error(`${basename(file)} 校验失败`)
+  }
 }
 
 async function installArchive(urls: readonly string[], dest: string, progress: (received: number, total: number) => void): Promise<void> {

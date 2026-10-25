@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { WAKE_MODEL_URL } from '@dsh-orb/voice/manifest'
-import { VoiceDownloads, modelUrls } from '../src/voice-download.ts'
+import { VoiceDownloads, wakeModelUrls } from '../src/voice-download.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'orb-voice-download-'))
 after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -22,10 +22,17 @@ function kwsFiles(dir: string): void {
 
 describe('voice model download', () => {
   it('tries the official GitHub release before the mirrors', () => {
-    const urls = modelUrls('wake')
+    const urls = wakeModelUrls()
     assert.equal(urls[0], WAKE_MODEL_URL)
     assert.ok(urls.some((url) => url.includes('hf-mirror.com')))
     assert.ok(urls.some((url) => url.startsWith('https://ghproxy.net/')))
+  })
+
+  it('advertises the Hub mirror for the TTS models', () => {
+    const downloads = new VoiceDownloads(() => ({ kws: join(root, 'a'), asr: join(root, 'b'), tts: join(root, 'c') }))
+    const sources = downloads.view().tts.sources
+    assert.ok(sources.length > 0)
+    assert.ok(sources.every((url) => url.startsWith('https://hf-mirror.com/')))
   })
 
   it('does not start a second transfer, and reports the model once the files land', async () => {

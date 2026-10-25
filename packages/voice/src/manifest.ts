@@ -34,16 +34,40 @@ export const WAKE_MODEL_URL = 'https://github.com/k2-fsa/sherpa-onnx/releases/do
 /** Unpacked size the download dialog shows: about 38 MB. */
 export const WAKE_MODEL_BYTES = 38 * 1024 * 1024
 
-export const TTS_ZH_URL = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-baker.tar.bz2'
-export const TTS_EN_URL = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-en_US-ljspeech.tar.bz2'
-export const TTS_VOCODER_URL = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-22khz-univ.onnx'
+/**
+ * The Matcha engines and their vocoder are fetched file by file from the
+ * Hugging Face Hub. Repository trees are immutable, so one pinned digest per
+ * model stays valid, and the domestic mirror serves the same bytes as
+ * huggingface.co. `hf-mirror` goes first because GitHub is unreachable from
+ * mainland China while that mirror runs at several MB/s there.
+ */
+export const TTS_ZH_REPO = 'csukuangfj/matcha-icefall-zh-baker'
+export const TTS_EN_REPO = 'csukuangfj/matcha-icefall-en_US-ljspeech'
+export const TTS_VOCODER_REPO = 'k2-fsa/sherpa-onnx-models'
 
-export const TTS_ZH_MODEL_SHA256 = 'ff1cc7f7abdedc4eeec668a4a0dc2e72a0c314c5637d5fce885345b490bd08de'
-export const TTS_EN_MODEL_SHA256 = '4d7771c0ec063ca74f2fa92ba0ecfe14f73fa3f61c236d9469b92e102d8e9574'
-export const TTS_VOCODER_SHA256 = '0574a135aa1db2de6e181050db2ec528496cacd4a4701fc5d7faf9f9804c0081'
+export const TTS_ORIGINS = ['https://hf-mirror.com', 'https://huggingface.co'] as const
 
-/** On-disk size the download dialog shows: about 214 MB. */
-export const TTS_MODEL_BYTES = 214 * 1024 * 1024
+/**
+ * Every legitimate digest of the acoustic model. Upstream re-exported both
+ * Matcha packages on 2026-10-24 without renaming them, so the previous build
+ * and the current one both exist in the wild: the old one inside an already
+ * installed folder, the new one on the Hub. Accepting either keeps an existing
+ * install valid and lets a fresh download pass.
+ */
+export const TTS_ZH_MODEL_SHA256 = [
+  '47e82b11454edeeb65adc4e44a24fd54c6715cd4d875cc2a20f75545ecc32d4d',
+  'ff1cc7f7abdedc4eeec668a4a0dc2e72a0c314c5637d5fce885345b490bd08de',
+] as const
+export const TTS_EN_MODEL_SHA256 = [
+  'f8e8bae6f731310a1cda0012871ed5e91b0d19f1e2ceff077f62922bba95e3c1',
+  '4d7771c0ec063ca74f2fa92ba0ecfe14f73fa3f61c236d9469b92e102d8e9574',
+] as const
+export const TTS_VOCODER_SHA256 = [
+  '0574a135aa1db2de6e181050db2ec528496cacd4a4701fc5d7faf9f9804c0081',
+] as const
+
+/** On-disk size the download dialog shows: about 197 MB. */
+export const TTS_MODEL_BYTES = 206_100_276
 
 /** Official SenseVoice int8 trio: model + tokens + silero. The dialog says about 230 MB. */
 export const ASR_MODEL_BYTES = 239_233_841 + 315_894 + 1_807_522
@@ -54,7 +78,11 @@ export const ASR_SOURCES = ['https://huggingface.co', 'https://hf-mirror.com'] a
 export function absentVoiceModels(): VoiceModels {
   return {
     wake: view([WAKE_MODEL_URL], WAKE_MODEL_BYTES),
-    tts: view([TTS_ZH_URL, TTS_EN_URL, TTS_VOCODER_URL], TTS_MODEL_BYTES),
+    tts: view([
+      `${TTS_ORIGINS[0]}/${TTS_ZH_REPO}`,
+      `${TTS_ORIGINS[0]}/${TTS_EN_REPO}`,
+      `${TTS_ORIGINS[0]}/${TTS_VOCODER_REPO}`,
+    ], TTS_MODEL_BYTES),
     asr: view(ASR_SOURCES, ASR_MODEL_BYTES),
   }
 }
