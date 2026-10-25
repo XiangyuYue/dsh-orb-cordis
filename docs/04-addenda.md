@@ -465,4 +465,6 @@ asr text          mode=command    text=啊，大飞就退着吧。           ←
 - **404 不重试:** 镜像还没同步这个版本时,404 原本也会走满 3 次重试(1s + 2s 退避),白等约 3.5 秒。现在 404/410 直接切下一个源。
 - **体积:** 弹窗写 8.6 MB(`WAKE_MODEL_BYTES`),不再是解压后的 38 MB。
 - **发布顺序:** 先发模型包,再发指向它的插件版本。镜像同步前两个 registry 都 404,那时才掉到 GitHub。
+- **镜像不会自己跟上:** 2026-10-25 首发实测,`dsh-orb-kws` 发布 20 多分钟后 npmmirror 仍停在占位的 `0.0.0-stage`(tarball 404)。`PUT https://registry.npmmirror.com/<包名>/sync?sync_upstream=true` 返回 201,约 25 秒后版本和 tarball 都到位,sha256 与 npmjs 一致,安装从 10.2 秒降到 6.7 秒。注意路径是老的 `/<包名>/sync`,不是 `/-/package/<包名>/sync`(后者 404)。以后每发一个模型版本都手动戳一次。
+- **镜像的 dist-tags 会滞后:** 同上,版本和 tarball 都对了,但 packument 里的 `latest` 仍指向 `0.0.0-stage`,再触发一次同步也没变。插件只按版本号拉 tarball,不受影响;但如果有人直接 `npm i dsh-orb-kws` 走镜像,拿到的是那个占位包。
 - **打包脚本:** `node models/kws/scripts/pack.mjs`。mtime 固定、gzip 在 Node 侧做,同一批文件重复打包 sha256 一致(系统 gzip 会把当前时间写进 header,哈希每次都变)。
