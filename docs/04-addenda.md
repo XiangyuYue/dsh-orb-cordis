@@ -480,3 +480,16 @@ asr text          mode=command    text=啊，大飞就退着吧。           ←
 - **验证(真机端到端)**:临时 `DSH_HOME`,预先放一份从 npmmirror 下好的 157,455,369 B `.electron-electron-v44.0.0-win32-x64.zip.partial`(就是被卡住的用户盘上的东西),调 `resolveElectronBinary()`:日志 `continuing from 157455369 bytes left by an earlier attempt` → `the runtime zip on disk is already complete`(传输 0 字节)→ `phase extracting` → `Electron 44.0.0 is ready`,7 秒后返回 `electron-runtime\electron.exe`;`ELECTRON_RUN_AS_NODE=1 electron.exe -e "console.log(process.versions.electron)"` 输出 `44.0.0`,退出码 0。
 - **回归面**:`node --test` 该文件 18/18;`pnpm typecheck`、`pnpm build` 通过;`pnpm test` 519/522,3 个失败在**未改动的 HEAD** 上同样失败(deferred-install 的 pnpm 用例、voice 两例,Windows 本机既有问题),与本次改动无关。
 - **未做**:没有真机跑「设置页点重新下载」那条 UI 链路——host 侧入口一行未改,仍走同一条 `resolveElectronBinary`;改的是 host 源码,要发新版才会到用户手里。
+
+## 36. 0.2.0 一次性更新公告:进设置页看一次,关掉不再出现 (2026-10-26)
+
+需求:0.2.0 的新装和升级用户都应该在「设置 → 悬浮球」看到一条更新公告;公告只出现一次,用户手动关闭后,刷新、重启、再进设置页都不再出现。公告只在 Windows/macOS 显示,只在设置页内显示,不做导航角标或弹窗。
+
+- **状态放 profile**:每个 profile 一个 `orb-whats-new.json`,内容是 `{ "dismissed": ["0.2.0"] }`。不用 localStorage:`dsh web` 的端口会变,清浏览器数据也会丢;profile 文件跟着设置走,重启和重装插件都还在。
+- **可见性**:新增 `whats-new.ts` 的 `visibleWhatsNew(supported, currentVersion, dismissed)`,只有平台支持、`update.currentVersion` 正好等于 `0.2.0`、且本 profile 没关闭过时才返回 `{ id, version }`。snapshot 新增 `whatsNew`,其余情况一律 `null`。这样 0.2.1 即使忘了改文案,也不会误显示 0.2.0 的旧公告。
+- **关闭路由**:`POST /.dsh-orb/whats-new/dismiss`,body `{ "id": "0.2.0" }`;校验 id 后写标记再更新内存,写盘失败就返回 500、公告保留。路由放在平台门控之前,它是 profile 级设置,不依赖球进程;Linux 上 host 也不会返回公告。
+- **客户端**:zh/en 文案表新增 `whatsNew`;设置页在运行时提示之后、更新卡片之前渲染 `is-info` 卡片,包含标题、说明、4 条 bullet、右上角 `×` 和右下角「知道了」。两个按钮走同一个 dismiss,`mutate()` 返回的 snapshot 里 `whatsNew` 已经是 `null`,卡片立即消失。公告在 fieldset 外,不受其他设置保存时的禁用影响。
+- **平台**:host 的 `orbSupported()` 和 client 的 `snap.supported` 双重判断,Linux 不显示。
+- **测试**:host 新增 `whats-new.test.ts` 覆盖平台/版本/已关闭;`preferences.test.ts` 覆盖写盘、重载、坏文件;`routes.test.ts` 覆盖 snapshot、dismiss、重复 GET、非法 id、旧版本。client 的 `section.test.mjs` 覆盖首次渲染、两个关闭入口、请求体、英文文案、Linux/缺失/错位 id 隐藏和样式表。
+- **验证/打包**:`pnpm typecheck` 通过;`whats-new.test.ts` 2 例、`preferences.test.ts` 新增 1 例、`routes.test.ts` 新增 1 例、`section.test.mjs` 新增 1 例全部通过;全量 `pnpm test` 527 例,524 过,3 个失败仍是既有环境问题(`deferred-install` 拉未发布的 `dsh-orb@0.2.0`、macOS `say`、voice EPIPE)。`pnpm build`、`pnpm --filter dsh-orb run pack` 通过;新包 `dsh-orb-0.2.0.tgz` 59,826,634 B,SHA-256 `cdf25778…28f4c72e`,解包确认 `client.js` 含 `dsh-orb-set-whats-new`、`dist/host/index.js` 含 `whats-new/dismiss` 与 `orb-whats-new.json`,版本仍为 0.2.0。本轮未做真机设置页截图,以 host/client 测试与解包校验为准;卡片渲染、两个关闭入口和请求体由 client 测试覆盖。
+- **边界/未做**:按 profile、按版本各一次;0.2.1 若有新公告,改 `WHATS_NEW_VERSION` 和 client 文案 id 即可,0.2.0 的关闭不影响。用户如果从不打开设置页就不会看到——这是「只在设置页显示」的直接结果。不做导航角标、toast、自动打开设置页。

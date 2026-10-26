@@ -57,6 +57,19 @@ window.__ModuleLoader__.load({
       frameToggle: '显示观察框彩带',
       runtimePreparingTitle: '正在下载悬浮球运行时',
       runtimePreparing: '首次使用需要下载约 124–150 MB 的运行时，完成后悬浮球会自动出现。下载被中断或长时间不动时，点「重新下载」立即接着下。',
+      whatsNew: {
+        id: '0.2.0',
+        title: '悬浮球 0.2.0 更新',
+        lead: '这次更新带来语音能力，并修复 Windows 首次安装运行时下载失败的问题。语音默认关闭，可在本页开启。',
+        items: [
+          'Windows 首次安装修复：全新安装不再卡在「运行时下载完成却解压失败」；升级后重启即可，已经下载的部分不会重下。',
+          '语音唤醒与输入：喊「你好大肥鱼」唤醒，球回「我在呢」；固定且空闲时直接说话下指令。',
+          '语音播报与插话：回复可用本地音色或千问播报；播报中说「大肥鱼」可插话，说「退下吧」停止。',
+          '语音模型下载：唤醒模型约 9 MB（npm / npmmirror），本地播报模型约 197 MB（Hugging Face 镜像）；设置页可看进度。',
+        ],
+        dismiss: '知道了',
+        close: '关闭更新公告',
+      },
       tccTitle: 'Mac 权限',
       tccDescription: 'Computer Use 需要屏幕录制与辅助功能。点按钮打开系统设置对应页。',
       tccAppHint: '在列表里打开 {name}。',
@@ -273,6 +286,19 @@ window.__ModuleLoader__.load({
       frameToggle: 'Show the observation ribbon',
       runtimePreparingTitle: 'Downloading the floating-ball runtime',
       runtimePreparing: 'The first launch downloads a ~124–150 MB runtime, then the ball appears on its own. If the download was interrupted or looks stuck, Download again picks it up from where it stopped.',
+      whatsNew: {
+        id: '0.2.0',
+        title: 'Floating ball 0.2.0 update',
+        lead: 'This release adds voice and fixes the Windows first-install runtime download failure. Voice is off by default; turn it on on this page.',
+        items: [
+          'Windows first-install fix: a fresh install no longer gets stuck after the runtime download; restart after upgrading — bytes already downloaded are kept.',
+          'Wake and talk: say “你好大肥鱼” to wake the ball (it replies “我在呢”); when pinned and idle, speak a command directly.',
+          'Spoken replies and interjection: hear replies through the local voice or Qwen; say “大肥鱼” to interject, “退下吧” to stop.',
+          'Voice model downloads: the ~9 MB wake model comes from npm/npmmirror; the ~197 MB local voice model comes from the Hugging Face mirror; progress is shown here.',
+        ],
+        dismiss: 'Got it',
+        close: 'Close update note',
+      },
       tccTitle: 'Mac permissions',
       tccDescription: 'Computer Use needs Screen Recording and Accessibility. Each button opens that System Settings pane.',
       tccAppHint: 'In the list, turn on {name}.',
@@ -797,6 +823,9 @@ window.__ModuleLoader__.load({
         snap.permissionFallback === true
           ? h('p', { className: 'dsh-orb-set-banner', role: 'status' }, text.permissionFallback)
           : null,
+        // Below the runtime wait/failure: an interrupted download is more urgent than release
+        // notes. Above the update card because this note is the reason the user came to look.
+        whatsNewNotice(text, snap, mutate),
         // Outside the fieldset: an update is worth offering even where the ball itself is off.
         updateCard(text, snap, mutate),
         h('fieldset', { className: 'dsh-orb-set-fields', disabled },
@@ -980,6 +1009,44 @@ window.__ModuleLoader__.load({
           h('h3', { className: 'dsh-orb-set-notice-title' }, title),
           h('p', { className: 'dsh-orb-set-notice-body' }, body)),
         h('button', { type: 'button', className: 'dsh-orb-set-notice-action', disabled, onClick }, action))
+    }
+
+    /**
+     * The one-time 0.2.0 release note. The host decides whether this profile still needs it;
+     * the page owns the localized copy and only draws it when that copy names the same note.
+     * Both the corner × and the "Got it" button go through the same dismiss route.
+     */
+    function whatsNewNotice(text, snap, mutate) {
+      const note = snap.supported && text.whatsNew && snap.whatsNew && text.whatsNew.id === snap.whatsNew.id
+        ? text.whatsNew
+        : null
+      if (!note) return null
+      const dismiss = () => { void mutate('/.dsh-orb/whats-new/dismiss', { id: note.id }) }
+      return h('section', {
+        className: 'dsh-orb-set-notice is-info dsh-orb-set-whats-new',
+        role: 'region',
+        'aria-labelledby': 'dsh-orb-set-whats-new-title',
+      },
+        h('span', { className: 'dsh-orb-set-notice-mark', 'aria-hidden': 'true' }, '✦'),
+        h('div', { className: 'dsh-orb-set-notice-main' },
+          h('div', { className: 'dsh-orb-set-whats-new-head' },
+            h('h3', { className: 'dsh-orb-set-notice-title', id: 'dsh-orb-set-whats-new-title' }, note.title),
+            h('button', {
+              type: 'button',
+              className: 'dsh-orb-set-whats-new-close',
+              'aria-label': note.close,
+              title: note.close,
+              onClick: dismiss,
+            }, '×')),
+          h('p', { className: 'dsh-orb-set-notice-body' }, note.lead),
+          h('ul', { className: 'dsh-orb-set-whats-new-list' },
+            note.items.map((item, index) => h('li', { key: index }, item))),
+          h('div', { className: 'dsh-orb-set-whats-new-foot' },
+            h('button', {
+              type: 'button',
+              className: 'dsh-orb-set-notice-action dsh-orb-set-whats-new-known',
+              onClick: dismiss,
+            }, note.dismiss))))
     }
 
     /** Current version, the newest published one, and the one-click upgrade. */
@@ -2529,9 +2596,11 @@ window.__ModuleLoader__.load({
 .dsh-orb-set-notice { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: 14px; border: 1px solid transparent; }
 .dsh-orb-set-notice.is-error { border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d92d20) 40%, transparent); background: color-mix(in srgb, var(--dsw-alias-state-error-primary, #d92d20) 8%, transparent); }
 .dsh-orb-set-notice.is-wait { border-color: color-mix(in srgb, var(--dsh-orb-accent) 35%, transparent); background: color-mix(in srgb, var(--dsh-orb-accent) 7%, transparent); }
+.dsh-orb-set-notice.is-info { border-color: color-mix(in srgb, var(--dsh-orb-accent) 32%, transparent); background: color-mix(in srgb, var(--dsh-orb-accent) 6%, transparent); }
 .dsh-orb-set-notice-mark { flex: none; width: 23px; height: 23px; margin-top: -1px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; line-height: 1; }
 .dsh-orb-set-notice.is-error .dsh-orb-set-notice-mark { background: var(--dsw-alias-state-error-primary, #d92d20); color: var(--dsw-static-neutral-bluish-00, #fff); }
 .dsh-orb-set-notice.is-wait .dsh-orb-set-notice-mark { border: 2px solid color-mix(in srgb, var(--dsh-orb-accent) 28%, transparent); border-top-color: var(--dsh-orb-accent); animation: dsh-orb-set-spin 0.9s linear infinite; }
+.dsh-orb-set-notice.is-info .dsh-orb-set-notice-mark { background: var(--dsh-orb-accent); color: var(--dsw-alias-label-primary-inverted, #fff); font-size: 13px; }
 @keyframes dsh-orb-set-spin { to { transform: rotate(360deg); } }
 .dsh-orb-set-notice-main { flex: 1; min-width: 0; }
 .dsh-orb-set .dsh-orb-set-notice-title { margin: 0; font-size: 14px; font-weight: 600; color: inherit; }
@@ -2541,6 +2610,15 @@ window.__ModuleLoader__.load({
 .dsh-orb-set .dsh-orb-set-notice-action:hover:enabled { filter: brightness(1.08); }
 .dsh-orb-set .dsh-orb-set-notice-action:disabled { opacity: 0.5; cursor: default; }
 .dsh-orb-set .dsh-orb-set-notice-action:focus-visible { outline: 2px solid var(--dsh-orb-accent); outline-offset: 2px; }
+.dsh-orb-set-whats-new-head { display: flex; align-items: flex-start; gap: 10px; }
+.dsh-orb-set-whats-new-head .dsh-orb-set-notice-title { flex: 1; min-width: 0; }
+.dsh-orb-set .dsh-orb-set-whats-new-close { flex: none; margin: -3px -4px 0 0; border: 0; border-radius: 6px; padding: 0 5px; background: transparent; color: inherit; font: inherit; font-size: 20px; line-height: 1.1; opacity: 0.55; cursor: pointer; }
+.dsh-orb-set .dsh-orb-set-whats-new-close:hover { opacity: 1; }
+.dsh-orb-set .dsh-orb-set-whats-new-close:focus-visible { outline: 2px solid var(--dsh-orb-accent); outline-offset: 2px; }
+.dsh-orb-set-whats-new-list { margin: 8px 0 0; padding-left: 18px; list-style: disc; font-size: 12.5px; line-height: 1.6; color: color-mix(in srgb, currentColor 72%, transparent); }
+.dsh-orb-set-whats-new-list li { margin: 3px 0; }
+.dsh-orb-set-whats-new-foot { display: flex; justify-content: flex-end; margin-top: 10px; }
+.dsh-orb-set-whats-new-foot .dsh-orb-set-notice-action { margin-left: 0; }
 
 /* Permissions */
 .dsh-orb-set .dsh-orb-set-tcc-hint { font-size: 12.5px; color: color-mix(in srgb, currentColor 62%, transparent); }

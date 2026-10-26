@@ -12,6 +12,7 @@ const root = join(here, '../../..')
 // preset added on the host side without copy here fails a test instead of shipping.
 const { AVATAR_PRESETS } = await import(pathToFileURL(join(root, 'packages/host/src/avatar-presets.ts')).href)
 const { qwenVoiceViews } = await import(pathToFileURL(join(root, 'packages/voice/src/qwen.ts')).href)
+const { WHATS_NEW_VERSION } = await import(pathToFileURL(join(root, 'packages/host/src/whats-new.ts')).href)
 
 function loadSection(hooks = {}) {
   const calls = []
@@ -209,6 +210,11 @@ function loadSection(hooks = {}) {
           : { ...snapshot.update, updating: true }
       }
       if (options.method === 'POST' && path === '/.dsh-orb/update/auto') snapshot.update = { ...snapshot.update, autoCheck: JSON.parse(options.body).enabled }
+      if (options.method === 'POST' && path === '/.dsh-orb/whats-new/dismiss') {
+        const id = JSON.parse(options.body).id
+        if (snapshot.whatsNew && snapshot.whatsNew.id === id) snapshot.whatsNew = null
+        return json(snapshot)
+      }
       if (options.method === 'POST' && path === '/.dsh-orb/voice') snapshot.voice = JSON.parse(options.body)
       if (options.method === 'POST' && path === '/.dsh-orb/voice/download') {
         const kind = JSON.parse(options.body).kind
@@ -567,6 +573,76 @@ describe('settings section', () => {
     assert.equal(JSON.parse(page.calls.at(-1).options.body).enabled, true, 'retry asks the host to start the ball again')
 
     page.snapshot.helperError = ''
+  })
+
+  it('shows the 0.2.0 release note once, with two ways to close it', async () => {
+    const note = { id: WHATS_NEW_VERSION, version: WHATS_NEW_VERSION }
+    const cardOf = (view) => find(view, (node) => String(node.props?.className).includes('dsh-orb-set-whats-new'))[0]
+    const said = (node) => {
+      if (typeof node === 'string') return node
+      if (!node || typeof node !== 'object') return ''
+      return (node.children ?? []).map(said).join('')
+    }
+    const loaded = async (page) => {
+      page.snapshot.whatsNew = note
+      page.render()
+      await page.flush()
+      return page.render()
+    }
+
+    const page = loadSection()
+    let view = await loaded(page)
+    const card = cardOf(view)
+    assert.ok(card, 'the first open of the settings page shows the note')
+    assert.equal(card.props.role, 'region')
+    assert.equal(card.props['aria-labelledby'], 'dsh-orb-set-whats-new-title')
+    assert.match(said(card), /悬浮球 0\.2\.0 更新/)
+    assert.match(said(card), /Windows 首次安装修复/)
+    assert.match(said(card), /语音唤醒与输入/)
+    assert.match(said(card), /语音播报与插话/)
+    assert.match(said(card), /语音模型下载/)
+    const known = find(card, (node) => node.type === 'button' && String(node.props?.className).includes('dsh-orb-set-whats-new-known'))[0]
+    assert.equal(known.children[0], '知道了')
+    known.props.onClick()
+    await settle()
+    assert.equal(page.calls.at(-1).path, '/.dsh-orb/whats-new/dismiss')
+    assert.deepEqual(JSON.parse(page.calls.at(-1).options.body), { id: WHATS_NEW_VERSION })
+    assert.equal(cardOf(page.render()), undefined, 'the card disappears as soon as the host confirms')
+
+    // The corner × is the other way to dismiss; it uses the same route and id.
+    const corner = loadSection()
+    view = await loaded(corner)
+    const close = find(view, (node) => node.type === 'button' && node.props?.['aria-label'] === '关闭更新公告')[0]
+    assert.ok(close, 'the corner × is labelled for screen readers')
+    close.props.onClick()
+    await settle()
+    assert.equal(corner.calls.at(-1).path, '/.dsh-orb/whats-new/dismiss')
+    assert.deepEqual(JSON.parse(corner.calls.at(-1).options.body), { id: WHATS_NEW_VERSION })
+    assert.equal(cardOf(corner.render()), undefined)
+
+    // Copy follows <html lang>; the note id must stay the same.
+    const english = loadSection()
+    english.setLang('en')
+    view = await loaded(english)
+    const englishCard = cardOf(view)
+    assert.match(said(englishCard), /Floating ball 0\.2\.0 update/)
+    assert.match(said(englishCard), /Got it/)
+
+    // Linux, a mismatched client copy, and an absent field all stay dark.
+    const linux = loadSection()
+    linux.setMode('linux')
+    view = await loaded(linux)
+    assert.equal(cardOf(view), undefined, 'Linux never shows the note')
+
+    const mismatched = loadSection()
+    mismatched.snapshot.whatsNew = { id: '0.1.9', version: '0.1.9' }
+    mismatched.render()
+    await mismatched.flush()
+    assert.equal(cardOf(mismatched.render()), undefined, 'client copy and host id must agree')
+
+    assert.match(page.styles[0].textContent, /\.dsh-orb-set-notice\.is-info/)
+    assert.match(page.styles[0].textContent, /\.dsh-orb-set-whats-new-close/)
+    assert.match(page.styles[0].textContent, /\.dsh-orb-set-whats-new-list/)
   })
 
   it('follows the main window locale on <html lang>', () => {

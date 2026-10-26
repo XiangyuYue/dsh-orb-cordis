@@ -27,6 +27,7 @@ const UPDATE_FILE = 'orb-update.json'
 const HISTORY_FILE = 'orb-history.json'
 const WORKSPACE_FILE = 'orb-workspace.json'
 const VOICE_FILE = 'orb-voice.json'
+const WHATS_NEW_FILE = 'orb-whats-new.json'
 
 /** Retention choices shown in the settings select; 0 means forever. */
 export const HISTORY_RETENTION_DAYS = [0, 1, 7, 14, 30, 60] as const
@@ -189,6 +190,7 @@ export class ProfileStore {
   private ballValue: boolean
   private updateValue: UpdateRecord
   private historyValue: HistoryRecord
+  private whatsNewValue: Set<string>
   private voiceValue: VoiceSettings
 
   constructor(readonly dir: string) {
@@ -204,6 +206,7 @@ export class ProfileStore {
     this.ballValue = readBall(dir)
     this.updateValue = readUpdate(dir)
     this.historyValue = readHistory(dir)
+    this.whatsNewValue = readWhatsNew(dir)
     const voice = readJson(join(dir, VOICE_FILE))
     // A fresh profile starts with voice off. A file written before the master switch
     // existed keeps the old effective state: on only if one of its columns was on.
@@ -324,6 +327,23 @@ export class ProfileStore {
   setUpdateRecord(patch: Partial<UpdateRecord>): void {
     this.updateValue = { ...this.updateValue, ...patch }
     writeJson(join(this.dir, UPDATE_FILE), this.updateValue)
+  }
+
+  /** Whether the user already closed this release note on this profile. */
+  whatsNewDismissed(id: string): boolean {
+    return this.whatsNewValue.has(id)
+  }
+
+  /**
+   * Remember a closed release note. The file is written before the in-memory set moves, so a
+   * failed write leaves the note visible instead of pretending it was dismissed.
+   */
+  dismissWhatsNew(id: string): void {
+    if (this.whatsNewValue.has(id)) return
+    const next = new Set(this.whatsNewValue)
+    next.add(id)
+    writeJson(join(this.dir, WHATS_NEW_FILE), { dismissed: [...next] })
+    this.whatsNewValue = next
   }
 
   history(): HistoryRecord {
@@ -528,6 +548,13 @@ function readUpdate(dir: string): UpdateRecord {
     autoCheck: typeof stored.autoCheck === 'boolean' ? stored.autoCheck : true,
     lastError: typeof stored.lastError === 'string' ? stored.lastError : '',
   }
+}
+
+/** A missing or malformed file means nothing was dismissed: the note appears again. */
+function readWhatsNew(dir: string): Set<string> {
+  const stored = record(readJson(join(dir, WHATS_NEW_FILE)))
+  const list = Array.isArray(stored?.dismissed) ? stored.dismissed : []
+  return new Set(list.filter((id): id is string => typeof id === 'string' && id !== ''))
 }
 
 function readHistory(dir: string): HistoryRecord {

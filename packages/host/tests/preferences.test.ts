@@ -107,6 +107,25 @@ describe('profile preferences', () => {
     assert.equal(new ProfileStore(path).updateRecord().latestVersion, '')
   })
 
+  it('remembers a dismissed release note, one id at a time', () => {
+    const path = dir('whats-new')
+    const store = new ProfileStore(path)
+    assert.equal(store.whatsNewDismissed('0.2.0'), false, 'a fresh profile has not seen it')
+    store.dismissWhatsNew('0.2.0')
+    assert.equal(store.whatsNewDismissed('0.2.0'), true)
+    assert.deepEqual(JSON.parse(readFileSync(join(path, 'orb-whats-new.json'), 'utf8')), { dismissed: ['0.2.0'] })
+    // Closing it twice is a no-op, and a later note is kept next to it.
+    store.dismissWhatsNew('0.2.0')
+    store.dismissWhatsNew('0.2.1')
+    assert.deepEqual(JSON.parse(readFileSync(join(path, 'orb-whats-new.json'), 'utf8')), { dismissed: ['0.2.0', '0.2.1'] })
+    const reloaded = new ProfileStore(path)
+    assert.equal(reloaded.whatsNewDismissed('0.2.0'), true)
+    assert.equal(reloaded.whatsNewDismissed('0.2.1'), true)
+    // A half-written file is not a dismissal: the note must be offered again.
+    writeFileSync(join(path, 'orb-whats-new.json'), '{')
+    assert.equal(new ProfileStore(path).whatsNewDismissed('0.2.0'), false)
+  })
+
   it('keeps the two model tracks and the selection language apart', () => {
     const path = dir('models')
     // The selection toolbar is disabled everywhere: a stored enabled flag is ignored.

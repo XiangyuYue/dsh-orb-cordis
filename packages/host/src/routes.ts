@@ -26,6 +26,7 @@ import { type VoiceSettings } from '@dsh-orb/voice/settings'
 import { defaultAvatarPath } from './helper-path.ts'
 import { isTccRight, openMicrophoneSettings, type TccMonitor, type TccStatus } from './tcc.ts'
 import type { UpdateState } from './update.ts'
+import { visibleWhatsNew, WHATS_NEW_VERSION, type WhatsNewNotice } from './whats-new.ts'
 
 const PREFIX = '/.dsh-orb'
 const HELPER_HEADER = 'x-dsh-orb-helper'
@@ -210,6 +211,18 @@ async function handle(deps: RouteDeps, req: IncomingMessage, res: ServerResponse
       return
     }
     deps.control.setAutoCheck(enabled)
+    sendJson(res, 200, await snapshot(deps))
+    return
+  }
+  // The one-time release note lives on the profile, not on the ball. Its marker is written
+  // here even on Linux (which never shows the note), so the route stays platform-neutral.
+  if (method === 'POST' && path === `${PREFIX}/whats-new/dismiss`) {
+    const id = asRecord(await readJson(req))?.id
+    if (id !== WHATS_NEW_VERSION) {
+      sendJson(res, 400, { error: 'invalid-whats-new' })
+      return
+    }
+    deps.store.dismissWhatsNew(WHATS_NEW_VERSION)
     sendJson(res, 200, await snapshot(deps))
     return
   }
@@ -504,14 +517,17 @@ async function snapshot(deps: RouteDeps, voice: VoiceSettings = deps.store.voice
   selectionAvailable: boolean
   permissionFallback: boolean
   update: UpdateState
+  whatsNew: WhatsNewNotice | null
   history: HistoryState
   workspace: WorkspaceState
 }> {
   const models = deps.store.models()
   const version = Math.trunc(deps.store.avatarVersion())
   const selection = deps.store.avatarSelection()
+  const supported = orbSupported()
+  const update = deps.control.updateState()
   return {
-    supported: orbSupported(),
+    supported,
     ballEnabled: deps.store.ballEnabled(),
     voice,
     voiceModels: deps.control.voiceModels?.() ?? absentVoiceModels(),
@@ -532,7 +548,8 @@ async function snapshot(deps: RouteDeps, voice: VoiceSettings = deps.store.voice
     helperPhase: deps.control.helperPhase?.() ?? '',
     selectionAvailable: selectionRuntimeAvailable(),
     permissionFallback: deps.store.permissionFallback(),
-    update: deps.control.updateState(),
+    update,
+    whatsNew: visibleWhatsNew(supported, update.currentVersion, deps.store.whatsNewDismissed(WHATS_NEW_VERSION)),
     history: deps.control.historyState?.() ?? EMPTY_HISTORY_STATE,
     workspace: deps.control.workspaceState?.() ?? { path: '', defaultPath: '', custom: false },
   }

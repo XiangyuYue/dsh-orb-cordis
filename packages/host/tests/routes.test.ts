@@ -11,6 +11,7 @@ import { ProfileStore, MAX_AVATAR_BYTES } from '../src/preferences.ts'
 import { orbSupported, registerOrbRoutes, tokensMatch, type OrbControl } from '../src/routes.ts'
 import { TccMonitor } from '../src/tcc.ts'
 import { EMPTY_UPDATE_STATE } from '../src/update.ts'
+import { WHATS_NEW_VERSION } from '../src/whats-new.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'orb-routes-'))
 after(() => { rmSync(root, { recursive: true, force: true }) })
@@ -496,6 +497,70 @@ describe('settings routes', () => {
     await handler(request('POST', '/.dsh-orb/update/auto', JSON.stringify({ enabled: 'yes' }), { 'x-dsh-user': 'ok' }), invalid)
     assert.equal(invalid.status, 400)
     assert.equal(JSON.parse(invalid.body.toString('utf8')).error, 'invalid-auto-check')
+    dispose()
+  })
+
+  it('offers the release note once, and remembers the dismissal on the profile', async () => {
+    const profile = join(root, 'profile-whats-new')
+    mkdirSync(profile, { recursive: true })
+    const store = new ProfileStore(profile)
+    let installed = WHATS_NEW_VERSION
+    const control: OrbControl = {
+      helperAuthorized: () => false,
+      takeJump: () => null,
+      confirmJump() {},
+      takeSettingsOpen: () => null,
+      confirmSettingsOpen() {},
+      async publishChrome() {},
+      async setOverlayModel() {},
+      async setBackgroundModel() {},
+      async setSelectionEnabled() {},
+      async setMillifractionEnabled() {},
+      async setObservationFrameEnabled() {},
+      async setBallEnabled() {},
+      updateState: () => ({ ...emptyUpdate, currentVersion: installed, installedVersion: installed }),
+      async checkUpdate() {},
+      installUpdate() {},
+      setAutoCheck() {},
+    }
+    let handler: ((req: IncomingMessage, res: ServerResponse) => Promise<void>) | undefined
+    const dispose = registerOrbRoutes({
+      ctx: {
+        webServer: { register(route) { handler = route.handler; return () => { handler = undefined } } },
+        connection: { admit: () => ({ peer: { id: 'local' } }) },
+        sessionController: { modelCatalog: () => ({ groups: [] }) },
+      },
+      store,
+      tcc: new TccMonitor(),
+      control,
+    })
+    assert.ok(handler)
+
+    const first = response()
+    await handler(request('GET', '/.dsh-orb/settings'), first)
+    const opened = JSON.parse(first.body.toString('utf8')) as { whatsNew: { id: string; version: string } | null }
+    assert.deepEqual(opened.whatsNew, orbSupported() ? { id: WHATS_NEW_VERSION, version: WHATS_NEW_VERSION } : null)
+
+    const dismissed = response()
+    await handler(request('POST', '/.dsh-orb/whats-new/dismiss', JSON.stringify({ id: WHATS_NEW_VERSION })), dismissed)
+    assert.equal(dismissed.status, 200)
+    assert.equal((JSON.parse(dismissed.body.toString('utf8')) as { whatsNew: unknown }).whatsNew, null)
+    assert.equal(new ProfileStore(profile).whatsNewDismissed(WHATS_NEW_VERSION), true, 'the marker is on disk, not just in memory')
+
+    const again = response()
+    await handler(request('GET', '/.dsh-orb/settings'), again)
+    assert.equal((JSON.parse(again.body.toString('utf8')) as { whatsNew: unknown }).whatsNew, null)
+
+    const invalid = response()
+    await handler(request('POST', '/.dsh-orb/whats-new/dismiss', JSON.stringify({ id: '0.1.9' })), invalid)
+    assert.equal(invalid.status, 400)
+    assert.equal(JSON.parse(invalid.body.toString('utf8')).error, 'invalid-whats-new')
+
+    // A host on an older version has nothing to offer, even with the marker missing.
+    installed = '0.1.9'
+    const old = response()
+    await handler(request('GET', '/.dsh-orb/settings'), old)
+    assert.equal((JSON.parse(old.body.toString('utf8')) as { whatsNew: unknown }).whatsNew, null)
     dispose()
   })
 
