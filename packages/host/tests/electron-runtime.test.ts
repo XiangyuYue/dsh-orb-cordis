@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,10 +8,12 @@ import assert from 'node:assert/strict'
 import {
   cancelRuntimeDownload,
   expectedHash,
+  extractZip,
   isLockTaken,
   isResumeRefused,
   isRuntimeDownloadCancelled,
   lockExpired,
+  matchesHash,
   PINNED_SHA256,
   purgeRuntimeArtifacts,
   withDownloadLock,
@@ -187,11 +190,14 @@ describe('manual runtime redownload', () => {
   it('clears what an interrupted attempt left behind, but keeps the bytes a retry resumes', async () => {
     const home = join(root, 'home-purge')
     const orb = join(home, 'dsh-orb')
+    // The kept partial is the one this platform would download; hard-coding another platform's
+    // asset name made this case pass only on macOS.
+    const partial = `.electron-electron-v44.0.0-${process.platform}-${process.arch}.zip.partial`
     mkdirSync(join(orb, 'electron-runtime'), { recursive: true })
     writeFileSync(join(orb, '.electron-abc123.zip'), 'a zip from the old naming')
     mkdirSync(join(orb, '.electron-staging-def456'), { recursive: true })
     writeFileSync(join(orb, '.electron-staging-def456', 'half an extraction'), 'x')
-    writeFileSync(join(orb, '.electron-electron-v44.0.0-darwin-arm64.zip.partial'), '93 MB of the real one')
+    writeFileSync(join(orb, partial), '93 MB of the real one')
     writeFileSync(join(orb, 'electron-runtime', '.complete-44.0.0'), '44.0.0\n')
     const previous = process.env.DSH_HOME
     process.env.DSH_HOME = home
@@ -204,7 +210,7 @@ describe('manual runtime redownload', () => {
     assert.equal(existsSync(join(orb, '.electron-abc123.zip')), false, 'a leftover zip is gone')
     assert.equal(existsSync(join(orb, '.electron-staging-def456')), false, 'the half-extracted folder is gone')
     assert.equal(
-      existsSync(join(orb, '.electron-electron-v44.0.0-darwin-arm64.zip.partial')),
+      existsSync(join(orb, partial)),
       true,
       'the resumable partial of this platform stays: a redownload continues it',
     )
@@ -255,5 +261,106 @@ describe('manual runtime redownload', () => {
       true,
       'the host keys the "do not count this retry" branch on this tag',
     )
+  })
+})
+
+/** CRC-32 of a buffer, for the hand-built stored zip below. */
+function crc32(bytes: Buffer): number {
+  let crc = 0xffffffff
+  for (const byte of bytes) {
+    crc ^= byte
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) === 0 ? 0 : 0xedb88320)
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+/**
+ * A one-file zip using the `store` method, assembled byte by byte so the fixture needs no
+ * archiver on any platform. The caller picks the file name: the extractor must not care what it
+ * ends with.
+ */
+function storedZip(name: string, body: Buffer): Buffer {
+  const nameBytes = Buffer.from(name, 'utf8')
+  const crc = crc32(body)
+  const local = Buffer.alloc(30)
+  local.writeUInt32LE(0x04034b50, 0)
+  local.writeUInt16LE(20, 4)
+  local.writeUInt16LE(0, 6)
+  local.writeUInt16LE(0, 8)
+  local.writeUInt16LE(0, 10)
+  local.writeUInt16LE(0x21, 12)
+  local.writeUInt32LE(crc, 14)
+  local.writeUInt32LE(body.length, 18)
+  local.writeUInt32LE(body.length, 22)
+  local.writeUInt16LE(nameBytes.length, 26)
+  local.writeUInt16LE(0, 28)
+  const central = Buffer.alloc(46)
+  central.writeUInt32LE(0x02014b50, 0)
+  central.writeUInt16LE(20, 4)
+  central.writeUInt16LE(20, 6)
+  central.writeUInt16LE(0, 8)
+  central.writeUInt16LE(0, 10)
+  central.writeUInt16LE(0, 12)
+  central.writeUInt16LE(0x21, 14)
+  central.writeUInt32LE(crc, 16)
+  central.writeUInt32LE(body.length, 20)
+  central.writeUInt32LE(body.length, 24)
+  central.writeUInt16LE(nameBytes.length, 28)
+  const directoryOffset = local.length + nameBytes.length + body.length
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(1, 8)
+  end.writeUInt16LE(1, 10)
+  end.writeUInt32LE(central.length + nameBytes.length, 12)
+  end.writeUInt32LE(directoryOffset, 16)
+  return Buffer.concat([local, nameBytes, body, central, nameBytes, end])
+}
+
+describe('runtime zip extraction', () => {
+  // The regression this covers: the download is kept as `<asset>.zip.partial` so a killed attempt
+  // can resume, but Windows' Expand-Archive refuses any archive not named *.zip — so every first
+  // run on Windows downloaded 157 MB, verified it, and then failed to unpack it.
+  const canUnzip = process.platform === 'win32' || spawnSync('unzip', ['-v'], { stdio: 'ignore' }).status === 0
+
+  function scratch(): string {
+    counter += 1
+    const dir = join(root, `extract-${counter}`)
+    mkdirSync(dir, { recursive: true })
+    return dir
+  }
+
+  it('unpacks a download that is still named *.partial', { skip: !canUnzip }, async () => {
+    const dir = scratch()
+    const zipPath = join(dir, '.electron-electron-v44.0.0-win32-x64.zip.partial')
+    writeFileSync(zipPath, storedZip('electron.exe', Buffer.from('the runtime binary')))
+    const dest = join(dir, 'staging')
+    await extractZip(zipPath, dest, new AbortController().signal)
+    assert.equal(readFileSync(join(dest, 'electron.exe'), 'utf8'), 'the runtime binary')
+  })
+
+  it('keeps the extractor’s own reason, not just its exit code', { skip: !canUnzip }, async () => {
+    const dir = scratch()
+    const zipPath = join(dir, 'broken.zip.partial')
+    writeFileSync(zipPath, 'this is not a zip')
+    await assert.rejects(extractZip(zipPath, join(dir, 'staging'), new AbortController().signal), (error: Error) => {
+      assert.match(error.message, /exited \d+/)
+      if (process.platform === 'win32') {
+        // The cmdlet's text used to be thrown away by `stdio: 'ignore'`, leaving only the code.
+        assert.match(error.message, /exited \d+: \S/, 'the message says why the unpack failed')
+      }
+      return true
+    })
+  })
+
+  it('recognises a zip that is already complete, and nothing else', async () => {
+    const dir = scratch()
+    const file = join(dir, '.electron-electron-v44.0.0-win32-x64.zip.partial')
+    const body = Buffer.from('a complete runtime, for this test')
+    writeFileSync(file, body)
+    const hash = createHash('sha256').update(body).digest('hex')
+    assert.equal(await matchesHash(file, hash), true, 'a complete file is not downloaded a second time')
+    assert.equal(await matchesHash(file, 'a'.repeat(64)), false, 'a partial file is still a download')
+    assert.equal(await matchesHash(join(dir, 'missing.partial'), hash), false, 'no file, no match')
+    assert.equal(await matchesHash(file, 'not-a-hash'), false, 'a malformed expectation never matches')
   })
 })

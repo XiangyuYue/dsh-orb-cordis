@@ -140,7 +140,7 @@ async function downloadRuntime(
       try {
         report?.('downloading')
         const resumed = await fileSize(zipPath)
-        if (resumed > 0) console.error(`dsh-orb: resuming the download at ${resumed} bytes`)
+        if (resumed > 0) console.error(`dsh-orb: continuing from ${resumed} bytes left by an earlier attempt`)
         await downloadVerifiedZip(fileName, expected, zipPath, signal)
         report?.('extracting')
         await mkdir(staging, { recursive: true })
@@ -373,6 +373,13 @@ async function fetchText(path: string, signal: AbortSignal): Promise<string> {
 }
 
 async function downloadVerifiedZip(fileName: string, expected: string, dest: string, signal: AbortSignal): Promise<void> {
+  // An earlier attempt may have finished the transfer and then died before its zip was removed —
+  // or failed at the extraction while keeping a complete file. Those bytes are the whole runtime
+  // already: hashing them costs a second and saves the user another 124–150 MB.
+  if (await matchesHash(dest, expected)) {
+    console.error('dsh-orb: the runtime zip on disk is already complete')
+    return
+  }
   // Official checksums decide what is accepted. The mirror only decides how fast it arrives.
   const urls = releaseUrls(fileName)
   let lastError: unknown
@@ -471,21 +478,58 @@ async function sha256(path: string): Promise<string> {
   return hash.digest('hex')
 }
 
+/**
+ * Whether a file already holds exactly the bytes the checksum names. A missing file never
+ * matches, and an unreadable one only means "not proven complete": the caller downloads.
+ */
+export async function matchesHash(path: string, expected: string): Promise<boolean> {
+  if (await fileSize(path) === 0) return false
+  try {
+    return sameHash(await sha256(path), expected)
+  } catch {
+    return false
+  }
+}
+
 function sameHash(actual: string, expected: string): boolean {
   const left = Buffer.from(actual, 'hex')
   const right = Buffer.from(expected, 'hex')
   return left.length === right.length && timingSafeEqual(left, right)
 }
 
-async function extractZip(zipPath: string, dest: string, signal: AbortSignal): Promise<void> {
+/**
+ * Unpack one zip into `dest`.
+ *
+ * Windows cannot use `Expand-Archive`: the cmdlet refuses any archive whose name does not end in
+ * `.zip`, and the transfer deliberately keeps its bytes in `<asset>.zip.partial` so a killed
+ * attempt can be resumed instead of paid for twice. The extension describes the download, not the
+ * archive, so the extractor must not read anything into it — .NET's `ZipFile` (the same library
+ * behind the cmdlet) does not.
+ */
+export async function extractZip(zipPath: string, dest: string, signal?: AbortSignal): Promise<void> {
   if (process.platform === 'win32') {
-    const command = `Expand-Archive -LiteralPath '${zipPath.replaceAll("'", "''")}' -DestinationPath '${dest.replaceAll("'", "''")}' -Force`
-    await spawnChecked('powershell.exe', ['-NoProfile', '-Command', command], signal)
+    const command = [
+      // The error text is the only clue a failed extraction leaves. Force UTF-8 on the way out so
+      // a non-English console does not hand the log a page of mojibake.
+      '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+      "$ErrorActionPreference = 'Stop'",
+      'Add-Type -AssemblyName System.IO.Compression.FileSystem',
+      `[System.IO.Compression.ZipFile]::ExtractToDirectory(${singleQuoted(zipPath)}, ${singleQuoted(dest)})`,
+    ].join('; ')
+    await spawnChecked('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], signal)
     return
   }
   const unzip = process.platform === 'darwin' ? '/usr/bin/unzip' : 'unzip'
   await spawnChecked(unzip, ['-q', '-o', zipPath, '-d', dest], signal)
 }
+
+/** A PowerShell single-quoted string: the only character it interprets is `'`, doubled. */
+function singleQuoted(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
+/** Cap on the extractor's stderr kept for one failure: enough for the reason, not a whole dump. */
+const STDERR_LIMIT_BYTES = 4096
 
 function spawnChecked(command: string, args: string[], signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -493,7 +537,16 @@ function spawnChecked(command: string, args: string[], signal?: AbortSignal): Pr
       reject(cancelled())
       return
     }
-    const child = spawn(command, args, { stdio: 'ignore', ...(signal === undefined ? {} : { signal }) })
+    // `exit 1` alone once made a Windows extraction failure look like a download failure for a
+    // whole release: the reason was on stderr and went to /dev/null. Keep it.
+    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], ...(signal === undefined ? {} : { signal }) })
+    const err: Buffer[] = []
+    let errBytes = 0
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (errBytes >= STDERR_LIMIT_BYTES) return
+      errBytes += chunk.length
+      err.push(chunk)
+    })
     child.once('error', (error) => {
       reject(signal?.aborted ? cancelled() : error)
     })
@@ -502,8 +555,12 @@ function spawnChecked(command: string, args: string[], signal?: AbortSignal): Pr
         reject(cancelled())
         return
       }
-      if (code === 0) resolve()
-      else reject(new Error(`dsh-orb: ${command} exited ${code ?? 'unknown'}`))
+      if (code === 0) {
+        resolve()
+        return
+      }
+      const detail = Buffer.concat(err).toString('utf8').trim().split('\n').slice(0, 6).join('\n')
+      reject(new Error(`dsh-orb: ${command} exited ${code ?? 'unknown'}${detail ? `: ${detail}` : ''}`))
     })
   })
 }

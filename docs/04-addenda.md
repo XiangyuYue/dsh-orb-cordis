@@ -468,3 +468,15 @@ asr text          mode=command    text=啊，大飞就退着吧。           ←
 - **镜像不会自己跟上:** 2026-10-25 首发实测,`dsh-orb-kws` 发布 20 多分钟后 npmmirror 仍停在占位的 `0.0.0-stage`(tarball 404)。`PUT https://registry.npmmirror.com/<包名>/sync?sync_upstream=true` 返回 201,约 25 秒后版本和 tarball 都到位,sha256 与 npmjs 一致,安装从 10.2 秒降到 6.7 秒。注意路径是老的 `/<包名>/sync`,不是 `/-/package/<包名>/sync`(后者 404)。以后每发一个模型版本都手动戳一次。
 - **镜像的 dist-tags 会滞后:** 同上,版本和 tarball 都对了,但 packument 里的 `latest` 仍指向 `0.0.0-stage`,再触发一次同步也没变。插件只按版本号拉 tarball,不受影响;但如果有人直接 `npm i dsh-orb-kws` 走镜像,拿到的是那个占位包。
 - **打包脚本:** `node models/kws/scripts/pack.mjs`。mtime 固定、gzip 在 Node 侧做,同一批文件重复打包 sha256 一致(系统 gzip 会把当前时间写进 header,哈希每次都变)。
+
+## 35. Windows 全新安装:运行时每次都"下载"成功,却永远解压失败 (2026-10-25)
+
+现象(用户截图):首次启用球,设置页一直停在「正在下载悬浮球运行时」,过一阵变成失败卡片;点「重新下载」还是同一个循环,球永远不出现。日志里只有 `dsh-orb: powershell.exe exited 1`,没有别的线索。
+
+- **根因**:第 23 节把传输文件固定命名成 `.electron-<asset>.zip.partial`,而 Windows 的解压走 `Expand-Archive`——这个 cmdlet **在打开文件之前**先查扩展名,只接受 `.zip`:`.partial 不是支持的存档文件格式。只有 .zip 才是支持的存档文件格式。` 所以每次尝试都是「157,455,369 B 下完 → SHA-256 通过 → 解压第一秒失败」。macOS/Linux 走 `unzip`,不认扩展名,自测机全绿;9/30 之前就装好运行时的机器也不必再下,同样看不见。
+- **为什么表现成"一直在下"**:解压失败时那份**完整**的 partial 被保留,下一轮 `-C -` 对完整文件请求 Range,服务端答 416(已实测),`isResumeRefused` 判定为"拒绝续传"→ 删掉 157 MB → 改从 GitHub 全量重下 → 又卡在解压。每一轮都把整包重下一遍,时间几乎全花在"下载"上。
+- **修法**:①Windows 解压改用 .NET `[System.IO.Compression.ZipFile]::ExtractToDirectory`——与 `Expand-Archive` 同一套底层库,但不看文件名;②`spawnChecked` 保留解压器的 stderr(上限 4 KB、最多 6 行)并入错误文本,失败原因不再只剩一个退出码;③新增 `matchesHash()`,`downloadVerifiedZip` 传输前先对本资产算一次 SHA-256:盘上已经是完整正确的 zip 就直接跳过传输——已经被卡住的用户升级后直接进解压,不必再付 157 MB。
+- **测试**:`electron-runtime.test.ts` 新增三例——手搓的最小 stored zip(不依赖任何打包工具)从 `.partial` 名字解出文件(三平台都跑)、坏包的报错里带着解压器自己的话、`matchesHash` 对完整/残缺/缺失/畸形期望的判断。顺手把 purge 那例写死的 `darwin-arm64` 改成当前平台,它原来只在 macOS 能过。
+- **验证(真机端到端)**:临时 `DSH_HOME`,预先放一份从 npmmirror 下好的 157,455,369 B `.electron-electron-v44.0.0-win32-x64.zip.partial`(就是被卡住的用户盘上的东西),调 `resolveElectronBinary()`:日志 `continuing from 157455369 bytes left by an earlier attempt` → `the runtime zip on disk is already complete`(传输 0 字节)→ `phase extracting` → `Electron 44.0.0 is ready`,7 秒后返回 `electron-runtime\electron.exe`;`ELECTRON_RUN_AS_NODE=1 electron.exe -e "console.log(process.versions.electron)"` 输出 `44.0.0`,退出码 0。
+- **回归面**:`node --test` 该文件 18/18;`pnpm typecheck`、`pnpm build` 通过;`pnpm test` 519/522,3 个失败在**未改动的 HEAD** 上同样失败(deferred-install 的 pnpm 用例、voice 两例,Windows 本机既有问题),与本次改动无关。
+- **未做**:没有真机跑「设置页点重新下载」那条 UI 链路——host 侧入口一行未改,仍走同一条 `resolveElectronBinary`;改的是 host 源码,要发新版才会到用户手里。
